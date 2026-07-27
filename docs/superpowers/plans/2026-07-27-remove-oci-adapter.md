@@ -172,14 +172,17 @@ with:
 Run: `grep -rn "OciAdapter" lib/Model.php`
 Expected: no output.
 
-- [ ] **Step 4: Run the write suite on MySQL, Postgres, and SQLite**
+- [ ] **Step 4: Run the write suite and the Postgres/SQLite adapter tests**
 
 ```bash
-docker compose exec tests vendor/bin/phpunit test/ActiveRecordWriteTest.php
-docker compose exec tests vendor/bin/phpunit --adapter pgsql test/ActiveRecordWriteTest.php
-docker compose exec tests vendor/bin/phpunit --adapter sqlite test/ActiveRecordWriteTest.php
+docker compose exec tests vendor/bin/phpunit test/ActiveRecordWriteTest.php test/PgsqlAdapterTest.php test/SqliteAdapterTest.php
 ```
-Expected: PASS on all three (Postgres exercises the retained sequence path).
+Expected: PASS. Note: the legacy `--adapter <name>` CLI flag is NOT supported by
+PHPUnit 9 (it errors "Unknown option"); Postgres and SQLite are exercised by the
+dedicated `PgsqlAdapterTest` / `SqliteAdapterTest` classes, which force those
+connections via `set_up('pgsql')` / `set_up('sqlite')`. This change is
+behavior-preserving: with `OciAdapter` removed, `instanceof OciAdapter` was always
+false, so every remaining adapter already took the retained `else` body.
 
 - [ ] **Step 5: Commit**
 
@@ -450,14 +453,13 @@ Delete these lines (the only reason they existed was to skip `@group oci`, now g
 Run: `grep -rniE "oci|OciAdapter" lib test phpunit.xml`
 Expected: a single hit — `PDO::ATTR_ORACLE_NULLS` in `lib/Connection.php`. Nothing else.
 
-- [ ] **Step 4: Run the full suite on all three adapters**
+- [ ] **Step 4: Run the full suite**
 
 ```bash
 docker compose exec tests composer run test
-docker compose exec tests vendor/bin/phpunit --adapter pgsql
-docker compose exec tests vendor/bin/phpunit --adapter sqlite
 ```
-Expected: green on all three, no skips.
+Expected: green, no skips. The full suite includes `PgsqlAdapterTest` and
+`SqliteAdapterTest`, so all three adapters are exercised in this one run.
 
 - [ ] **Step 5: Confirm language compatibility still passes**
 
