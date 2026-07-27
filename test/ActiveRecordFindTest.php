@@ -359,22 +359,11 @@ class ActiveRecordFindTest extends DatabaseTest
 
 	public function test_having()
 	{
-		if ($this->conn instanceof ActiveRecord\OciAdapter)
-		{
-			$author = Author::first(array(
-				'select' => 'to_char(created_at,\'YYYY-MM-DD\') as created_at',
-				'group'  => 'to_char(created_at,\'YYYY-MM-DD\')',
-				'having' => "to_char(created_at,'YYYY-MM-DD') > '2009-01-01'"));
-			$this->assert_sql_has("GROUP BY to_char(created_at,'YYYY-MM-DD') HAVING to_char(created_at,'YYYY-MM-DD') > '2009-01-01'",Author::table()->last_sql);
-		}
-		else
-		{
-			$author = Author::first(array(
-				'select' => 'date(created_at) as created_at',
-				'group'  => 'date(created_at)',
-				'having' => "date(created_at) > '2009-01-01'"));
-			$this->assert_sql_has("GROUP BY date(created_at) HAVING date(created_at) > '2009-01-01'",Author::table()->last_sql);
-		}
+		$author = Author::first(array(
+			'select' => 'date(created_at) as created_at',
+			'group'  => 'date(created_at)',
+			'having' => "date(created_at) > '2009-01-01'"));
+		$this->assert_sql_has("GROUP BY date(created_at) HAVING date(created_at) > '2009-01-01'",Author::table()->last_sql);
 	}
 
 	public function test_from_with_invalid_table()

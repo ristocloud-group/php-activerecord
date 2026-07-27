@@ -114,18 +114,12 @@ class ActiveRecordTest extends DatabaseTest
 
 	public function test_hyphenated_column_names_to_underscore()
 	{
-		if ($this->conn instanceof ActiveRecord\OciAdapter)
-			return;
-
 		$keys = array_keys(RmBldg::first()->attributes());
 		$this->assert_true(in_array('rm_name',$keys));
 	}
 
 	public function test_column_names_with_spaces()
 	{
-		if ($this->conn instanceof ActiveRecord\OciAdapter)
-			return;
-
 		$keys = array_keys(RmBldg::first()->attributes());
 		$this->assert_true(in_array('space_out',$keys));
 	}
