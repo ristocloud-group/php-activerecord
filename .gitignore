@@ -10,3 +10,4 @@ vendor/*
 .phpunit.cache
 docker-compose.override.yml
 junit.xml
+coverage.xml

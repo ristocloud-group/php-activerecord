@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.3', '8.4', '8.5']
+
+    services:
+      mysql:
+        image: mysql:9.7
+        env:
+          MYSQL_USER: phpar
+          MYSQL_PASSWORD: secret
+          MYSQL_DATABASE: phpar_test
+          MYSQL_ROOT_PASSWORD: secret
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -psecret"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_USER: phpar
+          MARIADB_PASSWORD: secret
+          MARIADB_DATABASE: phpar_test
+          MARIADB_ROOT_PASSWORD: secret
+        ports: ['3307:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: phpar_test
+          POSTGRES_USER: phpar
+          POSTGRES_PASSWORD: secret
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U phpar"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      memcached:
+        image: memcached:1.6
+        ports: ['11211:11211']
+
+    env:
+      PHPAR_MYSQL: mysql://phpar:secret@127.0.0.1:3306/phpar_test
+      PHPAR_MARIADB: mysql://phpar:secret@127.0.0.1:3307/phpar_test
+      PHPAR_PGSQL: pgsql://phpar:secret@127.0.0.1:5432/phpar_test
+      PHPAR_SQLITE: sqlite://test.db
+      PHPAR_MEMCACHED: 127.0.0.1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: pdo, pdo_mysql, pdo_pgsql, pgsql, memcached
+          coverage: pcov
+
+      - name: Install dependencies
+        run: composer update --no-interaction --prefer-dist
+
+      - name: Static analysis
+        if: matrix.php-version == '8.3'
+        run: composer run analyse
+
+      - name: Tests
+        run: composer run test -- --coverage-clover coverage.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-php${{ matrix.php-version }}
+          path: coverage.xml
