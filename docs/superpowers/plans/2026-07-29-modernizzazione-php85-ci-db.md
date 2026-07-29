@@ -392,6 +392,7 @@ Sostituisci l'intero contenuto di `phpunit.xml`:
     <testsuites>
         <testsuite name="PHP ActiveRecord Test Suite">
             <directory>./test/</directory>
+            <exclude>./test/helpers/DatabaseTest.php</exclude>
         </testsuite>
     </testsuites>
     <source>
