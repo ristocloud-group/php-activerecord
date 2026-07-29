@@ -19,6 +19,7 @@
 
 use ActiveRecord\Config;
 use Monolog\Handler\StreamHandler;
+use Monolog\Level;
 use Monolog\Logger;
 
 require_once 'vendor/autoload.php';
@@ -59,7 +60,7 @@ ActiveRecord\Config::initialize(function(Config $cfg)
 	}
 
     $logger = new Logger('tests');
-    $logger->pushHandler(new StreamHandler(dirname(__FILE__) . '/../log/query.log', Logger::DEBUG));
+    $logger->pushHandler(new StreamHandler(dirname(__FILE__) . '/../log/query.log', Level::Debug));
     $cfg->set_logger($logger);
 
 	if ($GLOBALS['show_warnings']  && !isset($GLOBALS['show_warnings_done']))
