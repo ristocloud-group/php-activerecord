@@ -19,7 +19,7 @@
         "files": [ "ActiveRecord.php" ]
     },
     "scripts": {
-        "test": "phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --testdox --colors=always --log-junit junit.xml",
+        "test": "phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --fail-on-deprecation --testdox --colors=always --log-junit junit.xml",
         "analyse": "phpstan analyse --memory-limit=1G"
     }
 }
