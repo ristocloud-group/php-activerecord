@@ -48,6 +48,9 @@ jobs:
       memcached:
         image: memcached:1.6
         ports: ['11211:11211']
+        options: >-
+          --health-cmd="timeout 5 bash -c '</dev/tcp/127.0.0.1/11211'"
+          --health-interval=5s --health-timeout=5s --health-retries=10
 
     env:
       PHPAR_MYSQL: mysql://phpar:secret@127.0.0.1:3306/phpar_test
@@ -77,6 +80,7 @@ jobs:
         run: composer run test -- --coverage-clover coverage.xml
 
       - name: Upload coverage
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-php${{ matrix.php-version }}
