@@ -437,7 +437,7 @@ Estende la batteria `AdapterTest` condivisa a MariaDB e verifica che MySQL 9.7 e
 
 - [ ] **Step 1: Creare MariadbAdapterTest (riusa la batteria MySQL)**
 
-MariaDB parla il protocollo MySQL e usa lo stesso `MysqlAdapter`, quindi eredita da `MysqlAdapterTest` puntando alla connessione `mariadb`. Create `test/MariadbAdapterTest.php`:
+MariaDB parla il protocollo MySQL e usa lo stesso `MysqlAdapter`, quindi eredita da `MysqlAdapterTest` puntando alla connessione `mariadb`. `DatabaseTest::set_up()` imposta `$this->connection_name` dal parametro, e i test della batteria (`test_set_charset`, ecc.) usano `$this->connection_name` — quindi basta cambiare la connessione in `set_up`, senza riscrivere alcun test. Create `test/MariadbAdapterTest.php`:
 
 ```php
 <?php
@@ -450,17 +450,10 @@ class MariadbAdapterTest extends MysqlAdapterTest
 	{
 		AdapterTest::set_up('mariadb');
 	}
-
-	public function test_set_charset()
-	{
-		$connection_string = ActiveRecord\Config::instance()->get_connection('mariadb');
-		$conn = ActiveRecord\Connection::instance($connection_string . '?charset=utf8');
-		$this->assert_equals('SET NAMES ?', $conn->last_query);
-	}
 }
 ```
 
-(Override di `test_set_charset` per usare la connessione `mariadb` invece di `$this->connection_name` ereditato; il resto della batteria `MysqlAdapterTest`/`AdapterTest` gira invariato contro MariaDB.)
+(L'intera batteria `MysqlAdapterTest`/`AdapterTest` gira invariata contro MariaDB, perché tutti i test derivano la connessione da `$this->connection_name = 'mariadb'`. Nessun override di test → nessuna duplicazione.)
 
 - [ ] **Step 2: Eseguire la batteria MariaDB**
 
