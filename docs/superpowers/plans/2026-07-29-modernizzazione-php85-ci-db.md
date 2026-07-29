@@ -365,11 +365,16 @@ Riscrive `phpunit.xml` allo schema moderno e adatta il wrapper snake_case. Nessu
 
 **Files:**
 - Modify: `phpunit.xml` (riscrittura completa)
-- Modify: `test/helpers/SnakeCase_PHPUnit_Framework_TestCase.php` (se emergono attriti)
+- Modify: `test/helpers/SnakeCase_PHPUnit_Framework_TestCase.php` (fallback `__call` + eventuali attriti)
+- Modify: `test/RelationshipTest.php:29` (`getName()` rimosso in PHPUnit 10+ → `name()`)
 
 **Interfaces:**
 - Consumes: PHPUnit 12 (Task 2), runtime pulito (Task 3).
-- Produces: `phpunit.xml` schema 12 con sezione `<source>` pronta per la coverage (Task 7); gate stretto `composer run test` di nuovo verde.
+- Produces: `phpunit.xml` schema 12 con sezione `<source>` pronta per la coverage (Task 7); suite eseguibile sotto PHPUnit 12 senza crash di harness/config.
+
+> **Gate di questo task (scoped):** l'intera suite gira sotto PHPUnit 12 senza errori di harness/config e senza crash; gli UNICI fallimenti residui ammessi sono quelli noti degli adapter DB (Postgres 18 `pg_attrdef.adsrc`, MySQL 9.7 display-width, datetime timezone) che sono scope del Task 5. Il verde PIENO di `composer run test` (con `--fail-on-warning`/`--fail-on-skipped`) è verificato alla fine del **Task 5**, non qui.
+
+> **Nota carry-over da Task 2:** `test/RelationshipTest.php:29` chiama il rimosso `TestCase::getName()`; inoltre il fallback `__call` del wrapper fa `die()` quando un metodo non esiste, trasformando un metodo mancante nel crash dell'intera run. Entrambi vanno risolti qui.
 
 - [ ] **Step 1: Riscrivere phpunit.xml allo schema PHPUnit 12**
 
@@ -403,22 +408,41 @@ Note: rimossi gli attributi legacy `backupGlobals`, `backupStaticAttributes`, `c
 
 Aggiungi la riga `.phpunit.cache` a `.gitignore` (crea il file se assente).
 
-- [ ] **Step 3: Eseguire la suite con il gate stretto**
+- [ ] **Step 3: Correggere il `getName()` rimosso in RelationshipTest**
+
+In `test/RelationshipTest.php:29`, `getName()` è stato rimosso da PHPUnit in favore di `name()`. Sostituisci:
+```php
+			if (preg_match("/$name/", $this->getName(), $match))
+```
+con:
+```php
+			if (preg_match("/$name/", $this->name(), $match))
+```
+
+- [ ] **Step 4: Rendere il fallback `__call` del wrapper non-letale**
+
+In `test/helpers/SnakeCase_PHPUnit_Framework_TestCase.php`, il fallback fa `die(...)` quando un metodo non esiste, trasformando un metodo mancante nel crash dell'intera run PHPUnit. Sostituisci la `die(...)` con un'eccezione, così il caso diventa un normale fallimento del singolo test:
+```php
+		throw new \BadMethodCallException("Call to undefined method $class_name::$meth()");
+```
+(Mantieni invariata la logica di camelize + `method_exists` sopra; cambia solo il ramo terminale.)
+
+- [ ] **Step 5: Eseguire la suite sotto PHPUnit 12 (gate scoped)**
 
 ```bash
 docker compose exec tests composer run test
 ```
-Expected: verde su PHP 8.3. Se il wrapper `SnakeCase_PHPUnit_Framework_TestCase` genera errori (es. `__call` che non trova un metodo assert), correggi puntualmente in `test/helpers/SnakeCase_PHPUnit_Framework_TestCase.php` mantenendo lo stile snake_case; le assert PHPUnit restano metodi d'istanza in PU12.
+Expected: la suite gira interamente sotto PHPUnit 12 senza crash di harness né errori di configurazione/schema. Gli unici fallimenti ammessi sono quelli noti degli adapter DB (Postgres 18 `pg_attrdef.adsrc`, MySQL 9.7 display-width, datetime timezone) — scope del Task 5. Se il wrapper genera errori su assert mancanti (es. un alias rimosso), correggi puntualmente mantenendo lo stile snake_case; le assert PHPUnit restano metodi d'istanza in PU12. Annota nel report l'elenco esatto dei fallimenti residui, confermando che sono tutti e soli quelli DB-adapter di Task 5.
 
-- [ ] **Step 4: Verificare che nessun test skippi**
+- [ ] **Step 6: Verificare che nessun test skippi (a parte i fallimenti DB noti)**
 
-Controlla l'output del testdox: nessun test marcato "skipped" (memcached è presente nell'immagine, `TRAVIS` non è settato). `--fail-on-skipped` è già dentro `composer run test`.
+Controlla l'output: nessun test marcato "skipped" (memcached è presente nell'immagine, `TRAVIS` non è settato).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add phpunit.xml .gitignore test/helpers/SnakeCase_PHPUnit_Framework_TestCase.php
-git commit -m "Migrates the PHPUnit configuration and test wrapper to PHPUnit 12"
+git add phpunit.xml .gitignore test/helpers/SnakeCase_PHPUnit_Framework_TestCase.php test/RelationshipTest.php
+git commit -m "Migrates the PHPUnit configuration and test harness to PHPUnit 12"
 ```
 
 ---
