@@ -20,6 +20,6 @@
     },
     "scripts": {
         "test": "phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --testdox --colors=always --log-junit junit.xml",
-        "analyse": "phpstan analyse"
+        "analyse": "phpstan analyse --memory-limit=1G"
     }
 }
