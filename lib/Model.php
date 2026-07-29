@@ -1213,7 +1213,7 @@ class Model
 	 * Add a model to the given named ($name) relationship.
 	 *
 	 * @internal This should <strong>only</strong> be used by eager load
-	 * @param Model $model
+	 * @param Model|null $model
 	 * @param $name of relationship for this table
 	 * @return void
 	 */

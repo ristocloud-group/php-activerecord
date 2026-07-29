@@ -17,6 +17,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      memcached:
+        condition: service_healthy
   mysql:
     image: mysql:9.7
     environment:
@@ -54,3 +56,8 @@ services:
       timeout: 5s
   memcached:
     image: memcached:1.6
+    healthcheck:
+      test: ["CMD", "timeout", "5", "bash", "-c", "</dev/tcp/127.0.0.1/11211"]
+      interval: 5s
+      retries: 10
+      timeout: 5s

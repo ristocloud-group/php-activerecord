@@ -24,8 +24,9 @@ docker compose exec tests vendor/bin/phpunit --group slow
 First rebuild the Docker image with the desired version of PHP:
 
 ```sh
-docker compose build --build-arg PHP_VERSION=8.1
+docker compose build --build-arg PHP_VERSION=8.4
 docker compose up -d
+```
 
 Then run the tests:
 
@@ -33,11 +34,10 @@ Then run the tests:
 docker compose exec tests composer run test
 ```
 
-You can check compatibility via static analysis by updating `composer.json` (see `scripts.check-compatibility`) and 
-then running:
+You can run static analysis (PHPStan, level 5) with:
 
 ```sh
-docker compose exec tests composer run check-compatibility
+docker compose exec tests composer run analyse
 ```
 
 #### Skipped Tests ####
