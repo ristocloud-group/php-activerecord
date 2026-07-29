@@ -124,6 +124,9 @@ abstract class Connection
 	 */
 	private static function load_adapter_class($adapter)
 	{
+		if (strtolower($adapter) === 'oci')
+			throw new DatabaseException('The OCI/Oracle adapter was removed in php-activerecord v1.8.0.');
+
 		$class = ucwords($adapter) . 'Adapter';
 		$fqclass = 'ActiveRecord\\' . $class;
 		$source = __DIR__ . "/adapters/$class.php";

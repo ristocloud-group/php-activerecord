@@ -259,9 +259,6 @@ class AdapterTest extends DatabaseTest
 		$columns = $this->conn->columns('authors');
 		$names = array('author_id','parent_author_id','name','updated_at','created_at','some_Date','some_time','some_text','encrypted_password','mixedCaseField');
 
-		if ($this->conn instanceof ActiveRecord\OciAdapter)
-			$names = array_filter(array_map('strtolower',$names),function($s) { $s !== 'some_time'; });
-
 		foreach ($names as $field)
 			$this->assert_true(array_key_exists($field,$columns));
 

@@ -1,5 +1,8 @@
 # Release Notes
 
+## v1.8.0 (27 July 2026)
+* Removes the incomplete, untested OCI/Oracle adapter
+
 ## v1.7.1 (1 August 2024)
 * Various dev improvements [#13](https://github.com/zamzar/php-activerecord/pull/13)
 

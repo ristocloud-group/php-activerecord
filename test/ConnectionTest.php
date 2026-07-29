@@ -74,5 +74,13 @@ class ConnectionTest extends SnakeCase_PHPUnit_Framework_TestCase
 		$info = ActiveRecord\Connection::parse_connection_url('mysql://test:test@127.0.0.1/test?charset=utf8');
 		$this->assert_equals('utf8', $info->charset);
 	}
+
+	public function test_oci_protocol_throws_removed_exception()
+	{
+		$this->expectException(ActiveRecord\DatabaseException::class);
+		$this->expectExceptionMessage('The OCI/Oracle adapter was removed in php-activerecord v1.8.0.');
+
+		ActiveRecord\Connection::instance('oci://test:test@127.0.0.1/dev');
+	}
 }
 

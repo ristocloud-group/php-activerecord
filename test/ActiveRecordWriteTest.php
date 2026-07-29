@@ -176,10 +176,6 @@ class ActiveRecordWriteTest extends DatabaseTest
 
 	public function test_save_blank_value()
 	{
-		// oracle doesn't do blanks. probably an option to enable?
-		if ($this->conn instanceof ActiveRecord\OciAdapter)
-			return;
-
 		$book = Book::find(1);
 		$book->name = '';
 		$book->save();
