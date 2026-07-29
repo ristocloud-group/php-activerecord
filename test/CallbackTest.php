@@ -82,7 +82,7 @@ class CallBackTest extends DatabaseTest
 		$this->assert_has_callback('after_construct');
 	}
 
-    /** @doesNotPerformAssertions */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
 	public function test_register_with_closure()
 	{
 		$this->callback->register('after_construct', function($mode) { });

@@ -72,7 +72,7 @@ class AdapterTest extends DatabaseTest
 		ActiveRecord\Connection::instance("{$this->conn->protocol}://zzz:zzz@127.0.0.1/test");
 	}
 
-	/** @doesNotPerformAssertions */
+	#[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
 	public function test_connect_with_port()
 	{
 		$config = ActiveRecord\Config::instance();

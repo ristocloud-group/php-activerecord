@@ -13,7 +13,7 @@ class SnakeCase_PHPUnit_Framework_TestCase extends TestCase
 		if (method_exists($this, $camel_cased_method))
 			return call_user_func_array(array($this, $camel_cased_method), $args);
 
-		die("PHP Fatal Error:  Call to undefined method $class_name::$meth() in {$trace[1]['file']} on line {$trace[1]['line']}" . PHP_EOL);
+		throw new \BadMethodCallException("Call to undefined method $class_name::$meth()");
 	}
 
 	public function setUp(): void

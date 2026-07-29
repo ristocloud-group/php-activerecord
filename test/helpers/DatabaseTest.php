@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/DatabaseLoader.php';
 
-class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
+abstract class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
 {
 	/** @var \ActiveRecord\Connection */
 	protected $conn;

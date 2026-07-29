@@ -26,7 +26,7 @@ class RelationshipTest extends DatabaseTest
 
 		foreach ($this->relationship_names as $name)
 		{
-			if (preg_match("/$name/", $this->getName(), $match))
+			if (preg_match("/$name/", $this->name(), $match))
 				$this->relationship_name = $match[0];
 		}
 	}
