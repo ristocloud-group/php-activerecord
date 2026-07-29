@@ -74,5 +74,5 @@ ActiveRecord\Config::initialize(function(Config $cfg)
 	$GLOBALS['show_warnings_done'] = true;
 });
 
-error_reporting(E_ALL | E_STRICT);
+error_reporting(E_ALL);
 

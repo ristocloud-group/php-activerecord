@@ -1217,7 +1217,7 @@ class Model
 	 * @param $name of relationship for this table
 	 * @return void
 	 */
-	public function set_relationship_from_eager_load(Model $model=null, $name)
+	public function set_relationship_from_eager_load(?Model $model, $name)
 	{
 		$table = static::table();
 
