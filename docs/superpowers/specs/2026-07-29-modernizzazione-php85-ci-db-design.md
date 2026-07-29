@@ -24,6 +24,20 @@ Extra inclusi in questa spec: wiring coverage in CI (senza gate), PHPStan livell
 - **MySQL first.** Se un fix diverge tra MySQL e MariaDB, MySQL vince; MariaDB con eventuale ramo dedicato.
 - **PHPStan sostituisce PHPCompatibility.** PHPCompatibility 9.3 non copre in modo affidabile 8.4/8.5; PHPStan diventa l'analisi statica primaria. Si rimuove lo script `check-compatibility` e gli hook `post-install-cmd`/`post-update-cmd`.
 - **Strategia di esecuzione: fasi bottom-up, un PR per fase**, per mantenere un segnale CI verde continuo durante una migrazione multi-asse.
+- **Sviluppo in TDD.** Ogni modifica di *codice* segue red-green-refactor (test che fallisce prima del fix) e riceve copertura ai livelli che la toccano. Le fasi di sola *configurazione* usano gate eseguibili + test di integrazione, non unit fittizi (vedi "Disciplina di test").
+
+## Disciplina di test (TDD)
+
+Ogni modifica di codice segue red-green-refactor. I tre livelli, concreti per questo repo:
+
+- **Unit** — comportamento isolato di una classe `lib/` senza DB: `Inflector`, output di `SQLBuilder`, parsing URL in `Connection`, il wrapper delle assert. (esistenti: `InflectorTest`, ecc.)
+- **Funzionale** — comportamento `Model`/`Table`/`Relationship`/`Validations` attraverso i model fixture contro un DB reale: il grosso della suite basata su `DatabaseTest`.
+- **Integrazione** — adapter ↔ backend reale: la batteria `AdapterTest` per protocollo (connessione, introspezione, quoting, `LIMIT`), estesa ai nuovi `mariadb` / MySQL 9.7 / Postgres 18.
+
+Regole:
+
+- Una modifica di codice riceve copertura a **tutti i livelli che la toccano** (es. un fix di adapter → unit sull'output SQL se applicabile + funzionale + integrazione su tutti i backend).
+- Le fasi di **sola configurazione** (Docker, `composer.json`, CI YAML, `phpstan.neon`, `dependabot.yml`) sono verificate da **gate eseguibili** (compose in salute, `composer` che risolve, matrice CI verde) più test di **integrazione reali** dove sensato (es. connessione a MariaDB che prima non esisteva). Nessun unit test che asserisce stringhe di configurazione.
 
 ## Stato di partenza (rilevato)
 
@@ -41,7 +55,8 @@ Extra inclusi in questa spec: wiring coverage in CI (senza gate), PHPStan livell
 - `Dockerfile`: base `php:8.3-cli` (default `ARG PHP_VERSION=8.3`).
 - Nuovo servizio MariaDB + variabile `PHPAR_MARIADB` accanto a `PHPAR_MYSQL` / `PHPAR_PGSQL`.
 - Rimozione `platform: linux/x86_64` (immagini arm64 native → veloci su Apple Silicon).
-- **Gate:** `docker compose up -d` sano; suite attuale ancora eseguibile.
+- **Test:** test di integrazione che apre e verifica la connessione al nuovo backend `mariadb` (prima assente).
+- **Gate:** `docker compose up -d` sano; suite attuale ancora eseguibile; integrazione MariaDB verde.
 
 ### Fase 2 — Dipendenze
 - `composer.json`: `php: ^8.3`, `phpunit/phpunit: ^12`, `monolog/monolog: ^3`, `psr/log: ^3`, `phpstan/phpstan` (require-dev).
@@ -52,6 +67,7 @@ Extra inclusi in questa spec: wiring coverage in CI (senza gate), PHPStan livell
 ### Fase 3 — Fix runtime PHP 8.5
 - Fix mirati e behavior-preserving in `lib/`: parametro nullable implicito individuato + eventuali deprecation 8.4/8.5 emerse a runtime.
 - `#[\AllowDynamicProperties]` solo dove effettivamente necessario (atteso: mai — il modello usa `__get`/`__set`).
+- **Test (TDD):** per ogni fix, prima un test che fallisce e isola il comportamento — unit sul percorso di codice interessato, più funzionale se il fix passa per `Model`/`Table`.
 - **Gate:** suite verde su PHP 8.5, zero deprecation.
 
 ### Fase 4 — Migrazione PHPUnit 12
@@ -65,6 +81,7 @@ Extra inclusi in questa spec: wiring coverage in CI (senza gate), PHPStan livell
 - Verifica `PgsqlAdapter` contro Postgres 18 (sequence/serial, `test/sql/pgsql-after-fixtures.sql`).
 - Adeguamento `test/sql/*.sql` se emergono differenze di sintassi.
 - `AdapterTest` esteso con connessione `mariadb` per farlo girare nella batteria condivisa.
+- **Test (TDD):** ogni divergenza/fix di adapter parte da un test di integrazione che fallisce sul backend interessato; se il fix cambia SQL generato, aggiungere anche l'unit su `SQLBuilder`/adapter e il funzionale via model fixture. Copertura su **tutti** i backend.
 - **Gate:** batteria adapter verde su tutti e quattro i backend.
 
 ### Fase 6 — GitHub Actions
@@ -91,7 +108,9 @@ Nessuna modifica alla API pubblica snake_case. I consumer del monolite vedono so
 
 ## Testing
 
-La suite esistente è il gate. Ogni fase chiude con `docker compose exec tests composer run test` verde. `--fail-on-skipped` resta attivo: i `markTestSkipped` per memcached/cache non devono scattare (servizi su nel compose).
+Sviluppo in **TDD** (vedi "Disciplina di test"): ogni modifica di codice parte da un test che fallisce e riceve copertura unit/funzionale/integrazione ai livelli che la toccano; le fasi di sola configurazione usano gate eseguibili + integrazione.
+
+La suite esistente resta il gate. Ogni fase chiude con `docker compose exec tests composer run test` verde. `--fail-on-skipped` resta attivo: i `markTestSkipped` per memcached/cache non devono scattare (servizi su nel compose).
 
 ## Documentazione
 
