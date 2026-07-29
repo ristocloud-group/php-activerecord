@@ -4,16 +4,18 @@ class DatabaseLoader
 	private $db;
 	static $instances = array();
 
-	public function __construct($db)
+	public function __construct($db, $key = null)
 	{
 		$this->db = $db;
+		$key = $key ?: $db->protocol;
 
-		if (!isset(static::$instances[$db->protocol]))
-			static::$instances[$db->protocol] = 0;
+		if (!isset(static::$instances[$key]))
+			static::$instances[$key] = 0;
 
-		if (static::$instances[$db->protocol]++ == 0)
+		if (static::$instances[$key]++ == 0)
 		{
-			// drop and re-create the tables one time only
+			// drop and re-create the tables one time only (per connection, so
+			// servers sharing a protocol — e.g. mysql and mariadb — each load)
 			$this->drop_tables();
 			$this->exec_sql_script($db->protocol);
 		}
