@@ -48,7 +48,7 @@ SELECT
         AND a.attnum = ANY (pg_index.indkey)
         AND pg_index.indisprimary = 't'
       ) IS NOT NULL AS pk,      
-      REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE((SELECT pg_attrdef.adsrc
+      REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE((SELECT pg_get_expr(pg_attrdef.adbin, pg_attrdef.adrelid)
         FROM pg_attrdef
         WHERE c.oid = pg_attrdef.adrelid
         AND pg_attrdef.adnum=a.attnum
