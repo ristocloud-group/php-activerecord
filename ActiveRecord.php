@@ -2,7 +2,7 @@
 if (!defined('PHP_VERSION_ID') || PHP_VERSION_ID < 50300)
 	die('PHP ActiveRecord requires PHP 5.3 or higher');
 
-define('PHP_ACTIVERECORD_VERSION_ID','1.0');
+define('PHP_ACTIVERECORD_VERSION_ID','1.8.0');
 
 require __DIR__.'/lib/Singleton.php';
 require __DIR__.'/lib/Config.php';
