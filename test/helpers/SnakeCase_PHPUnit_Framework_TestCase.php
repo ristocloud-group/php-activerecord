@@ -6,7 +6,6 @@ class SnakeCase_PHPUnit_Framework_TestCase extends TestCase
 	public function __call($meth, $args)
 	{
 		$class_name = get_called_class();
-		$trace = debug_backtrace();
 
 		$camel_cased_method = ActiveRecord\Inflector::instance()->camelize($meth);
 
