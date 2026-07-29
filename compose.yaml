@@ -1,23 +1,24 @@
-version: '3'
 services:
   tests:
     build:
       context: .
       args:
-        - PHP_VERSION=7.4
+        - PHP_VERSION=8.3
     command: tail -f /dev/null
     environment:
       - PHPAR_PGSQL=pgsql://phpar:secret@postgres/phpar_test
       - PHPAR_MYSQL=mysql://phpar:secret@mysql/phpar_test
+      - PHPAR_MARIADB=mysql://phpar:secret@mariadb/phpar_test
       - PHPAR_MEMCACHED=memcached
     depends_on:
       mysql:
         condition: service_healthy
+      mariadb:
+        condition: service_healthy
       postgres:
         condition: service_healthy
   mysql:
-    platform: linux/x86_64
-    image: mysql:5.6
+    image: mysql:9.7
     environment:
       - MYSQL_USER=phpar
       - MYSQL_PASSWORD=secret
@@ -26,10 +27,22 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-psecret"]
       interval: 5s
-      retries: 3
+      retries: 10
+      timeout: 5s
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      - MARIADB_USER=phpar
+      - MARIADB_PASSWORD=secret
+      - MARIADB_DATABASE=phpar_test
+      - MARIADB_ROOT_PASSWORD=secret
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 10
       timeout: 5s
   postgres:
-    image: postgres:9.6
+    image: postgres:18
     environment:
       - POSTGRES_DB=phpar_test
       - POSTGRES_USER=phpar
@@ -37,7 +50,7 @@ services:
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "phpar"]
       interval: 5s
-      retries: 3
+      retries: 10
       timeout: 5s
   memcached:
-    image: memcached:1.4
+    image: memcached:1.6
