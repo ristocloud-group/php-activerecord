@@ -138,6 +138,13 @@ $cfg->set_cache('file:///var/tmp/php-activerecord-cache');
 
 The file backend stores one serialized file per cache key inside the directory you pass (creating the directory if it does not exist), and reads it back with `unserialize()`.
 
+The **file** backend also honors the `expire` option: each entry stores an expiry timestamp
+and is treated as a miss once it lapses (deleted lazily on the next read). Writes are atomic
+(temp file + `rename`). **Behavior change:** because the default `expire` is 30 seconds, file
+entries that previously persisted forever now expire after 30s by default — pass
+`array('expire' => 0)` to keep entries until you `flush()` them. Files written by older
+versions are treated as a miss and regenerated, so no manual purge is needed when upgrading.
+
 **Redis** — requires the `predis/predis` Composer package (`composer require predis/predis`); no PHP extension needed:
 
 ```php
@@ -150,7 +157,6 @@ connection parameter is reachable — e.g. TLS and tuning:
 ```php
 $cfg->set_cache('redis://user:secret@redis.example.com:6379/0?read_write_timeout=2', array(
     'namespace' => 'my_app',
-    'redis'     => array('prefix' => 'ar:'), // Predis client options
 ));
 ```
 
@@ -158,14 +164,11 @@ The same `redis://` DSN targets **Redis 6/7/8 and Valkey 7/8/9** interchangeably
 is exercised against all six in CI. Values are serialized on write and unserialized on read.
 `ActiveRecord\Cache::flush()` deletes only the keys under the configured `namespace`
 (via `SCAN`/`DEL`); with no namespace it falls back to `FLUSHDB`, which clears the whole
-selected Redis database — set a `namespace` when the Redis instance is shared.
-
-The **file** backend now honors the `expire` option: each entry stores an expiry timestamp
-and is treated as a miss once it lapses (deleted lazily on the next read). Writes are atomic
-(temp file + `rename`). **Behavior change:** because the default `expire` is 30 seconds, file
-entries that previously persisted forever now expire after 30s by default — pass
-`array('expire' => 0)` to keep entries until you `flush()` them. Files written by older
-versions are treated as a miss and regenerated, so no manual purge is needed when upgrading.
+selected Redis database — set a `namespace` when the Redis instance is shared. **Do not** pass
+a Predis `prefix` client option for key isolation: Predis does not apply `prefix` to the plain
+`SCAN` command that namespace-scoped `flush()` relies on, so keys end up stored under
+`prefix + key` while `flush()` only matches `namespace::*`, silently deleting nothing — use the
+`namespace` option instead, which `flush()` already understands.
 
 `ActiveRecord\Cache::flush()` invalidates the cache for any backend (for the file cache it
 deletes the cached files) — for example after running a schema migration. All backends accept

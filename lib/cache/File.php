@@ -75,6 +75,9 @@ class File
 
     // Write atomically: a concurrent reader sees the whole old or whole new file.
     $tmp_path = tempnam($this->cache_dir, 'phpar');
+    if ($tmp_path === false)
+      return;
+
     file_put_contents($tmp_path, serialize($envelope));
     rename($tmp_path, $cache_path);
   }

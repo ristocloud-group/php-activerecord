@@ -18,8 +18,27 @@ class RedisCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
 
   public function tear_down()
   {
-    if ($this->cache)
-      $this->cache->flush();
+    // Tolerant of connection errors: a leak here must never mask (or cause)
+    // a failure in a sibling test.
+    try
+    {
+      if ($this->cache)
+        $this->cache->flush();
+    }
+    catch (\Throwable $e) {}
+
+    try
+    {
+      $db3 = new Redis(parse_url($this->url . '/3'));
+      $db3->flush();
+    }
+    catch (\Throwable $e) {}
+
+    try
+    {
+      Cache::initialize(null);
+    }
+    catch (\Throwable $e) {}
   }
 
   public function test_reads_own_writes()
