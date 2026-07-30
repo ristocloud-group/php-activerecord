@@ -45,6 +45,44 @@ class FileCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     $this->assert_equals("bar", $this->cache->read("foo"));
   }
+
+  public function test_honors_expire()
+  {
+    $this->cache->write("foo", "bar", 1);
+    sleep(2);
+    $this->assert_null($this->cache->read("foo"));
+  }
+
+  public function test_zero_expire_never_expires()
+  {
+    $this->cache->write("foo", "bar", 0);
+    $this->assert_equals("bar", $this->cache->read("foo"));
+  }
+
+  public function test_treats_legacy_raw_payload_as_miss()
+  {
+    if (!is_dir($this->cache_dir)) mkdir($this->cache_dir);
+    // A file written by a previous version: a bare serialized value, not an envelope.
+    file_put_contents($this->cache_dir . "/legacy", serialize("bare-value"));
+
+    $this->assert_null($this->cache->read("legacy"));
+  }
+
+  public function test_reading_expired_entry_twice_does_not_warn()
+  {
+    $this->cache->write("foo", "bar", 1);
+    sleep(2);
+    $this->cache->read("foo");                 // lazy-GC deletes the file
+    $this->assert_null($this->cache->read("foo")); // file already gone: must not warn
+  }
+
+  public function test_write_leaves_no_temp_files()
+  {
+    $this->cache->write("foo", "bar");
+
+    $files = array_map('basename', glob($this->cache_dir . "/*"));
+    $this->assert_equals(["foo"], $files);
+  }
 }
 
 class Value {
