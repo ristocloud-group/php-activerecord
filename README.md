@@ -1,14 +1,18 @@
-# PHP ActiveRecord - Version 1.0 #
+# PHP ActiveRecord #
 
-[![Build Status](https://travis-ci.org/zamzar/php-activerecord.png?branch=master)](https://travis-ci.org/zamzar/php-activerecord)
+[![CI](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml/badge.svg)](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml)
 
-by
+> **This is a fork maintained by Ristocloud Group S.r.l.**
+>
+> It is based on [`zamzar/php-activerecord`](https://github.com/zamzar/php-activerecord) (itself a fork of the original [`jpfuentes2/php-activerecord`](https://github.com/jpfuentes2/php-activerecord)). We vendor it into our own applications and maintain it — fixing bugs and keeping it running on modern PHP and database versions. It is not affiliated with, nor endorsed by, the original authors.
+
+Originally created by:
 
 * [@kla](https://github.com/kla) - Kien La
 * [@jpfuentes2](https://github.com/jpfuentes2) - Jacques Fuentes
-* [And these terrific Contributors](https://github.com/kla/php-activerecord/contributors)
+* [and these contributors](https://github.com/kla/php-activerecord/contributors)
 
-<http://www.phpactiverecord.org/>
+Upstream documentation: <http://www.phpactiverecord.org/>
 
 ## Introduction ##
 A brief summarization of what ActiveRecord is:
@@ -27,14 +31,17 @@ Of course, there are some differences which will be obvious to the user if they 
 
 ## Minimum Requirements ##
 
-- PHP 5.3+
+- PHP 8.3+ (tested on PHP 8.3, 8.4 and 8.5)
 - PDO driver for your respective database
 
 ## Supported Databases ##
 
-- MySQL
-- SQLite
-- PostgreSQL
+- **MySQL** — the primary production target
+- **MariaDB**
+- **PostgreSQL**
+- **SQLite**
+
+Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 9.7, MariaDB 11.4, PostgreSQL 18 and SQLite. The Oracle (`oci`) adapter was removed in v1.8.0.
 
 ## Features ##
 
@@ -50,6 +57,19 @@ Of course, there are some differences which will be obvious to the user if they 
 - Miscellaneous options such as: aliased/protected/accessible attributes
 
 ## Installation ##
+
+This fork is not published on Packagist. Install it with [Composer](https://getcomposer.org/) from its Git repository — add a VCS repository to your `composer.json` and require the package by its name (`zamzar/php-activerecord`, kept unchanged from upstream):
+
+```json
+{
+    "repositories": [
+        { "type": "vcs", "url": "https://github.com/ristocloud-group/php-activerecord" }
+    ],
+    "require": {
+        "zamzar/php-activerecord": "dev-master"
+    }
+}
+```
 
 Setup is very easy and straight-forward. There are essentially only two configuration points you must concern yourself with:
 
@@ -71,7 +91,7 @@ ActiveRecord\Config::initialize(function($cfg)
 });
 ```
 
-Alternatively (w/o the 5.3 closure):
+Alternatively (without a closure):
 
 ```php
 $cfg = ActiveRecord\Config::instance();
@@ -84,6 +104,8 @@ $cfg->set_connections(
 );
 ```
 
+MariaDB uses the same `mysql://` connection scheme (and the MySQL adapter) as MySQL.
+
 PHP ActiveRecord will default to use your development database. For testing or production, you simply set the default
 connection according to your current environment ('test' or 'production'):
 
@@ -94,9 +116,18 @@ ActiveRecord\Config::initialize(function($cfg)
 });
 ```
 
-Once you have configured these three settings you are done. ActiveRecord takes care of the rest for you.
+Once you have configured these settings you are done. ActiveRecord takes care of the rest for you.
 It does not require that you map your table schema to yaml/xml files. It will query the database for this information and
 cache it so that it does not make multiple calls to the database for a single schema.
+
+### Optional: caching the schema ###
+
+By default the introspected schema is cached only for the lifetime of the request. To persist it across requests you can
+configure an external cache (Memcached, or a filesystem cache):
+
+```php
+$cfg->set_cache('memcache://localhost:11211', array('expire' => 120));
+```
 
 ## Basic CRUD ##
 
@@ -163,4 +194,8 @@ echo $post->title; # 'New real title'
 
 ## Contributing ##
 
-Please refer to [CONTRIBUTING.md](https://github.com/jpfuentes2/php-activerecord/blob/master/CONTRIBUTING.md) for information on how to contribute to PHP ActiveRecord.
+Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) for information on how to contribute to this fork.
+
+## License ##
+
+MIT — see [LICENSE](LICENSE).
