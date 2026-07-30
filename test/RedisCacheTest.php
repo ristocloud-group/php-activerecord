@@ -157,9 +157,9 @@ class RedisCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
 
   private function predis_parameters(Redis $adapter)
   {
-    $property = new ReflectionProperty(Redis::class, 'client');
-    $property->setAccessible(true);
-    $client = $property->getValue($adapter);
+    // Reflection reads private properties without setAccessible() since PHP 8.1
+    // (calling it is a deprecated no-op on 8.5).
+    $client = (new ReflectionProperty(Redis::class, 'client'))->getValue($adapter);
 
     return $client->getConnection()->getParameters();
   }
