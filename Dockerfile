@@ -7,7 +7,7 @@ RUN apt-get -qqy update
 
 ## Install memcached extensions for PHP
 RUN apt-get update && apt-get install -y libmemcached-dev libssl-dev zlib1g-dev \
-	&& pecl install memcached-3.2.0 \
+	&& pecl install memcached-3.4.0 \
 	&& docker-php-ext-enable memcached
 
 # Install pcov for code coverage
