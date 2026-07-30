@@ -1,5 +1,12 @@
 # Release Notes
 
+## v2.0.0 (TBD)
+* **BREAKING:** drops support for PHP < 8.3; the library now requires PHP ^8.3 and runs on 8.5
+* **BREAKING:** upgrades psr/log to ^3.0
+* Migrates the test suite to PHPUnit 12 and CI to GitHub Actions
+* Adds support for MariaDB 11.4, MySQL 9.7, and PostgreSQL 18
+* Adds PHPStan (level 5) and coverage generation
+
 ## v1.8.0 (27 July 2026)
 * Removes the incomplete, untested OCI/Oracle adapter
 

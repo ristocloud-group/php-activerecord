@@ -1,15 +1,27 @@
 <?php
 use ActiveRecord\Column;
 
-class AdapterTest extends DatabaseTest
+abstract class AdapterTest extends DatabaseTest
 {
 	const InvalidDb = '__1337__invalid_db__';
 
 	public function set_up($connection_name=null)
 	{
-		if (($connection_name && !in_array($connection_name, PDO::getAvailableDrivers())) ||
-			ActiveRecord\Config::instance()->get_connection($connection_name) == 'skip')
-			$this->mark_test_skipped($connection_name . ' drivers are not present');
+		if ($connection_name)
+		{
+			$connection_string = ActiveRecord\Config::instance()->get_connection($connection_name);
+
+			if ($connection_string == 'skip')
+				$this->mark_test_skipped($connection_name . ' drivers are not present');
+
+			// Named connections don't necessarily match a PDO driver name
+			// (e.g. the 'mariadb' connection speaks the 'mysql' PDO driver),
+			// so check the driver the connection string actually resolves to.
+			$protocol = parse_url($connection_string, PHP_URL_SCHEME);
+
+			if ($protocol && !in_array($protocol, PDO::getAvailableDrivers()))
+				$this->mark_test_skipped($connection_name . ' drivers are not present');
+		}
 
 		parent::set_up($connection_name);
 	}
@@ -72,7 +84,7 @@ class AdapterTest extends DatabaseTest
 		ActiveRecord\Connection::instance("{$this->conn->protocol}://zzz:zzz@127.0.0.1/test");
 	}
 
-	/** @doesNotPerformAssertions */
+	#[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
 	public function test_connect_with_port()
 	{
 		$config = ActiveRecord\Config::instance();
@@ -265,7 +277,13 @@ class AdapterTest extends DatabaseTest
 		$this->assert_equals(true,$columns['author_id']->pk);
 		$this->assert_equals('int',$columns['author_id']->raw_type);
 		$this->assert_equals(Column::INTEGER,$columns['author_id']->type);
-		$this->assert_true($columns['author_id']->length > 1);
+
+		// MySQL 8.0.19+/9.x no longer reports an integer display width (`int`
+		// instead of `int(11)`), so no length can be parsed out of it there;
+		// MariaDB (and every other supported adapter) still reports/derives
+		// one. Accept either: when a length is reported, it must be sane.
+		$this->assert_true($columns['author_id']->length === null || $columns['author_id']->length > 1);
+
 		$this->assert_false($columns['author_id']->nullable);
 
 		$this->assert_equals(false,$columns['parent_author_id']->pk);

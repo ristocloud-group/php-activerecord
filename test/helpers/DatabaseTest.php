@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/DatabaseLoader.php';
 
-class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
+abstract class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
 {
 	/** @var \ActiveRecord\Connection */
 	protected $conn;
@@ -38,7 +38,7 @@ class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
 
 		$GLOBALS['ACTIVERECORD_LOG'] = false;
 
-		$loader = new DatabaseLoader($this->conn);
+		$loader = new DatabaseLoader($this->conn, $config->get_default_connection());
 		$loader->reset_table_data();
 
 		if (self::$log)

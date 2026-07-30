@@ -19,6 +19,7 @@
 
 use ActiveRecord\Config;
 use Monolog\Handler\StreamHandler;
+use Monolog\Level;
 use Monolog\Logger;
 
 require_once 'vendor/autoload.php';
@@ -43,9 +44,10 @@ if (getenv('LOG') !== 'false')
 ActiveRecord\Config::initialize(function(Config $cfg)
 {
 	$cfg->set_connections(array(
-		'mysql'  => getenv('PHPAR_MYSQL')  ?: 'mysql://test:test@127.0.0.1/test',
-		'pgsql'  => getenv('PHPAR_PGSQL')  ?: 'pgsql://test:test@127.0.0.1/test',
-		'sqlite' => getenv('PHPAR_SQLITE') ?: 'sqlite://test.db'));
+		'mysql'   => getenv('PHPAR_MYSQL')   ?: 'mysql://test:test@127.0.0.1/test',
+		'mariadb' => getenv('PHPAR_MARIADB') ?: 'mysql://test:test@127.0.0.1/test',
+		'pgsql'   => getenv('PHPAR_PGSQL')   ?: 'pgsql://test:test@127.0.0.1/test',
+		'sqlite'  => getenv('PHPAR_SQLITE')  ?: 'sqlite://test.db'));
 
 	$cfg->set_default_connection('mysql');
 
@@ -58,7 +60,7 @@ ActiveRecord\Config::initialize(function(Config $cfg)
 	}
 
     $logger = new Logger('tests');
-    $logger->pushHandler(new StreamHandler(dirname(__FILE__) . '/../log/query.log', Logger::DEBUG));
+    $logger->pushHandler(new StreamHandler(dirname(__FILE__) . '/../log/query.log', Level::Debug));
     $cfg->set_logger($logger);
 
 	if ($GLOBALS['show_warnings']  && !isset($GLOBALS['show_warnings_done']))
@@ -72,5 +74,5 @@ ActiveRecord\Config::initialize(function(Config $cfg)
 	$GLOBALS['show_warnings_done'] = true;
 });
 
-error_reporting(E_ALL | E_STRICT);
+error_reporting(E_ALL);
 

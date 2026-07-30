@@ -4,16 +4,18 @@ class DatabaseLoader
 	private $db;
 	static $instances = array();
 
-	public function __construct($db)
+	public function __construct($db, $key = null)
 	{
 		$this->db = $db;
+		$key = $key ?: $db->protocol;
 
-		if (!isset(static::$instances[$db->protocol]))
-			static::$instances[$db->protocol] = 0;
+		if (!isset(static::$instances[$key]))
+			static::$instances[$key] = 0;
 
-		if (static::$instances[$db->protocol]++ == 0)
+		if (static::$instances[$key]++ == 0)
 		{
-			// drop and re-create the tables one time only
+			// drop and re-create the tables one time only (per connection, so
+			// servers sharing a protocol — e.g. mysql and mariadb — each load)
 			$this->drop_tables();
 			$this->exec_sql_script($db->protocol);
 		}
@@ -81,7 +83,7 @@ class DatabaseLoader
 	public function load_fixture_data($table)
 	{
 		$fp = fopen(__DIR__ . "/../fixtures/$table.csv",'r');
-		$fields = fgetcsv($fp);
+		$fields = fgetcsv($fp, 0, ',', '"', '\\');
 
 		if (!empty($fields))
 		{
@@ -93,7 +95,7 @@ class DatabaseLoader
 
 			$fields = join(',',$fields);
 
-			while (($values = fgetcsv($fp)))
+			while (($values = fgetcsv($fp, 0, ',', '"', '\\')))
 				$this->db->query("INSERT INTO $table($fields) VALUES($markers)",$values);
 		}
 		fclose($fp);

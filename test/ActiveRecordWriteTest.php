@@ -37,7 +37,7 @@ class ActiveRecordWriteTest extends DatabaseTest
 		return $book;
 	}
 
-    /** @doesNotPerformAssertions */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
 	public function test_save()
 	{
 		$venue = new Venue(array('name' => 'Tito'));

@@ -362,7 +362,7 @@ class CsvSerializer extends Serialization
   private function to_csv($arr)
   {
     $outstream = fopen('php://temp', 'w');
-    fputcsv($outstream, $arr, self::$delimiter, self::$enclosure);
+    fputcsv($outstream, $arr, self::$delimiter, self::$enclosure, '\\');
     rewind($outstream);
     $buffer = trim(stream_get_contents($outstream));
     fclose($outstream);

@@ -140,7 +140,6 @@ class Table
 					if (array_key_exists($rel->class_name, $existing_tables))
 					{
 						$alias = $value;
-						$existing_tables[$rel->class_name]++;
 					}
 					else
 					{

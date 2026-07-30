@@ -586,5 +586,13 @@ class ActiveRecordTest extends DatabaseTest
   		$venue = new Venue();
   		$this->assert_true($venue->__isset('events'));
 	}
+
+	public function test_set_relationship_from_eager_load_accepts_null_model()
+	{
+		$book = Book::first();
+		// non deve emettere deprecation e deve accettare null come primo argomento
+		$book->set_relationship_from_eager_load(null, 'author');
+		$this->assert_null($book->author);
+	}
 };
 

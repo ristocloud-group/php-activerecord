@@ -1,7 +1,6 @@
 # Contributing to PHP ActiveRecord #
 
-We always appreciate contributions to PHP ActiveRecord, but we are not always able to respond as quickly as we would like.
-Please do not take delays personal and feel free to remind us by commenting on issues.
+This repository is a fork maintained by **Ristocloud Group S.r.l.** We maintain it primarily for our own use — fixing bugs and keeping it running on modern PHP and database versions — but contributions are welcome. We are not always able to respond as quickly as we would like, so please do not take delays personally and feel free to remind us by commenting on issues.
 
 ### Testing ###
 
@@ -21,11 +20,12 @@ docker compose exec tests vendor/bin/phpunit --group slow
 
 #### Testing against a different version of PHP ####
 
-First rebuild the Docker image with the desired version of PHP:
+CI runs the suite across PHP 8.3, 8.4 and 8.5 against MySQL 9.7, MariaDB 11.4, PostgreSQL 18 and SQLite. To reproduce a specific PHP version locally, rebuild the Docker image with the desired version (the default is 8.3):
 
 ```sh
-docker compose build --build-arg PHP_VERSION=8.1
+docker compose build --build-arg PHP_VERSION=8.5
 docker compose up -d
+```
 
 Then run the tests:
 
@@ -33,21 +33,13 @@ Then run the tests:
 docker compose exec tests composer run test
 ```
 
-You can check compatibility via static analysis by updating `composer.json` (see `scripts.check-compatibility`) and 
-then running:
+You can run static analysis (PHPStan, level 5) with:
 
 ```sh
-docker compose exec tests composer run check-compatibility
+docker compose exec tests composer run analyse
 ```
 
-#### Skipped Tests ####
+#### No Skipped Tests ####
 
-You might notice that some tests are marked as skipped. To obtain more information about skipped
-tests, pass the `--verbose` flag to PHPUnit:
-
-```sh
-vendor/bin/phpunit --verbose
-```
-
-Typically, tests will have been skipped because the development environment does not provide access to all of the dependencies needed to test PHP ActiveRecord. You can either install these dependencies, or use docker to boot up containers that package up the dependencies.
+The suite runs with `--fail-on-skipped` (and `--fail-on-warning`, `--fail-on-risky`, `--fail-on-deprecation`), so a skipped test is a **failing build**, not a pass. Tests skip only when a dependency (a database, memcached) is unavailable — and the Docker environment provides all of them, so nothing should skip there. If you see a skipped test, your environment is missing a dependency: bring the full stack up with `docker compose up -d` rather than running PHPUnit against a partial setup.
 
