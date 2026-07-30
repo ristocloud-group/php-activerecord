@@ -44,6 +44,8 @@ Because the require is dynamic, **a new adapter needs no change to `ActiveRecord
 - Make the **File** adapter honor `expire`, with semantics uniform across all adapters.
 - Add a **Redis** adapter via `predis/predis` reachable as `redis://…`, exposing all Predis
   connection parameters through the DSN and client options through the options array.
+- Guarantee the Redis adapter works against **Redis 6.x, 7.x, 8.x** and **Valkey 7.x, 8.x,
+  9.x**, verified by a dedicated CI matrix axis.
 - Do everything **TDD**: failing test first, then implementation.
 - Ensure **no test is skipped** in the Docker/CI environment (skips are a red build).
 - Enrich the README with per-adapter documentation (uses, pros & cons, comparison table).
@@ -153,6 +155,22 @@ the fallback clears the whole selected Redis DB.
 - A failed connection surfaces as a `CacheException` (consistent with `Memcache`'s
   constructor), wrapping any Predis connection exception where practical.
 
+### Server compatibility (Redis 6/7/8, Valkey 7/8/9)
+
+The adapter must run unchanged against **Redis 6.x, 7.x, 8.x** and **Valkey 7.x, 8.x, 9.x**
+(Valkey is a wire-compatible Redis fork). This is achievable because the adapter uses only
+the stable, universally-supported command set:
+
+- `GET` / `SET` with the `EX` TTL option, `DEL`, and cursor-based `SCAN` — present and
+  behaviorally identical across all six server families.
+- `FLUSHDB` only as the no-prefix fallback.
+- ACL `username` (Redis 6+ / Valkey) is sent only when the DSN provides a user, so a
+  password-only or auth-less server keeps working.
+
+`predis/predis ^2.0` speaks RESP2/RESP3 and connects to all of the above. No server-version
+detection or feature-gating is needed in the adapter; compatibility is proven by CI (below)
+rather than by conditional code.
+
 ## Component 3 — Dependency & test infrastructure
 
 - **`composer.json`**: add `predis/predis` (`^2.0`) to `require-dev`, and a `suggest` entry
@@ -161,8 +179,19 @@ the fallback clears the whole selected Redis DB.
 - **`compose.yaml`**: add a `redis` service (`redis:7-alpine` or `redis:8`) with a TCP
   healthcheck, add `PHPAR_REDIS=redis://redis:6379` to the `tests` service environment, and
   add it to the `tests` service `depends_on` (`condition: service_healthy`).
-- **`.github/workflows/ci.yml`**: add a `redis` service container to every matrix job and
-  mirror `PHPAR_REDIS` (e.g. `redis://127.0.0.1:6379`), matching how memcached is wired.
+- **`.github/workflows/ci.yml`** — two changes:
+  - **Main matrix (PHP × DBs):** add a single default `redis` service container to every job
+    and mirror `PHPAR_REDIS` (e.g. `redis://127.0.0.1:6379`), matching how memcached is
+    wired, so the full-suite gate (`composer run test`) always exercises the Redis adapter.
+  - **Dedicated Redis/Valkey compatibility job:** a separate job with a matrix over the six
+    server images, each started as a service container and targeted via `PHPAR_REDIS`, that
+    runs only the Redis cache tests (`vendor/bin/phpunit --filter RedisCacheTest`) on a
+    single pinned PHP version (8.3). This proves cross-server compatibility without
+    multiplying the whole 3-PHP × 4-DB matrix by six. Matrix images:
+    - `redis:6`, `redis:7`, `redis:8`
+    - `valkey/valkey:7`, `valkey/valkey:8`, `valkey/valkey:9`
+
+    The job runs under the same `--fail-on-*` flags, so a skip is still a red build.
 - **`test/helpers/config.php`**: no connection registration needed (cache is not an AR
   connection), but the Redis host/DSN is read from `PHPAR_REDIS` in the cache tests.
 
@@ -197,7 +226,9 @@ coverage beyond the adapter unit tests.
 ## Component 5 — Documentation
 
 - **README** "Optional: caching the schema" section:
-  - Add a **Redis** subsection with a DSN example (query string + client options).
+  - Add a **Redis** subsection with a DSN example (query string + client options), noting
+    that the adapter is verified against Redis 6/7/8 and Valkey 7/8/9 and that the same
+    `redis://` DSN targets either server.
   - Replace the note (line 139) that the file cache does not honor `expire`; state the new
     behavior and the `expire => 0` opt-out.
   - Add a **comparison table** of the three adapters: requirement (extension/package), TTL
@@ -209,6 +240,8 @@ coverage beyond the adapter unit tests.
 
 - `docker compose exec tests composer run test` is green with no skipped/risky/warning tests.
 - New File and Redis behaviors covered by tests that fail before implementation.
+- The dedicated CI job runs the Redis cache tests green against all six server images
+  (Redis 6/7/8, Valkey 7/8/9).
 - `composer run analyse` (PHPStan level 5) passes without new baseline entries.
 - README renders the new section and comparison table; RELEASES updated.
 
@@ -221,4 +254,9 @@ coverage beyond the adapter unit tests.
 - **`flush()` on shared Redis.** Mitigated by prefix/namespace-scoped deletion; `FLUSHDB`
   only as documented fallback when no prefix is configured.
 - **Predis version / `SCAN` semantics.** Pin `predis/predis ^2.0`; use cursor-based `SCAN`.
+- **Server-version drift across Redis 6/7/8 & Valkey 7/8/9.** Mitigated by restricting the
+  adapter to the universally-supported command set (no version gating) and proving it in the
+  dedicated CI compatibility job rather than trusting a single server version.
+- **README doc example targeting.** Note in the README that the same `redis://` DSN works
+  against Redis and Valkey interchangeably.
 ```
