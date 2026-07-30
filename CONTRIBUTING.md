@@ -2,6 +2,13 @@
 
 This repository is a fork maintained by **Ristocloud Group S.r.l.** We maintain it primarily for our own use — fixing bugs and keeping it running on modern PHP and database versions — but contributions are welcome. We are not always able to respond as quickly as we would like, so please do not take delays personally and feel free to remind us by commenting on issues.
 
+### Coding style ###
+
+- **snake_case public API.** Methods and options stay snake_case (`find_by_pk`, `set_default_connection`, `is_dirty`) — it mirrors Rails and is the library's contract. This is a naming rule only; it does not mean the code itself should look dated.
+- **Write modern PHP (>= 8.3).** The library requires PHP `^8.3`, so new code — and the examples in the README — must use modern idioms: short array syntax `[]` (never `array()`), type declarations (parameters, return types, typed properties and constants), null coalescing `??` / nullsafe `?->`, `[$a, $b] = …` destructuring, and enums/`readonly`/`match` where they fit.
+- **Don't modernize legacy code wholesale.** Much of the codebase predates this style (`array()` literals, few type declarations). Leave files you aren't otherwise changing alone, and when editing a legacy hot path prefer minimal, behavior-preserving edits — modernize what you newly write, not the surrounding legacy you merely touch.
+- New code must stay **PHPStan level 5** clean without adding entries to `phpstan-baseline.neon`.
+
 ### Testing ###
 
 Run the tests with Docker:

@@ -64,8 +64,9 @@ The object model, and how a `Model` subclass turns into SQL:
 
 ### Conventions that matter when changing code
 
-- **snake_case public API.** Methods and options are snake_case (`find_by_pk`, `set_default_connection`, `save`, `is_dirty`) — this mirrors Rails and is the library's contract. Do not rename to camelCase.
-- The codebase predates modern PHP style: `array()` literals, few type declarations, tabs for indentation. Match the surrounding file rather than modernizing wholesale — the PHP 8.5 upgrade already required targeted fixes across the codebase (dynamic properties, `#[\ReturnTypeWillChange]`, deprecated `each()`/curly-brace access, nullable-parameter deprecations, etc.), so expect this style to coexist with those fixes. When touching a hot path, prefer minimal, behavior-preserving edits.
+- **snake_case public API.** Methods and options are snake_case (`find_by_pk`, `set_default_connection`, `save`, `is_dirty`) — this mirrors Rails and is the library's contract. Do not rename to camelCase. snake_case is a *naming* rule, not a licence to write dated PHP: it is fully compatible with the modern-PHP requirement below.
+- **Modern PHP (>= 8.3) in the code you write.** The library requires `^8.3`, so new code and any code you author must use modern PHP idioms: short array syntax `[]` (never `array()`), type declarations (parameters, return types, typed properties, typed class constants), null coalescing (`??`) / nullsafe (`?->`), `list()`-destructuring as `[$a, $b] = …`, first-class enums/readonly/match where they fit, etc. Applies equally to README/docs examples — show modern PHP, not PHP 5.x-era code.
+- **But do not modernize legacy code wholesale.** The existing codebase predates this style (`array()` literals, few type declarations, tabs for indentation), and that old style legitimately coexists with the PHP 8.5 upgrade fixes (dynamic properties, `#[\ReturnTypeWillChange]`, deprecated `each()`/curly-brace access, nullable-parameter deprecations, etc.). Don't refactor files you aren't otherwise changing (YAGNI). When editing a legacy hot path, prefer minimal, behavior-preserving edits — modernize what you newly write, not the surrounding legacy you merely touch.
 
 ## Tests
 
