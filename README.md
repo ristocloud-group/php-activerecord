@@ -58,7 +58,7 @@ Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 agai
 
 ## Installation ##
 
-This fork is not published on Packagist. Install it with [Composer](https://getcomposer.org/) from its Git repository — add a VCS repository to your `composer.json` and require the package by its name (`zamzar/php-activerecord`, kept unchanged from upstream):
+This fork is not published on Packagist. Install it with [Composer](https://getcomposer.org/) from its Git repository — add a VCS repository to your `composer.json` and require the package by its name (`ristocloud-group/php-activerecord`):
 
 ```json
 {
@@ -66,7 +66,7 @@ This fork is not published on Packagist. Install it with [Composer](https://getc
         { "type": "vcs", "url": "https://github.com/ristocloud-group/php-activerecord" }
     ],
     "require": {
-        "zamzar/php-activerecord": "dev-master"
+        "ristocloud-group/php-activerecord": "dev-master"
     }
 }
 ```
@@ -122,12 +122,23 @@ cache it so that it does not make multiple calls to the database for a single sc
 
 ### Optional: caching the schema ###
 
-By default the introspected schema is cached only for the lifetime of the request. To persist it across requests you can
-configure an external cache (Memcached, or a filesystem cache):
+php-activerecord introspects each table's schema (columns, types, primary key) from the database. Within a single request this is kept in memory, but PHP's shared-nothing model means it is re-introspected on every request. To persist it across requests, configure an external cache. Two backends are bundled:
+
+**Memcached** — requires the `memcached` PHP extension:
 
 ```php
-$cfg->set_cache('memcache://localhost:11211', array('expire' => 120));
+$cfg->set_cache('memcache://localhost:11211', array('expire' => 120, 'namespace' => 'my_app'));
 ```
+
+**File** — a filesystem cache (added by this fork for hosts without memcached); no extension required:
+
+```php
+$cfg->set_cache('file:///var/tmp/php-activerecord-cache');
+```
+
+The file backend stores one serialized file per cache key inside the directory you pass (creating the directory if it does not exist), and reads it back with `unserialize()`. Unlike Memcached, it does **not** honor the `expire` option — file entries have no TTL and persist until you remove them. Call `ActiveRecord\Cache::flush()` to invalidate the cache for either backend (for the file cache this deletes the cached files) — for example after running a schema migration.
+
+Both backends accept a `namespace` option that prefixes every cache key, which is useful when several applications share one cache store.
 
 ## Basic CRUD ##
 

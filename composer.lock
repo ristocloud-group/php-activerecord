@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ec5348fe1eeeacde57244f75d260009a",
+    "content-hash": "d6df9474b7ea7ba75cec9f57844089ac",
     "packages": [
         {
             "name": "psr/log",
