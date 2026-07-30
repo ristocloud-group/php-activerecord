@@ -79,15 +79,12 @@ Setup is very easy and straight-forward. There are essentially only two configur
 Example:
 
 ```php
-ActiveRecord\Config::initialize(function($cfg)
-{
-   $cfg->set_connections(
-     array(
-       'development' => 'mysql://username:password@localhost/development_database_name',
-       'test' => 'mysql://username:password@localhost/test_database_name',
-       'production' => 'mysql://username:password@localhost/production_database_name'
-     )
-   );
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_connections([
+        'development' => 'mysql://username:password@localhost/development_database_name',
+        'test' => 'mysql://username:password@localhost/test_database_name',
+        'production' => 'mysql://username:password@localhost/production_database_name',
+    ]);
 });
 ```
 
@@ -95,13 +92,11 @@ Alternatively (without a closure):
 
 ```php
 $cfg = ActiveRecord\Config::instance();
-$cfg->set_connections(
-  array(
+$cfg->set_connections([
     'development' => 'mysql://username:password@localhost/development_database_name',
     'test' => 'mysql://username:password@localhost/test_database_name',
-    'production' => 'mysql://username:password@localhost/production_database_name'
-  )
-);
+    'production' => 'mysql://username:password@localhost/production_database_name',
+]);
 ```
 
 MariaDB uses the same `mysql://` connection scheme (and the MySQL adapter) as MySQL.
@@ -110,9 +105,8 @@ PHP ActiveRecord will default to use your development database. For testing or p
 connection according to your current environment ('test' or 'production'):
 
 ```php
-ActiveRecord\Config::initialize(function($cfg)
-{
-  $cfg->set_default_connection(your_environment);
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_default_connection('production'); // 'development', 'test', or 'production'
 });
 ```
 
@@ -127,7 +121,7 @@ php-activerecord introspects each table's schema (columns, types, primary key) f
 **Memcached** — requires the `memcached` PHP extension:
 
 ```php
-$cfg->set_cache('memcache://localhost:11211', array('expire' => 120, 'namespace' => 'my_app'));
+$cfg->set_cache('memcache://localhost:11211', ['expire' => 120, 'namespace' => 'my_app']);
 ```
 
 **File** — a filesystem cache (added by this fork for hosts without memcached); no extension required:
@@ -142,22 +136,22 @@ The **file** backend also honors the `expire` option: each entry stores an expir
 and is treated as a miss once it lapses (deleted lazily on the next read). Writes are atomic
 (temp file + `rename`). **Behavior change:** because the default `expire` is 30 seconds, file
 entries that previously persisted forever now expire after 30s by default — pass
-`array('expire' => 0)` to keep entries until you `flush()` them. Files written by older
+`['expire' => 0]` to keep entries until you `flush()` them. Files written by older
 versions are treated as a miss and regenerated, so no manual purge is needed when upgrading.
 
 **Redis** — requires the `predis/predis` Composer package (`composer require predis/predis`); no PHP extension needed:
 
 ```php
-$cfg->set_cache('redis://localhost:6379/0', array('expire' => 120, 'namespace' => 'my_app'));
+$cfg->set_cache('redis://localhost:6379/0', ['expire' => 120, 'namespace' => 'my_app']);
 ```
 
 Connection parameters are taken from the DSN, including its query string, so any Predis
 connection parameter is reachable — e.g. TLS and tuning:
 
 ```php
-$cfg->set_cache('redis://user:secret@redis.example.com:6379/0?read_write_timeout=2', array(
+$cfg->set_cache('redis://user:secret@redis.example.com:6379/0?read_write_timeout=2', [
     'namespace' => 'my_app',
-));
+]);
 ```
 
 The same `redis://` DSN targets **Redis 6/7/8 and Valkey 7/8/9** interchangeably; the adapter
@@ -206,7 +200,7 @@ $post = Post::find_by_name_and_id('The Bridge Builder',100);
 $post = Post::find_by_name_or_id('The Bridge Builder',100);
 
 # finding using a conditions array
-$posts = Post::find('all',array('conditions' => array('name=? or id > ?','The Bridge Builder',100)));
+$posts = Post::find('all', ['conditions' => ['name=? or id > ?', 'The Bridge Builder', 100]]);
 ```
 
 ### Create ###

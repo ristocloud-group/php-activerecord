@@ -13,7 +13,7 @@ namespace ActiveRecord;
  */
 class File
 {
-  private $cache_dir;
+  private string $cache_dir;
 
   /**
    * Creates a File instance.
@@ -66,10 +66,10 @@ class File
     if (!is_dir($this->cache_dir))
       @mkdir($this->cache_dir, 0777, true);
 
-    $envelope = array(
+    $envelope = [
       'value'      => $value,
       'expires_at' => $expire > 0 ? time() + $expire : null,
-    );
+    ];
 
     $cache_path = $this->get_cache_path_for_key($key);
 

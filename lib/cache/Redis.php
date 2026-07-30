@@ -21,25 +21,25 @@ use Predis\Client;
  */
 class Redis
 {
-	const DEFAULT_PORT = 6379;
+	private const int DEFAULT_PORT = 6379;
 
-	private $client;
-	private $namespace;
+	private Client $client;
+	private string $namespace;
 
 	/**
 	 * @param array $url     result of parse_url() on the redis:// string
 	 * @param array $options the options array passed to set_cache()
 	 */
-	public function __construct($url, $options=array())
+	public function __construct(array $url, array $options = [])
 	{
 		if (!class_exists('Predis\\Client'))
 			throw new CacheException("The predis/predis package is required to use the redis cache adapter");
 
-		$parameters = array(
-			'scheme' => isset($url['scheme']) ? $url['scheme'] : 'tcp',
-			'host'   => isset($url['host']) ? $url['host'] : 'localhost',
-			'port'   => isset($url['port']) ? $url['port'] : self::DEFAULT_PORT,
-		);
+		$parameters = [
+			'scheme' => $url['scheme'] ?? 'tcp',
+			'host'   => $url['host'] ?? 'localhost',
+			'port'   => $url['port'] ?? self::DEFAULT_PORT,
+		];
 
 		// A redis:// URL yields scheme 'redis'; Predis expects tcp/tls/unix.
 		if ($parameters['scheme'] === 'redis')
@@ -59,13 +59,13 @@ class Redis
 			$parameters = array_merge($parameters, $query);
 		}
 
-		$client_options = (isset($options['redis']) && is_array($options['redis'])) ? $options['redis'] : array();
-		$this->namespace = isset($options['namespace']) ? (string) $options['namespace'] : '';
+		$client_options = is_array($options['redis'] ?? null) ? $options['redis'] : [];
+		$this->namespace = (string) ($options['namespace'] ?? '');
 
 		$this->client = new Client($parameters, $client_options);
 	}
 
-	public function flush()
+	public function flush(): void
 	{
 		if ($this->namespace !== '')
 		{
@@ -73,7 +73,7 @@ class Redis
 			$cursor = 0;
 			do
 			{
-				list($cursor, $keys) = $this->client->scan($cursor, array('MATCH' => $pattern, 'COUNT' => 100));
+				[$cursor, $keys] = $this->client->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
 				if (!empty($keys))
 					$this->client->del($keys);
 			}
@@ -85,7 +85,7 @@ class Redis
 		}
 	}
 
-	public function read($key)
+	public function read($key): mixed
 	{
 		$value = $this->client->get($key);
 		if ($value === null)
@@ -95,7 +95,7 @@ class Redis
 		return $result === false ? null : $result;
 	}
 
-	public function write($key, $value, $expire=0)
+	public function write($key, $value, $expire=0): void
 	{
 		$payload = serialize($value);
 		if ($expire > 0)

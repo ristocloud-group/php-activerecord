@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
 
+# Least-privilege GITHUB_TOKEN: these jobs only read the repo.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

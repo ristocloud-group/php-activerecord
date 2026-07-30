@@ -54,7 +54,7 @@ class RedisCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
 
   public function test_can_store_complex_objects()
   {
-    $value = array("a" => 1, "b" => array(2, 3));
+    $value = ["a" => 1, "b" => [2, 3]];
     $this->cache->write("foo", $value);
     $this->assert_equals($value, $this->cache->read("foo"));
   }
@@ -74,7 +74,7 @@ class RedisCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
 
   public function test_flush_with_namespace_only_clears_namespaced_keys()
   {
-    $namespaced = new Redis(parse_url($this->url), array('namespace' => 'phpar_ns'));
+    $namespaced = new Redis(parse_url($this->url), ['namespace' => 'phpar_ns']);
 
     $this->cache->write("outside", "keep");
     $namespaced->write("phpar_ns::inside", "drop");
