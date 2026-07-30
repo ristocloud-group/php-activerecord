@@ -13,7 +13,11 @@
         "monolog/monolog": "^3.0",
         "phpunit/phpunit": "^12.0",
         "phpstan/phpstan": "^2.0",
-        "squizlabs/php_codesniffer": "^3.10"
+        "squizlabs/php_codesniffer": "^3.10",
+        "predis/predis": "^2.0"
+    },
+    "suggest": {
+        "predis/predis": "Enables the redis:// schema cache adapter (compatible with Redis 6/7/8 and Valkey 7/8/9)"
     },
     "autoload": {
         "files": [ "ActiveRecord.php" ]
