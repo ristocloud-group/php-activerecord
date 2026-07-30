@@ -109,4 +109,58 @@ class RedisCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
     Cache::flush();
     Cache::initialize(null);
   }
+
+  public function test_normalizes_redis_scheme_to_tcp()
+  {
+    // A bare redis:// DSN (no scheme override) must reach Predis as 'tcp'.
+    $params = $this->predis_parameters(new Redis(parse_url("redis://redis.example.com:6379/0")));
+
+    $this->assert_equals('tcp', $params->scheme);
+  }
+
+  public function test_all_dsn_connection_options_pass_through_to_predis()
+  {
+    // Every option Predis accepts as a connection parameter is reachable from
+    // the DSN: credentials/host/port/database from the URL structure, and any
+    // other parameter from the query string (merged verbatim). Predis connects
+    // lazily, so this never touches a server — we assert the mapping only.
+    $query = http_build_query([
+      'timeout'            => '3.5',
+      'read_write_timeout' => '2',
+      'persistent'         => '1',
+      'tcp_nodelay'        => '0',
+      'async_connect'      => '1',
+      'alias'              => 'primary',
+      'weight'             => '10',
+      'scheme'             => 'tls', // query overrides the redis->tcp normalization
+    ]);
+
+    $params = $this->predis_parameters(new Redis(parse_url("redis://alice:s3cr3t@redis.example.com:6380/7?$query")));
+
+    // From the URL structure.
+    $this->assert_same('redis.example.com', $params->host);
+    $this->assert_same(6380, $params->port);
+    $this->assert_same(7, $params->database);       // path -> int database index
+    $this->assert_same('alice', $params->username); // userinfo -> ACL username
+    $this->assert_same('s3cr3t', $params->password);
+
+    // From the query string (any Predis connection parameter).
+    $this->assert_equals('tls', $params->scheme);   // overrides the default tcp
+    $this->assert_equals('3.5', $params->timeout);
+    $this->assert_equals('2', $params->read_write_timeout);
+    $this->assert_equals('1', $params->persistent);
+    $this->assert_equals('0', $params->tcp_nodelay);
+    $this->assert_equals('1', $params->async_connect);
+    $this->assert_equals('primary', $params->alias);
+    $this->assert_equals('10', $params->weight);
+  }
+
+  private function predis_parameters(Redis $adapter)
+  {
+    $property = new ReflectionProperty(Redis::class, 'client');
+    $property->setAccessible(true);
+    $client = $property->getValue($adapter);
+
+    return $client->getConnection()->getParameters();
+  }
 }

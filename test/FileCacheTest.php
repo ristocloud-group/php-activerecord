@@ -83,6 +83,19 @@ class FileCacheTest extends SnakeCase_PHPUnit_Framework_TestCase
     $files = array_map('basename', glob($this->cache_dir . "/*"));
     $this->assert_equals(["foo"], $files);
   }
+
+  public function test_can_store_falsy_values()
+  {
+    // The envelope records value + expiry separately, so unlike memcache/redis
+    // (which read back falsy as a miss) the file backend round-trips falsy data.
+    $this->cache->write("false_key", false);
+    $this->cache->write("zero_key", 0);
+    $this->cache->write("empty_key", "");
+
+    $this->assert_same(false, $this->cache->read("false_key"));
+    $this->assert_same(0, $this->cache->read("zero_key"));
+    $this->assert_same("", $this->cache->read("empty_key"));
+  }
 }
 
 class Value {
