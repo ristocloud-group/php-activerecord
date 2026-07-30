@@ -82,13 +82,17 @@ File: `lib/cache/File.php`
   ['value' => $value, 'expires_at' => $expire > 0 ? time() + $expire : null]
   ```
 
-  The default argument keeps existing 2-arg call sites working.
+  The default argument keeps existing 2-arg call sites working. The write is **atomic**:
+  serialize to a unique temp file in the cache directory, then `rename()` it onto the final
+  path. `rename()` is atomic on the same filesystem, so a concurrent reader always sees
+  either the whole old file or the whole new file — never a truncated blob.
 
 - **`read($key)`** — read and unserialize the envelope:
   - If the file does not exist → return `null` (miss).
-  - If the payload is not a well-formed envelope (e.g. a raw value written by a previous
-    version, or corrupt) → treat as a miss (return `null`) so the value is regenerated.
-    This makes the upgrade safe even without a manual `flush()`.
+  - If the payload is not a well-formed envelope (a raw value written by a previous version,
+    a corrupt file, or a partial read) → treat as a miss (return `null`) so the value is
+    regenerated. This makes the upgrade safe without a manual `flush()` and absorbs any
+    residual torn-read window.
   - If `expires_at !== null && time() >= expires_at` → **delete the file** (lazy GC) and
     return `null`.
   - Otherwise return `value`.
@@ -97,6 +101,30 @@ File: `lib/cache/File.php`
 
 - `read()` returns `null` on miss (consistent with the existing File behavior and
   `FileCacheTest`'s `assert_null`).
+
+### Concurrency (PHP shared-nothing, one cache dir shared by many processes)
+
+The cache is lock-free by design; every race below degrades to a redundant regeneration or a
+lost entry, **never to a corrupt value or a wrong query result**, given the mitigations here.
+
+- **Torn reads** — eliminated by the atomic temp-file + `rename()` write; the malformed =
+  miss rule covers any residual case.
+- **Lazy-GC `unlink` races** — two readers may both find an entry expired and both try to
+  delete it, or a reader may delete a file another process just refreshed. The deletion is
+  therefore **guarded** (`@unlink` / existence-tolerant) so a vanished file never raises a
+  PHP warning. This matters because the CI gate runs with `--fail-on-warning` and PHPUnit
+  promotes PHP warnings to test failures — an unguarded `unlink`/`mkdir` on a lost race would
+  turn a benign cache miss into a red build. The `mkdir` in `write()` is guarded the same way
+  (recursive + tolerant of a concurrent create).
+- **Cache stampede** — when an entry expires, N concurrent requests all miss and all run the
+  closure at once. This is inherent to `Cache::get`'s lock-free contract and affects every
+  adapter equally. It is a **new consequence for the file cache**, which previously never
+  expired: with the default `expire=30` it can now stampede every 30s. Given schema caching's
+  low key cardinality the impact is small; introducing locking is out of scope. Documented in
+  the README as a reason to raise `expire` (or set `0`) for very hot deployments.
+- **Clock assumption** — `expires_at` uses `time()` on the writing/reading host. TTLs are
+  reliable on a local filesystem; on shared storage (NFS) across clock-skewed hosts expiry
+  may fire early or late. Documented; the local-filesystem case is the supported one.
 
 ## Component 2 — Redis adapter (Predis)
 
@@ -171,6 +199,14 @@ the stable, universally-supported command set:
 detection or feature-gating is needed in the adapter; compatibility is proven by CI (below)
 rather than by conditional code.
 
+### Concurrency
+
+Redis needs none of the File adapter's hardening: TTL is enforced server-side and expiry is
+atomic (`SET … EX` is a single command), so there is no lazy-GC race and no torn read. The
+only non-atomic operation is the `SCAN`+`DEL` flush, which is inherently best-effort and
+matches the semantics callers already expect from `flush()`. A cache stampede at expiry is
+still possible (same lock-free `Cache::get` contract as every adapter).
+
 ## Component 3 — Dependency & test infrastructure
 
 - **`composer.json`**: add `predis/predis` (`^2.0`) to `require-dev`, and a `suggest` entry
@@ -204,7 +240,12 @@ Written test-first for each behavior.
 - `test_honors_expire` — `write("k","v",1)`, `sleep(2)`, assert `read("k")` is a miss.
 - `test_zero_expire_never_expires` — `write("k","v",0)`, assert still readable.
 - `test_treats_legacy_raw_payload_as_miss` — write a bare `serialize($value)` file directly,
-  assert `read()` returns a miss (upgrade-safety).
+  assert `read()` returns a miss (upgrade-safety); doubles as the torn-read case.
+- `test_reading_expired_entry_does_not_warn` — write with a past/immediate expiry, then read
+  twice so the second read hits an already-unlinked file; assert no PHP warning surfaces
+  (guards the lazy-GC `unlink` race under `--fail-on-warning`).
+- `test_write_is_atomic_no_partial_file` — assert the final cache file only ever contains a
+  fully serialized envelope (no temp artifacts left behind after `write()`).
 - Existing tests updated for the new `write()` signature (default arg keeps them valid).
 
 ### `test/RedisCacheTest.php` (new)
@@ -232,7 +273,10 @@ coverage beyond the adapter unit tests.
   - Replace the note (line 139) that the file cache does not honor `expire`; state the new
     behavior and the `expire => 0` opt-out.
   - Add a **comparison table** of the three adapters: requirement (extension/package), TTL
-    support, persistence model, prefix/namespace, flush semantics, pros & cons, when to use.
+    support, persistence model, prefix/namespace, flush semantics, **concurrency robustness**
+    (Redis atomic server-side TTL vs File's lock-free lazy GC), pros & cons, when to use.
+  - Note the cache is lock-free: on a very hot deployment raise `expire` (or set `0`) to
+    avoid a stampede at each expiry, and prefer a local filesystem for the File backend.
 - **`RELEASES.md`** (`v2.0.0 (TBD)`): note the File adapter now honors `expire` (with the
   behavior-change caveat) and the new Redis/Predis adapter.
 
