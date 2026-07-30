@@ -188,8 +188,8 @@ class CallBackTest extends DatabaseTest
 	{
         $this->expectException(ActiveRecord\ActiveRecordException::class);
 
-		$mock = $this->create_mock('VenueCB', array('columns'));
-		$this->callback->invoke($mock,'before_validation_on_create');
+		$stub = $this->create_stub('VenueCB');
+		$this->callback->invoke($stub,'before_validation_on_create');
 	}
 
 	public function test_before_callbacks_pass_on_false_return_callback_returned_false()
