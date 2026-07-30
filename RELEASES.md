@@ -6,6 +6,8 @@
 * Migrates the test suite to PHPUnit 12 and CI to GitHub Actions
 * Adds support for MariaDB 11.4, MySQL 9.7, and PostgreSQL 18
 * Adds PHPStan (level 5) and coverage generation
+* Adds a Redis cache adapter (via `predis/predis`) for the schema cache, verified against Redis 6/7/8 and Valkey 7/8/9
+* The file cache now honors the `expire` option (writes are atomic; entries expire lazily). **Behavior change:** with the default `expire` of 30s, file entries no longer persist indefinitely — pass `expire => 0` for the previous behavior
 
 ## v1.8.0 (27 July 2026)
 * Removes the incomplete, untested OCI/Oracle adapter

@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
 
+# Least-privilege GITHUB_TOKEN: these jobs only read the repo.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -52,6 +56,12 @@ jobs:
         options: >-
           --health-cmd="timeout 5 bash -c '</dev/tcp/127.0.0.1/11211'"
           --health-interval=5s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:8
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
 
     env:
       PHPAR_MYSQL: mysql://phpar:secret@127.0.0.1:3306/phpar_test
@@ -59,6 +69,7 @@ jobs:
       PHPAR_PGSQL: pgsql://phpar:secret@127.0.0.1:5432/phpar_test
       PHPAR_SQLITE: sqlite://test.db
       PHPAR_MEMCACHED: 127.0.0.1
+      PHPAR_REDIS: redis://127.0.0.1:6379
 
     steps:
       - uses: actions/checkout@v4
@@ -86,3 +97,47 @@ jobs:
         with:
           name: coverage-php${{ matrix.php-version }}
           path: coverage.xml
+
+  redis-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        redis-image:
+          - redis:6
+          - redis:7
+          - redis:8
+          - valkey/valkey:7
+          - valkey/valkey:8
+          - valkey/valkey:9
+
+    services:
+      redis:
+        image: ${{ matrix.redis-image }}
+        ports: ['6379:6379']
+
+    env:
+      PHPAR_REDIS: redis://127.0.0.1:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - name: Install dependencies
+        run: composer update --no-interaction --prefer-dist
+
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            (echo > /dev/tcp/127.0.0.1/6379) >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "Redis did not become ready" >&2
+          exit 1
+
+      - name: Redis adapter tests
+        run: vendor/bin/phpunit --filter RedisCacheTest --fail-on-risky --fail-on-warning --fail-on-skipped --fail-on-deprecation

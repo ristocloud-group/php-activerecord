@@ -707,15 +707,3 @@ parameters:
 			identifier: empty.variable
 			count: 1
 			path: lib/adapters/SqliteAdapter.php
-
-		-
-			message: '#^Instantiated class ActiveRecord\\CacheException not found\.$#'
-			identifier: class.notFound
-			count: 1
-			path: lib/cache/Memcache.php
-
-		-
-			message: '#^Throwing object of an unknown class ActiveRecord\\CacheException\.$#'
-			identifier: class.notFound
-			count: 1
-			path: lib/cache/Memcache.php

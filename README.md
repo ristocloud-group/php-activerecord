@@ -79,15 +79,12 @@ Setup is very easy and straight-forward. There are essentially only two configur
 Example:
 
 ```php
-ActiveRecord\Config::initialize(function($cfg)
-{
-   $cfg->set_connections(
-     array(
-       'development' => 'mysql://username:password@localhost/development_database_name',
-       'test' => 'mysql://username:password@localhost/test_database_name',
-       'production' => 'mysql://username:password@localhost/production_database_name'
-     )
-   );
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_connections([
+        'development' => 'mysql://username:password@localhost/development_database_name',
+        'test' => 'mysql://username:password@localhost/test_database_name',
+        'production' => 'mysql://username:password@localhost/production_database_name',
+    ]);
 });
 ```
 
@@ -95,13 +92,11 @@ Alternatively (without a closure):
 
 ```php
 $cfg = ActiveRecord\Config::instance();
-$cfg->set_connections(
-  array(
+$cfg->set_connections([
     'development' => 'mysql://username:password@localhost/development_database_name',
     'test' => 'mysql://username:password@localhost/test_database_name',
-    'production' => 'mysql://username:password@localhost/production_database_name'
-  )
-);
+    'production' => 'mysql://username:password@localhost/production_database_name',
+]);
 ```
 
 MariaDB uses the same `mysql://` connection scheme (and the MySQL adapter) as MySQL.
@@ -110,9 +105,8 @@ PHP ActiveRecord will default to use your development database. For testing or p
 connection according to your current environment ('test' or 'production'):
 
 ```php
-ActiveRecord\Config::initialize(function($cfg)
-{
-  $cfg->set_default_connection(your_environment);
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_default_connection('production'); // 'development', 'test', or 'production'
 });
 ```
 
@@ -122,12 +116,12 @@ cache it so that it does not make multiple calls to the database for a single sc
 
 ### Optional: caching the schema ###
 
-php-activerecord introspects each table's schema (columns, types, primary key) from the database. Within a single request this is kept in memory, but PHP's shared-nothing model means it is re-introspected on every request. To persist it across requests, configure an external cache. Two backends are bundled:
+php-activerecord introspects each table's schema (columns, types, primary key) from the database. Within a single request this is kept in memory, but PHP's shared-nothing model means it is re-introspected on every request. To persist it across requests, configure an external cache. Three backends are bundled:
 
 **Memcached** — requires the `memcached` PHP extension:
 
 ```php
-$cfg->set_cache('memcache://localhost:11211', array('expire' => 120, 'namespace' => 'my_app'));
+$cfg->set_cache('memcache://localhost:11211', ['expire' => 120, 'namespace' => 'my_app']);
 ```
 
 **File** — a filesystem cache (added by this fork for hosts without memcached); no extension required:
@@ -136,9 +130,55 @@ $cfg->set_cache('memcache://localhost:11211', array('expire' => 120, 'namespace'
 $cfg->set_cache('file:///var/tmp/php-activerecord-cache');
 ```
 
-The file backend stores one serialized file per cache key inside the directory you pass (creating the directory if it does not exist), and reads it back with `unserialize()`. Unlike Memcached, it does **not** honor the `expire` option — file entries have no TTL and persist until you remove them. Call `ActiveRecord\Cache::flush()` to invalidate the cache for either backend (for the file cache this deletes the cached files) — for example after running a schema migration.
+The file backend stores one serialized file per cache key inside the directory you pass (creating the directory if it does not exist), and reads it back with `unserialize()`.
 
-Both backends accept a `namespace` option that prefixes every cache key, which is useful when several applications share one cache store.
+The **file** backend also honors the `expire` option: each entry stores an expiry timestamp
+and is treated as a miss once it lapses (deleted lazily on the next read). Writes are atomic
+(temp file + `rename`). **Behavior change:** because the default `expire` is 30 seconds, file
+entries that previously persisted forever now expire after 30s by default — pass
+`['expire' => 0]` to keep entries until you `flush()` them. Files written by older
+versions are treated as a miss and regenerated, so no manual purge is needed when upgrading.
+
+**Redis** — requires the `predis/predis` Composer package (`composer require predis/predis`); no PHP extension needed:
+
+```php
+$cfg->set_cache('redis://localhost:6379/0', ['expire' => 120, 'namespace' => 'my_app']);
+```
+
+Connection parameters are taken from the DSN, including its query string, so any Predis
+connection parameter is reachable — e.g. TLS and tuning:
+
+```php
+$cfg->set_cache('redis://user:secret@redis.example.com:6379/0?read_write_timeout=2', [
+    'namespace' => 'my_app',
+]);
+```
+
+The same `redis://` DSN targets **Redis 6/7/8 and Valkey 7/8/9** interchangeably; the adapter
+is exercised against all six in CI. Values are serialized on write and unserialized on read.
+`ActiveRecord\Cache::flush()` deletes only the keys under the configured `namespace`
+(via `SCAN`/`DEL`); with no namespace it falls back to `FLUSHDB`, which clears the whole
+selected Redis database — set a `namespace` when the Redis instance is shared. **Do not** pass
+a Predis `prefix` client option for key isolation: Predis does not apply `prefix` to the plain
+`SCAN` command that namespace-scoped `flush()` relies on, so keys end up stored under
+`prefix + key` while `flush()` only matches `namespace::*`, silently deleting nothing — use the
+`namespace` option instead, which `flush()` already understands.
+
+`ActiveRecord\Cache::flush()` invalidates the cache for any backend (for the file cache it
+deletes the cached files) — for example after running a schema migration. All backends accept
+a `namespace` option that prefixes every cache key, useful when several applications share one
+cache store.
+
+The cache is lock-free: at each expiry, concurrent requests all recompute the cached value
+once (a brief stampede). For very hot deployments raise `expire` (or set it to `0`). Prefer a
+local filesystem for the file backend — TTLs rely on the host clock, so shared storage (NFS)
+across clock-skewed hosts can expire entries early or late.
+
+| Backend | Requirement | TTL (`expire`) | Persistence | Namespace / flush | Concurrency | Best for |
+|---|---|---|---|---|---|---|
+| **Memcached** | `memcached` PHP extension | Yes (server-side) | In-memory, evictable | `namespace` prefix; `flush()` clears the whole server | Atomic server-side TTL | Existing memcached infra |
+| **File** | none | Yes (since this fork) | On disk until expiry/flush | `namespace` prefix; `flush()` deletes files | Lock-free; atomic writes, lazy GC, local-FS assumption | Single host, no extra services |
+| **Redis / Valkey** | `predis/predis` package | Yes (server-side) | In-memory (optionally persisted by the server) | `namespace`-scoped `SCAN`/`DEL`, else `FLUSHDB` | Atomic server-side TTL | Shared/networked cache, HA |
 
 ## Basic CRUD ##
 
@@ -160,7 +200,7 @@ $post = Post::find_by_name_and_id('The Bridge Builder',100);
 $post = Post::find_by_name_or_id('The Bridge Builder',100);
 
 # finding using a conditions array
-$posts = Post::find('all',array('conditions' => array('name=? or id > ?','The Bridge Builder',100)));
+$posts = Post::find('all', ['conditions' => ['name=? or id > ?', 'The Bridge Builder', 100]]);
 ```
 
 ### Create ###
