@@ -11,3 +11,4 @@ vendor/*
 docker-compose.override.yml
 junit.xml
 coverage.xml
+.php-cs-fixer.cache

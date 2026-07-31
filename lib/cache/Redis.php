@@ -1,4 +1,5 @@
 <?php
+
 namespace ActiveRecord;
 
 use Predis\Client;
@@ -21,86 +22,88 @@ use Predis\Client;
  */
 class Redis
 {
-	private const int DEFAULT_PORT = 6379;
+    private const int DEFAULT_PORT = 6379;
 
-	private Client $client;
-	private string $namespace;
+    private Client $client;
+    private string $namespace;
 
-	/**
-	 * @param array $url     result of parse_url() on the redis:// string
-	 * @param array $options the options array passed to set_cache()
-	 */
-	public function __construct(array $url, array $options = [])
-	{
-		if (!class_exists('Predis\\Client'))
-			throw new CacheException("The predis/predis package is required to use the redis cache adapter");
+    /**
+     * @param array $url     result of parse_url() on the redis:// string
+     * @param array $options the options array passed to set_cache()
+     */
+    public function __construct(array $url, array $options = [])
+    {
+        if (!class_exists('Predis\\Client')) {
+            throw new CacheException("The predis/predis package is required to use the redis cache adapter");
+        }
 
-		$parameters = [
-			'scheme' => $url['scheme'] ?? 'tcp',
-			'host'   => $url['host'] ?? 'localhost',
-			'port'   => $url['port'] ?? self::DEFAULT_PORT,
-		];
+        $parameters = [
+            'scheme' => $url['scheme'] ?? 'tcp',
+            'host'   => $url['host'] ?? 'localhost',
+            'port'   => $url['port'] ?? self::DEFAULT_PORT,
+        ];
 
-		// A redis:// URL yields scheme 'redis'; Predis expects tcp/tls/unix.
-		if ($parameters['scheme'] === 'redis')
-			$parameters['scheme'] = 'tcp';
+        // A redis:// URL yields scheme 'redis'; Predis expects tcp/tls/unix.
+        if ($parameters['scheme'] === 'redis') {
+            $parameters['scheme'] = 'tcp';
+        }
 
-		if (isset($url['user']) && strlen($url['user']))
-			$parameters['username'] = $url['user'];
-		if (isset($url['pass']) && strlen($url['pass']))
-			$parameters['password'] = $url['pass'];
-		if (isset($url['path']) && strlen(ltrim($url['path'], '/')))
-			$parameters['database'] = (int) ltrim($url['path'], '/');
+        if (isset($url['user']) && strlen($url['user'])) {
+            $parameters['username'] = $url['user'];
+        }
+        if (isset($url['pass']) && strlen($url['pass'])) {
+            $parameters['password'] = $url['pass'];
+        }
+        if (isset($url['path']) && strlen(ltrim($url['path'], '/'))) {
+            $parameters['database'] = (int) ltrim($url['path'], '/');
+        }
 
-		// Any Predis connection parameter can be supplied via the DSN query string.
-		if (isset($url['query']))
-		{
-			parse_str($url['query'], $query);
-			$parameters = array_merge($parameters, $query);
-		}
+        // Any Predis connection parameter can be supplied via the DSN query string.
+        if (isset($url['query'])) {
+            parse_str($url['query'], $query);
+            $parameters = array_merge($parameters, $query);
+        }
 
-		$client_options = is_array($options['redis'] ?? null) ? $options['redis'] : [];
-		$this->namespace = (string) ($options['namespace'] ?? '');
+        $client_options = is_array($options['redis'] ?? null) ? $options['redis'] : [];
+        $this->namespace = (string) ($options['namespace'] ?? '');
 
-		$this->client = new Client($parameters, $client_options);
-	}
+        $this->client = new Client($parameters, $client_options);
+    }
 
-	public function flush(): void
-	{
-		if ($this->namespace !== '')
-		{
-			$pattern = $this->namespace . '::*';
-			$cursor = 0;
-			do
-			{
-				[$cursor, $keys] = $this->client->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
-				if (!empty($keys))
-					$this->client->del($keys);
-			}
-			while ((int) $cursor !== 0);
-		}
-		else
-		{
-			$this->client->flushdb();
-		}
-	}
+    public function flush(): void
+    {
+        if ($this->namespace !== '') {
+            $pattern = $this->namespace . '::*';
+            $cursor = 0;
+            do {
+                [$cursor, $keys] = $this->client->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
+                if (!empty($keys)) {
+                    $this->client->del($keys);
+                }
+            } while ((int) $cursor !== 0);
+        } else {
+            $this->client->flushdb();
+        }
+    }
 
-	public function read($key): mixed
-	{
-		$value = $this->client->get($key);
-		if ($value === null)
-			return null;
+    public function read($key): mixed
+    {
+        $value = $this->client->get($key);
+        if ($value === null) {
+            return null;
+        }
 
-		$result = @unserialize($value);
-		return $result === false ? null : $result;
-	}
+        $result = @unserialize($value);
+        return $result === false ? null : $result;
+    }
 
-	public function write($key, $value, $expire=0): void
-	{
-		$payload = serialize($value);
-		if ($expire > 0)
-			$this->client->set($key, $payload, 'EX', $expire);
-		else
-			$this->client->set($key, $payload);
-	}
+    public function write($key, $value, $expire = 0): void
+    {
+        $payload = serialize($value);
+        if ($expire > 0) {
+            $this->client->set($key, $payload, 'EX', $expire);
+        } else {
+            $this->client->set($key, $payload);
+        }
+    }
 }
