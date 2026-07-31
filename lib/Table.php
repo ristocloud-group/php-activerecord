@@ -18,7 +18,7 @@ class Table
 	private static $cache = array();
 
 	public $class;
-	/** @var Connection */
+	/** @var Connection|null */
 	public $conn;
 	public $pk;
 	public $last_sql;

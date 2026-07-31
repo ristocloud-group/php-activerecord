@@ -326,7 +326,7 @@ abstract class Connection
 	 *
 	 * @param string $sql Raw SQL string to execute.
 	 * @param array &$values Optional array of values to bind to the query.
-	 * @return string
+	 * @return mixed
 	 */
 	public function query_and_fetch_one($sql, &$values=array())
 	{
@@ -488,7 +488,7 @@ abstract class Connection
 	 * Adds a limit clause to the SQL query.
 	 *
 	 * @param string $sql The SQL statement.
-	 * @param int $offset Row offset to start at.
+	 * @param int|null $offset Row offset to start at.
 	 * @param int $limit Maximum number of rows to return.
 	 * @return string The SQL query that will limit results to specified parameters
 	 */

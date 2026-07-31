@@ -92,7 +92,7 @@ class Model
 	/**
 	 * Flag whether or not this model's attributes have been modified since it will either be null or an array of column_names that have been modified
 	 *
-	 * @var array
+	 * @var array|null
 	 */
 	private $__dirty = null;
 
@@ -1420,7 +1420,7 @@ class Model
 	 * </code>
 	 *
 	 * @see find
-	 * @return int Number of records that matched the query
+	 * @return int|string Number of records that matched the query
 	 */
 	public static function count(/* ... */)
 	{
@@ -1590,7 +1590,7 @@ class Model
 	 * Finder method which will find by a single or array of primary keys for this model.
 	 *
 	 * @see find
-	 * @param array $values An array containing values for the pk
+	 * @param mixed $values An array containing values for the pk, or a single pk value
 	 * @param array $options An options array
 	 * @return Model
 	 * @throws RecordNotFound if a record could not be found
