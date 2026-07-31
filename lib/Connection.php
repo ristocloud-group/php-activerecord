@@ -17,6 +17,10 @@ use Psr\Log\LoggerInterface;
  * The base class for database connection adapters.
  *
  * @package ActiveRecord
+ * @method Column create_column(array $column) Builds a {@see Column} from one raw row of
+ *         driver-specific column-metadata (as returned by query_column_info()). Implemented
+ *         by every concrete adapter (Mysql/Pgsql/Sqlite); some accept $column by reference
+ *         as a micro-optimization, none rely on mutating the caller's array.
  */
 abstract class Connection
 {
@@ -100,7 +104,7 @@ abstract class Connection
 			throw new DatabaseException("Empty connection string");
 
 		$info = static::parse_connection_url($connection_string);
-		$fqclass = static::load_adapter_class($info->protocol);
+		$fqclass = self::load_adapter_class($info->protocol);
 
 		try {
             /** @var Connection $connection */
@@ -535,7 +539,7 @@ abstract class Connection
   public function close()
 	{
     // Clear reference to PDO conn so that PHP will garbage collect and trigger PDO to close DB conn
-    $this->conn = null;
+    $this->connection = null;
   }
 
 }

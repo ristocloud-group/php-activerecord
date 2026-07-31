@@ -90,7 +90,7 @@ class CallBack
 
 	/**
 	 * List of public methods of the given model
-	 * @var array
+	 * @var array|null
 	 */
 	private $publicMethods;
 
@@ -149,7 +149,7 @@ class CallBack
 	 * model object. For (after|before)_(create|update) callbacks, it will merge with
 	 * a generic 'save' callback which is called first for the lease amount of precision.
 	 *
-	 * @param string $model Model to invoke the callback on.
+	 * @param Model|null $model Model to invoke the callback on.
 	 * @param string $name Name of the callback to invoke
 	 * @param boolean $must_exist Set to true to raise an exception if the callback does not exist.
 	 * @return mixed null if $name was not a valid callback type or false if a method was invoked
@@ -159,7 +159,7 @@ class CallBack
 	public function invoke($model, $name, $must_exist=true)
 	{
 		if ($must_exist && !array_key_exists($name, $this->registry))
-			throw new ActiveRecordException("No callbacks were defined for: $name on " . get_class($model));
+			throw new ActiveRecordException("No callbacks were defined for: $name" . ($model ? ' on ' . get_class($model) : ''));
 
 		// if it doesn't exist it might be a /(after|before)_(create|update)/ so we still need to run the save
 		// callback

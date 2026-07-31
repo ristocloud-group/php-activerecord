@@ -290,4 +290,16 @@ class CallBackTest extends DatabaseTest
 		$this->assert_false($ret);
 		$this->assert_true(strpos(ActiveRecord\Table::load('VenueCB')->last_sql, 'UPDATE') === false);
 	}
+
+	public function test_gh_invoke_with_null_model_and_unregistered_name_throws_activerecord_exception()
+	{
+		// Regression: invoke() used to build its exception message with
+		// get_class($model), which fatals with a TypeError when $model is null
+		// (a legitimate, reachable case for a not-yet-registered callback name)
+		// instead of throwing the intended ActiveRecordException.
+		$this->expectException(ActiveRecord\ActiveRecordException::class);
+		$this->expectExceptionMessage('No callbacks were defined for: some_unregistered_callback_name');
+
+		$this->callback->invoke(null, 'some_unregistered_callback_name');
+	}
 };

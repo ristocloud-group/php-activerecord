@@ -61,7 +61,7 @@ class Cache
 
 	public static function get($key, $closure)
 	{
-		$key = static::get_namespace() . $key;
+		$key = self::get_namespace() . $key;
 		
 		if (!static::$adapter)
 			return $closure();

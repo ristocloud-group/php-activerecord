@@ -21,6 +21,16 @@ interface InterfaceRelationship
  *
  * @package ActiveRecord
  * @see http://www.phpactiverecord.org/guides/associations
+ * @property array $primary_key Primary key column(s) used for joins/eager-load conditions.
+ *           Real property on {@see HasMany} (inherited by {@see HasOne}); computed on first
+ *           access via {@see BelongsTo::__get()} for BelongsTo. Never touched on
+ *           {@see HasAndBelongsToMany} (unimplemented stub).
+ * @method void set_keys(string $model_class_name, bool $override = false) Infers/overwrites
+ *           $foreign_key and $primary_key from a model class name. Implemented by
+ *           {@see HasMany} (inherited by {@see HasOne}). Only ever invoked from
+ *           {@see AbstractRelationship::query_and_attach_related_models_eagerly()} when
+ *           $options['through'] is set, which is only a valid option for HasMany/HasOne —
+ *           so it is never called on a BelongsTo/HasAndBelongsToMany instance.
  */
 abstract class AbstractRelationship implements InterfaceRelationship
 {
@@ -643,7 +653,7 @@ class HasAndBelongsToMany extends AbstractRelationship
  */
 class BelongsTo extends AbstractRelationship
 {
-    /** @var array */
+    /** @var array|null */
     private $primary_key_cache;
 
 	public function __construct($options=array())
