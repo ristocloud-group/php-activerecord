@@ -269,7 +269,10 @@ class JsonSerializer extends ArraySerializer
 	public function to_s()
 	{
 		parent::$include_root = self::$include_root;
-		return json_encode(parent::to_s());
+		$json = json_encode(parent::to_s());
+		if ($json === false)
+			throw new ActiveRecordException('JSON encoding failed: ' . json_last_error_msg());
+		return $json;
 	}
 }
 
