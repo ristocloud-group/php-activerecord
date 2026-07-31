@@ -72,6 +72,9 @@ use Closure;
  * @see HasAndBelongsToMany
  * @see Serialization
  * @see Validations
+ * @property mixed $id Primary-key attribute, present on virtually every table; resolved
+ *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
+ *           property since column schema is introspected at runtime.
  */
 class Model
 {
@@ -589,7 +592,7 @@ class Model
 	 * Retrieve the primary key name.
 	 *
 	 * @param bool $first Set to true to return the first value in the pk array only
-	 * @return string The primary key for the model
+	 * @return ($first is true ? string : array) The primary key for the model
 	 */
 	public function get_primary_key($first=false)
 	{
@@ -1324,7 +1327,9 @@ class Model
 	 *
 	 * @param string $method Name of method
 	 * @param mixed $args Method args
-	 * @return Model
+	 * @return Model|array|int|string|null Model or null for the find-by-attributes and
+	 *   find-or-create-by-attributes dynamic finders, an array of Model for the
+	 *   find-all-by-attributes finder, int|string for the count-by-attributes finder
 	 * @throws ActiveRecordException if invalid query
 	 * @see find
 	 */

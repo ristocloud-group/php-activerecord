@@ -58,13 +58,6 @@ class Config extends Singleton
 	private $logger;
 
 	/**
-	 * The format to serialize DateTime values into.
-	 *
-	 * @var string
-	 */
-	private $date_format = \DateTime::ISO8601;
-
-	/**
 	 * Allows config initialization using a closure.
 	 *
 	 * This method is just syntatic sugar.

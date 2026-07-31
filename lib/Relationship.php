@@ -455,10 +455,9 @@ class HasMany extends AbstractRelationship
 
 	protected $primary_key;
 
-	private $has_one = false;
 	private $through;
 
-    /** @var bool */
+    /** @var bool|null Unset until {@see load()} runs once; isset() is the deliberate init-guard. */
     private $initialized;
 
     /**
