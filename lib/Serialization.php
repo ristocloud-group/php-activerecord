@@ -234,7 +234,7 @@ abstract class Serialization
 
 	/**
 	 * Performs the serialization.
-	 * @return string
+	 * @return string|array
 	 */
 	abstract public function to_s();
 };
@@ -248,6 +248,9 @@ class ArraySerializer extends Serialization
 {
 	public static $include_root = false;
 
+	/**
+	 * @return array|string
+	 */
 	public function to_s()
 	{
 		return self::$include_root ? array(strtolower(get_class($this->model)) => $this->to_a()) : $this->to_a();

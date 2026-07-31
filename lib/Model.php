@@ -399,7 +399,7 @@ class Model
 	 * @throws UndefinedPropertyException if $name does not exist
 	 * @param string $name Name of attribute, relationship or other to set
 	 * @param mixed $value The value
-	 * @return mixed The value
+	 * @return void
 	 */
 	public function __set($name, $value)
 	{
@@ -409,19 +409,29 @@ class Model
 		elseif (method_exists($this,"set_$name"))
 		{
 			$name = "set_$name";
-			return $this->$name($value);
+			$this->$name($value);
+			return;
 		}
 
 		if (array_key_exists($name,$this->attributes))
-			return $this->assign_attribute($name,$value);
+		{
+			$this->assign_attribute($name,$value);
+			return;
+		}
 
 		if ($name == 'id')
-			return $this->assign_attribute($this->get_primary_key(true),$value);
+		{
+			$this->assign_attribute($this->get_primary_key(true),$value);
+			return;
+		}
 
 		foreach (static::$delegate as &$item)
 		{
 			if (($delegated_name = $this->is_delegated($name,$item)))
-				return $this->{$item['to']}->$delegated_name = $value;
+			{
+				$this->{$item['to']}->$delegated_name = $value;
+				return;
+			}
 		}
 
 		throw new UndefinedPropertyException(get_called_class(),$name);
@@ -591,7 +601,7 @@ class Model
 	 * Returns the actual attribute name if $name is aliased.
 	 *
 	 * @param string $name An attribute name
-	 * @return string
+	 * @return string|null
 	 */
 	public function get_real_attribute_name($name)
 	{
@@ -749,7 +759,7 @@ class Model
    */
   public static function drop_connection()
   {
-    return static::table()->drop_connection();
+    static::table()->drop_connection();
   }
 
 	/**
@@ -1227,12 +1237,14 @@ class Model
 			{
 				// if the related model is null and it is a poly then we should have an empty array
 				if (is_null($model))
-					return $this->__relationships[$name] = array();
+					$this->__relationships[$name] = array();
 				else
-					return $this->__relationships[$name][] = $model;
+					$this->__relationships[$name][] = $model;
 			}
 			else
-				return $this->__relationships[$name] = $model;
+				$this->__relationships[$name] = $model;
+
+			return;
 		}
 
 		throw new RelationshipException("Relationship named $name has not been declared for class: {$table->class->getName()}");
@@ -1258,7 +1270,6 @@ class Model
 	{
 		$this->__relationships = array();
 		$this->reset_dirty();
-		return $this;
 	}
 
 	/**
@@ -1787,7 +1798,7 @@ class Model
 	 *
 	 * @param string $type Either Xml, Json, Csv or Array
 	 * @param array $options Options array for the serializer
-	 * @return string Serialized representation of the model
+	 * @return string|array Serialized representation of the model
 	 */
 	private function serialize($type, $options)
 	{

@@ -130,7 +130,7 @@ class Config extends Singleton
 	 * Returns a connection string if found otherwise null.
 	 *
 	 * @param string $name Name of connection to retrieve
-	 * @return string connection info for specified connection name
+	 * @return string|null connection info for specified connection name
 	 */
 	public function get_connection($name)
 	{

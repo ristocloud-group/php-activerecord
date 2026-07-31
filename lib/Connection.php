@@ -426,7 +426,7 @@ abstract class Connection
 	 * Return SQL for getting the next value in a sequence.
 	 *
 	 * @param string $sequence_name Name of the sequence
-	 * @return string
+	 * @return string|null
 	 */
 	public function next_sequence_value($sequence_name)
 	{
@@ -471,7 +471,7 @@ abstract class Connection
 	 * Converts a string representation of a datetime into a DateTime object.
 	 *
 	 * @param string $string A datetime in the form accepted by date_create()
-	 * @return DateTime
+	 * @return DateTime|null
 	 */
 	public function string_to_datetime($string)
 	{
