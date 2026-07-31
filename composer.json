@@ -21,7 +21,8 @@
     "predis/predis": "^2.0"
   },
   "suggest": {
-    "predis/predis": "Enables the redis:// schema cache adapter (compatible with Redis 6/7/8 and Valkey 7/8/9)"
+    "predis/predis": "Enables the redis:// schema cache adapter (compatible with Redis 6/7/8 and Valkey 7/8/9)",
+    "ext-memcached": "Enables the memcache:// schema cache adapter"
   },
   "autoload": {
     "files": [
