@@ -1,14 +1,14 @@
 <?php
+
 class Event extends ActiveRecord\Model
 {
-	static $belongs_to = array(
-		'host',
-		'venue'
-	);
+    public static $belongs_to = [
+        'host',
+        'venue',
+    ];
 
-	static $delegate = array(
-		array('state', 'address', 'to' => 'venue'),
-		array('name', 'to' => 'host', 'prefix' => 'woot')
-	);
+    public static $delegate = [
+        ['state', 'address', 'to' => 'venue'],
+        ['name', 'to' => 'host', 'prefix' => 'woot'],
+    ];
 };
-

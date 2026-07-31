@@ -1,4 +1,5 @@
 <?php
+
 use ActiveRecord\Cache;
 use ActiveRecord\Config;
 
@@ -12,7 +13,7 @@ class CacheSchemaIntegrationTest extends DatabaseTest
 {
     private string $file_cache_dir;
 
-    public function set_up($connection_name=null)
+    public function set_up($connection_name = null)
     {
         parent::set_up($connection_name);
         $this->file_cache_dir = sys_get_temp_dir() . "/phpar-schema-cache-int";

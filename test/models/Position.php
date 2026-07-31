@@ -1,5 +1,6 @@
 <?php
+
 class Position extends ActiveRecord\Model
 {
-	static $belongs_to;
+    public static $belongs_to;
 };

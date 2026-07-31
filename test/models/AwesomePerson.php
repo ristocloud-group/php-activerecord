@@ -1,6 +1,6 @@
 <?php
+
 class AwesomePerson extends ActiveRecord\Model
 {
-	static $belongs_to = array('author');
+    public static $belongs_to = ['author'];
 }
-

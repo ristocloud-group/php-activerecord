@@ -5,24 +5,24 @@ use ActiveRecord\ConnectionManager;
 
 class ConnectionManagerTest extends DatabaseTest
 {
-	public function test_get_connection_with_null_connection()
-	{
-		$this->assert_not_null(ConnectionManager::get_connection(null));
-		$this->assert_not_null(ConnectionManager::get_connection());
-	}
-    
-	public function test_get_connection()
-	{
-		$this->assert_not_null(ConnectionManager::get_connection('mysql'));
-	}
+    public function test_get_connection_with_null_connection()
+    {
+        $this->assert_not_null(ConnectionManager::get_connection(null));
+        $this->assert_not_null(ConnectionManager::get_connection());
+    }
 
-	public function test_get_connection_uses_existing_object()
-	{
-		$a = ConnectionManager::get_connection('mysql');
-		$a->last_query = 'remember me';
+    public function test_get_connection()
+    {
+        $this->assert_not_null(ConnectionManager::get_connection('mysql'));
+    }
 
-		$this->assert_same($a,ConnectionManager::get_connection('mysql'));
-	}
+    public function test_get_connection_uses_existing_object()
+    {
+        $a = ConnectionManager::get_connection('mysql');
+        $a->last_query = 'remember me';
+
+        $this->assert_same($a, ConnectionManager::get_connection('mysql'));
+    }
 
     public function test_gh_91_get_connection_with_null_connection_is_always_default()
     {
@@ -67,4 +67,3 @@ class ConnectionManagerTest extends DatabaseTest
         $this->assert_not_null($table->conn);
     }
 }
-

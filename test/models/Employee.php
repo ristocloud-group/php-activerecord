@@ -1,5 +1,6 @@
 <?php
+
 class Employee extends ActiveRecord\Model
 {
-	static $has_one;
+    public static $has_one;
 };

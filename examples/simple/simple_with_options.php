@@ -1,31 +1,30 @@
 <?php
+
 require_once __DIR__ . '/../../ActiveRecord.php';
 
 class Book extends ActiveRecord\Model
 {
-	// explicit table name since our table is not "books"
-	static $table_name = 'simple_book';
+    // explicit table name since our table is not "books"
+    public static $table_name = 'simple_book';
 
-	// explicit pk since our pk is not "id"
-	static $primary_key = 'book_id';
+    // explicit pk since our pk is not "id"
+    public static $primary_key = 'book_id';
 
-	// explicit connection name since we always want production with this model
-	static $connection = 'production';
+    // explicit connection name since we always want production with this model
+    public static $connection = 'production';
 
-	// explicit database name will generate sql like so => db.table_name
-	static $db = 'test';
+    // explicit database name will generate sql like so => db.table_name
+    public static $db = 'test';
 }
 
-$connections = array(
-	'development' => 'mysql://invalid',
-	'production' => 'mysql://test:test@127.0.0.1/test'
-);
+$connections = [
+    'development' => 'mysql://invalid',
+    'production' => 'mysql://test:test@127.0.0.1/test',
+];
 
 // initialize ActiveRecord
-ActiveRecord\Config::initialize(function($cfg) use ($connections)
-{
+ActiveRecord\Config::initialize(function ($cfg) use ($connections) {
     $cfg->set_connections($connections);
 });
 
 print_r(Book::first()->attributes());
-

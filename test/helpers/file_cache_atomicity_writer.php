@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Concurrency fixture for FileCacheTest::test_writes_are_atomic_under_concurrent_reads.
  *
