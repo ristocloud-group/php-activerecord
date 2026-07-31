@@ -756,7 +756,7 @@ class Errors implements IteratorAggregate
 	 * Returns the error message(s) for the specified attribute or null if none.
 	 *
 	 * @param string $attribute Name of an attribute on the model
-	 * @return string/array	Array of strings if several error occured on this attribute.
+	 * @return string|array	Array of strings if several error occured on this attribute.
 	 */
 	public function on($attribute)
 	{

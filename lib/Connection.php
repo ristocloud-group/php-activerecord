@@ -498,7 +498,7 @@ abstract class Connection
 	 * Query for column meta info and return statement handle.
 	 *
 	 * @param string $table Name of a table
-	 * @return PDOStatement
+	 * @return \PDOStatement
 	 */
 	abstract public function query_column_info($table);
 
@@ -506,7 +506,7 @@ abstract class Connection
 	 * Query for all tables in the current database. The result must only
 	 * contain one column which has the name of the table.
 	 *
-	 * @return PDOStatement
+	 * @return \PDOStatement
 	 */
 	abstract function query_for_tables();
 

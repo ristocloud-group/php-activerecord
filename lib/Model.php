@@ -396,7 +396,7 @@ class Model
 	 * echo $user->name; # => BOB
 	 * </code>
 	 *
-	 * @throws {@link UndefinedPropertyException} if $name does not exist
+	 * @throws UndefinedPropertyException if $name does not exist
 	 * @param string $name Name of attribute, relationship or other to set
 	 * @param mixed $value The value
 	 * @return mixed The value
@@ -475,7 +475,7 @@ class Model
 	 *
 	 * @param string $name Name of an attribute
 	 * @return mixed The value of the attribute
-	 * @throws {@link UndefinedPropertyException} if name could not be resolved to an attribute, relationship, ...
+	 * @throws UndefinedPropertyException if name could not be resolved to an attribute, relationship, ...
 	 */
 	public function &read_attribute($name)
 	{
@@ -578,7 +578,7 @@ class Model
 	/**
 	 * Retrieve the primary key name.
 	 *
-	 * @param boolean Set to true to return the first value in the pk array only
+	 * @param bool $first Set to true to return the first value in the pk array only
 	 * @return string The primary key for the model
 	 */
 	public function get_primary_key($first=false)
@@ -703,7 +703,7 @@ class Model
 	/**
 	 * Throws an exception if this model is set to readonly.
 	 *
-	 * @throws ActiveRecord\ReadOnlyException
+	 * @throws ReadOnlyException
 	 * @param string $method_name Name of method that was invoked on model for exception message
 	 */
 	private function verify_not_readonly($method_name)
@@ -1161,7 +1161,7 @@ class Model
 	/**
 	 * Passing $guard_attributes as true will throw an exception if an attribute does not exist.
 	 *
-	 * @throws ActiveRecord\UndefinedPropertyException
+	 * @throws UndefinedPropertyException
 	 * @param array $attributes An array in the form array(name => value, ...)
 	 * @param boolean $guard_attributes Flag of whether or not protected/non-accessible attributes should be guarded
 	 */
@@ -1314,7 +1314,7 @@ class Model
 	 * @param string $method Name of method
 	 * @param mixed $args Method args
 	 * @return Model
-	 * @throws {@link ActiveRecordException} if invalid query
+	 * @throws ActiveRecordException if invalid query
 	 * @see find
 	 */
 	public static function __callStatic($method, $args)
@@ -1518,7 +1518,7 @@ class Model
 	 * <li><b>group:</b> A SQL group by fragment</li>
 	 * </ul>
 	 *
-	 * @throws {@link RecordNotFound} if no options are passed or finding by pk and no records matched
+	 * @throws RecordNotFound if no options are passed or finding by pk and no records matched
 	 * @return mixed An array of records found if doing a find_all otherwise a
 	 *   single Model object or null if it wasn't found. NULL is only return when
 	 *   doing a first/last find. If doing an all find and no records matched this
@@ -1582,7 +1582,7 @@ class Model
 	 * @param array $values An array containing values for the pk
 	 * @param array $options An options array
 	 * @return Model
-	 * @throws {@link RecordNotFound} if a record could not be found
+	 * @throws RecordNotFound if a record could not be found
 	 */
 	public static function find_by_pk($values, $options)
 	{
@@ -1643,7 +1643,7 @@ class Model
 	 * @param array $array An options array
 	 * @param bool $throw True to throw an exception if not valid
 	 * @return boolean True if valid otherwise valse
-	 * @throws {@link ActiveRecordException} if the array contained any invalid options
+	 * @throws ActiveRecordException if the array contained any invalid options
 	 */
 	public static function is_options_hash($array, $throw=true)
 	{

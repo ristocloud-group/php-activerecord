@@ -103,7 +103,7 @@ class Config extends Singleton
 	 * @param array $connections Array of connections
 	 * @param string $default_connection Optionally specify the default_connection
 	 * @return void
-	 * @throws ActiveRecord\ConfigException
+	 * @throws ConfigException
 	 */
 	public function set_connections($connections, $default_connection=null)
 	{
