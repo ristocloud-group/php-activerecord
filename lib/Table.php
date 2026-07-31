@@ -18,7 +18,7 @@ class Table
 	private static $cache = array();
 
 	public $class;
-	/** @var Connection */
+	/** @var Connection|null */
 	public $conn;
 	public $pk;
 	public $last_sql;
@@ -267,7 +267,7 @@ class Table
 			// nested include
 			if (is_array($name))
 			{
-				$nested_includes = count($name) > 0 ? $name : $name[0];
+				$nested_includes = count($name) > 0 ? $name : array();
 				$name = $index;
 			}
 			else
@@ -305,7 +305,7 @@ class Table
 	 * @param $name string name of Relationship
 	 * @param $strict bool
 	 * @throws RelationshipException
-	 * @return Relationship or null
+	 * @return AbstractRelationship|null
 	 */
 	public function get_relationship($name, $strict=false)
 	{
@@ -365,7 +365,7 @@ class Table
 	/**
 	 * Add a relationship.
 	 *
-	 * @param Relationship $relationship a Relationship object
+	 * @param AbstractRelationship $relationship a relationship object
 	 */
 	private function add_relationship($relationship)
 	{
@@ -523,7 +523,7 @@ class Table
 		if (!array_key_exists('processed', $delegates))
 			$delegates['processed'] = false;
 
-		if (!empty($delegates) && !$delegates['processed'])
+		if (!$delegates['processed'])
 		{
 			foreach ($delegates as &$delegate)
 			{

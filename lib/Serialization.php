@@ -234,7 +234,7 @@ abstract class Serialization
 
 	/**
 	 * Performs the serialization.
-	 * @return string
+	 * @return string|array
 	 */
 	abstract public function to_s();
 };
@@ -248,6 +248,9 @@ class ArraySerializer extends Serialization
 {
 	public static $include_root = false;
 
+	/**
+	 * @return array|string
+	 */
 	public function to_s()
 	{
 		return self::$include_root ? array(strtolower(get_class($this->model)) => $this->to_a()) : $this->to_a();
@@ -266,7 +269,10 @@ class JsonSerializer extends ArraySerializer
 	public function to_s()
 	{
 		parent::$include_root = self::$include_root;
-		return json_encode(parent::to_s());
+		$json = json_encode(parent::to_s());
+		if ($json === false)
+			throw new ActiveRecordException('JSON encoding failed: ' . json_last_error_msg());
+		return $json;
 	}
 }
 

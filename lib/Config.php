@@ -58,13 +58,6 @@ class Config extends Singleton
 	private $logger;
 
 	/**
-	 * The format to serialize DateTime values into.
-	 *
-	 * @var string
-	 */
-	private $date_format = \DateTime::ISO8601;
-
-	/**
 	 * Allows config initialization using a closure.
 	 *
 	 * This method is just syntatic sugar.
@@ -103,7 +96,7 @@ class Config extends Singleton
 	 * @param array $connections Array of connections
 	 * @param string $default_connection Optionally specify the default_connection
 	 * @return void
-	 * @throws ActiveRecord\ConfigException
+	 * @throws ConfigException
 	 */
 	public function set_connections($connections, $default_connection=null)
 	{
@@ -130,7 +123,7 @@ class Config extends Singleton
 	 * Returns a connection string if found otherwise null.
 	 *
 	 * @param string $name Name of connection to retrieve
-	 * @return string connection info for specified connection name
+	 * @return string|null connection info for specified connection name
 	 */
 	public function get_connection($name)
 	{

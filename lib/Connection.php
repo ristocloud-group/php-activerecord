@@ -17,6 +17,10 @@ use Psr\Log\LoggerInterface;
  * The base class for database connection adapters.
  *
  * @package ActiveRecord
+ * @method Column create_column(array $column) Builds a {@see Column} from one raw row of
+ *         driver-specific column-metadata (as returned by query_column_info()). Implemented
+ *         by every concrete adapter (Mysql/Pgsql/Sqlite); some accept $column by reference
+ *         as a micro-optimization, none rely on mutating the caller's array.
  */
 abstract class Connection
 {
@@ -100,7 +104,7 @@ abstract class Connection
 			throw new DatabaseException("Empty connection string");
 
 		$info = static::parse_connection_url($connection_string);
-		$fqclass = static::load_adapter_class($info->protocol);
+		$fqclass = self::load_adapter_class($info->protocol);
 
 		try {
             /** @var Connection $connection */
@@ -227,7 +231,7 @@ abstract class Connection
 	/**
 	 * Class Connection is a singleton. Access it via instance().
 	 *
-	 * @param array $info Array containing URL parts
+	 * @param object $info Parsed connection-url object (see parse_connection_url())
 	 * @return Connection
 	 */
 	protected function __construct($info)
@@ -326,7 +330,7 @@ abstract class Connection
 	 *
 	 * @param string $sql Raw SQL string to execute.
 	 * @param array &$values Optional array of values to bind to the query.
-	 * @return string
+	 * @return mixed
 	 */
 	public function query_and_fetch_one($sql, &$values=array())
 	{
@@ -426,7 +430,7 @@ abstract class Connection
 	 * Return SQL for getting the next value in a sequence.
 	 *
 	 * @param string $sequence_name Name of the sequence
-	 * @return string
+	 * @return string|null
 	 */
 	public function next_sequence_value($sequence_name)
 	{
@@ -448,7 +452,7 @@ abstract class Connection
 	/**
 	 * Return a date time formatted into the database's date format.
 	 *
-	 * @param DateTime $datetime The DateTime object
+	 * @param \DateTime $datetime The DateTime object (native \DateTime or ActiveRecord\DateTime)
 	 * @return string
 	 */
 	public function date_to_string($datetime)
@@ -459,7 +463,7 @@ abstract class Connection
 	/**
 	 * Return a date time formatted into the database's datetime format.
 	 *
-	 * @param DateTime $datetime The DateTime object
+	 * @param \DateTime $datetime The DateTime object (native \DateTime or ActiveRecord\DateTime)
 	 * @return string
 	 */
 	public function datetime_to_string($datetime)
@@ -471,7 +475,7 @@ abstract class Connection
 	 * Converts a string representation of a datetime into a DateTime object.
 	 *
 	 * @param string $string A datetime in the form accepted by date_create()
-	 * @return DateTime
+	 * @return DateTime|null
 	 */
 	public function string_to_datetime($string)
 	{
@@ -488,7 +492,7 @@ abstract class Connection
 	 * Adds a limit clause to the SQL query.
 	 *
 	 * @param string $sql The SQL statement.
-	 * @param int $offset Row offset to start at.
+	 * @param int|null $offset Row offset to start at.
 	 * @param int $limit Maximum number of rows to return.
 	 * @return string The SQL query that will limit results to specified parameters
 	 */
@@ -498,7 +502,7 @@ abstract class Connection
 	 * Query for column meta info and return statement handle.
 	 *
 	 * @param string $table Name of a table
-	 * @return PDOStatement
+	 * @return \PDOStatement
 	 */
 	abstract public function query_column_info($table);
 
@@ -506,7 +510,7 @@ abstract class Connection
 	 * Query for all tables in the current database. The result must only
 	 * contain one column which has the name of the table.
 	 *
-	 * @return PDOStatement
+	 * @return \PDOStatement
 	 */
 	abstract function query_for_tables();
 
@@ -535,7 +539,7 @@ abstract class Connection
   public function close()
 	{
     // Clear reference to PDO conn so that PHP will garbage collect and trigger PDO to close DB conn
-    $this->conn = null;
+    $this->connection = null;
   }
 
 }

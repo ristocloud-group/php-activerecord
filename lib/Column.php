@@ -68,7 +68,7 @@ class Column
 
 	/**
 	 * The maximum length of this column.
-	 * @var int
+	 * @var int|null
 	 */
 	public $length;
 
@@ -98,7 +98,7 @@ class Column
 
 	/**
 	 * Name of the sequence to use for this column if any.
-	 * @var boolean
+	 * @var string|null
 	 */
 	public $sequence;
 

@@ -602,6 +602,27 @@ class RelationshipTest extends DatabaseTest
 		$this->assert_sql_has("WHERE id IN(?,?,?)",ActiveRecord\Table::load('Host')->last_sql);
 	}
 
+	public function test_eager_loading_has_many_with_explicitly_empty_nested_include()
+	{
+		// an explicitly-empty nested include (array('events' => array())) must be treated as
+		// "no further nesting" -- it must not trigger an undefined-offset warning nor silently
+		// lose the eager-load directive for 'events' itself.
+		$venues = Venue::find(array(1,2), array('include' => array('events' => array())));
+
+		$this->assert_equals(2, count($venues));
+
+		foreach ($venues as $v)
+		{
+			$this->assert_true(count($v->events) > 0);
+
+			foreach ($v->events as $e)
+				$this->assert_equals($v->id, $e->venue_id);
+		}
+
+		$this->assert_sql_has("WHERE id IN(?,?)",ActiveRecord\Table::load('Venue')->last_sql);
+		$this->assert_sql_has("WHERE venue_id IN(?,?)",ActiveRecord\Table::load('Event')->last_sql);
+	}
+
 	public function test_eager_loading_belongs_to()
 	{
 		$events = Event::find(array(1,2,3,5,7), array('include' => 'venue'));

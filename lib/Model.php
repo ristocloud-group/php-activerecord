@@ -72,6 +72,9 @@ use Closure;
  * @see HasAndBelongsToMany
  * @see Serialization
  * @see Validations
+ * @property mixed $id Primary-key attribute, present on virtually every table; resolved
+ *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
+ *           property since column schema is introspected at runtime.
  */
 class Model
 {
@@ -92,7 +95,7 @@ class Model
 	/**
 	 * Flag whether or not this model's attributes have been modified since it will either be null or an array of column_names that have been modified
 	 *
-	 * @var array
+	 * @var array|null
 	 */
 	private $__dirty = null;
 
@@ -396,10 +399,10 @@ class Model
 	 * echo $user->name; # => BOB
 	 * </code>
 	 *
-	 * @throws {@link UndefinedPropertyException} if $name does not exist
+	 * @throws UndefinedPropertyException if $name does not exist
 	 * @param string $name Name of attribute, relationship or other to set
 	 * @param mixed $value The value
-	 * @return mixed The value
+	 * @return void
 	 */
 	public function __set($name, $value)
 	{
@@ -409,19 +412,29 @@ class Model
 		elseif (method_exists($this,"set_$name"))
 		{
 			$name = "set_$name";
-			return $this->$name($value);
+			$this->$name($value);
+			return;
 		}
 
 		if (array_key_exists($name,$this->attributes))
-			return $this->assign_attribute($name,$value);
+		{
+			$this->assign_attribute($name,$value);
+			return;
+		}
 
 		if ($name == 'id')
-			return $this->assign_attribute($this->get_primary_key(true),$value);
+		{
+			$this->assign_attribute($this->get_primary_key(true),$value);
+			return;
+		}
 
 		foreach (static::$delegate as &$item)
 		{
 			if (($delegated_name = $this->is_delegated($name,$item)))
-				return $this->{$item['to']}->$delegated_name = $value;
+			{
+				$this->{$item['to']}->$delegated_name = $value;
+				return;
+			}
 		}
 
 		throw new UndefinedPropertyException(get_called_class(),$name);
@@ -475,7 +488,7 @@ class Model
 	 *
 	 * @param string $name Name of an attribute
 	 * @return mixed The value of the attribute
-	 * @throws {@link UndefinedPropertyException} if name could not be resolved to an attribute, relationship, ...
+	 * @throws UndefinedPropertyException if name could not be resolved to an attribute, relationship, ...
 	 */
 	public function &read_attribute($name)
 	{
@@ -578,8 +591,8 @@ class Model
 	/**
 	 * Retrieve the primary key name.
 	 *
-	 * @param boolean Set to true to return the first value in the pk array only
-	 * @return string The primary key for the model
+	 * @param bool $first Set to true to return the first value in the pk array only
+	 * @return ($first is true ? string : array) The primary key for the model
 	 */
 	public function get_primary_key($first=false)
 	{
@@ -591,7 +604,7 @@ class Model
 	 * Returns the actual attribute name if $name is aliased.
 	 *
 	 * @param string $name An attribute name
-	 * @return string
+	 * @return string|null
 	 */
 	public function get_real_attribute_name($name)
 	{
@@ -703,7 +716,7 @@ class Model
 	/**
 	 * Throws an exception if this model is set to readonly.
 	 *
-	 * @throws ActiveRecord\ReadOnlyException
+	 * @throws ReadOnlyException
 	 * @param string $method_name Name of method that was invoked on model for exception message
 	 */
 	private function verify_not_readonly($method_name)
@@ -749,7 +762,7 @@ class Model
    */
   public static function drop_connection()
   {
-    return static::table()->drop_connection();
+    static::table()->drop_connection();
   }
 
 	/**
@@ -1161,7 +1174,7 @@ class Model
 	/**
 	 * Passing $guard_attributes as true will throw an exception if an attribute does not exist.
 	 *
-	 * @throws ActiveRecord\UndefinedPropertyException
+	 * @throws UndefinedPropertyException
 	 * @param array $attributes An array in the form array(name => value, ...)
 	 * @param boolean $guard_attributes Flag of whether or not protected/non-accessible attributes should be guarded
 	 */
@@ -1227,12 +1240,14 @@ class Model
 			{
 				// if the related model is null and it is a poly then we should have an empty array
 				if (is_null($model))
-					return $this->__relationships[$name] = array();
+					$this->__relationships[$name] = array();
 				else
-					return $this->__relationships[$name][] = $model;
+					$this->__relationships[$name][] = $model;
 			}
 			else
-				return $this->__relationships[$name] = $model;
+				$this->__relationships[$name] = $model;
+
+			return;
 		}
 
 		throw new RelationshipException("Relationship named $name has not been declared for class: {$table->class->getName()}");
@@ -1258,7 +1273,6 @@ class Model
 	{
 		$this->__relationships = array();
 		$this->reset_dirty();
-		return $this;
 	}
 
 	/**
@@ -1313,8 +1327,10 @@ class Model
 	 *
 	 * @param string $method Name of method
 	 * @param mixed $args Method args
-	 * @return Model
-	 * @throws {@link ActiveRecordException} if invalid query
+	 * @return Model|array|int|string|null Model or null for the find-by-attributes and
+	 *   find-or-create-by-attributes dynamic finders, an array of Model for the
+	 *   find-all-by-attributes finder, int|string for the count-by-attributes finder
+	 * @throws ActiveRecordException if invalid query
 	 * @see find
 	 */
 	public static function __callStatic($method, $args)
@@ -1409,7 +1425,7 @@ class Model
 	 * </code>
 	 *
 	 * @see find
-	 * @return int Number of records that matched the query
+	 * @return int|string Number of records that matched the query
 	 */
 	public static function count(/* ... */)
 	{
@@ -1518,7 +1534,7 @@ class Model
 	 * <li><b>group:</b> A SQL group by fragment</li>
 	 * </ul>
 	 *
-	 * @throws {@link RecordNotFound} if no options are passed or finding by pk and no records matched
+	 * @throws RecordNotFound if no options are passed or finding by pk and no records matched
 	 * @return mixed An array of records found if doing a find_all otherwise a
 	 *   single Model object or null if it wasn't found. NULL is only return when
 	 *   doing a first/last find. If doing an all find and no records matched this
@@ -1579,10 +1595,10 @@ class Model
 	 * Finder method which will find by a single or array of primary keys for this model.
 	 *
 	 * @see find
-	 * @param array $values An array containing values for the pk
+	 * @param mixed $values An array containing values for the pk, or a single pk value
 	 * @param array $options An options array
 	 * @return Model
-	 * @throws {@link RecordNotFound} if a record could not be found
+	 * @throws RecordNotFound if a record could not be found
 	 */
 	public static function find_by_pk($values, $options)
 	{
@@ -1643,7 +1659,7 @@ class Model
 	 * @param array $array An options array
 	 * @param bool $throw True to throw an exception if not valid
 	 * @return boolean True if valid otherwise valse
-	 * @throws {@link ActiveRecordException} if the array contained any invalid options
+	 * @throws ActiveRecordException if the array contained any invalid options
 	 */
 	public static function is_options_hash($array, $throw=true)
 	{
@@ -1787,7 +1803,7 @@ class Model
 	 *
 	 * @param string $type Either Xml, Json, Csv or Array
 	 * @param array $options Options array for the serializer
-	 * @return string Serialized representation of the model
+	 * @return string|array Serialized representation of the model
 	 */
 	private function serialize($type, $options)
 	{

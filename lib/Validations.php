@@ -122,7 +122,7 @@ class Validations
 			{
 				$field = $attr[0];
 
-				if (!isset($data[$field]) || !is_array($data[$field]))
+				if (!isset($data[$field]))
 					$data[$field] = array();
 
 				$attr['validator'] = $validate;
@@ -266,9 +266,11 @@ class Validations
 				$enum = $options['in'];
 			elseif (isset($options['within']))
 				$enum = $options['within'];
+			else
+				throw new ValidationsArgumentError("Please specify [in] or [within] for validates_inclusion_of/validates_exclusion_of.");
 
 			if (!is_array($enum))
-				array($enum);
+				$enum = array($enum);
 
 			if ($this->is_null_with_option($var, $options) || $this->is_blank_with_option($var, $options))
 				continue;
@@ -354,12 +356,11 @@ class Validations
 
 				if ('odd' != $option && 'even' != $option)
 				{
+					if (!is_numeric($options[$option]))
+						throw new ValidationsArgumentError("$option must be a number");
 					$option_value = (float)$options[$option];
 
-					if (!is_numeric($option_value))
-						throw new ValidationsArgumentError("$option must be a number");
-
-					$message = str_replace('%d', $option_value, $message);
+					$message = str_replace('%d', (string)$option_value, $message);
 
 					if ('greater_than' == $option && !($var > $option_value))
 						$this->record->add($attribute, $message);
@@ -427,7 +428,7 @@ class Validations
 			$attribute = $options[0];
 			$var = $this->model->$attribute;
 
-			if (is_null($options['with']) || !is_string($options['with']) || !is_string($options['with']))
+			if (is_null($options['with']) || !is_string($options['with']))
 				throw new ValidationsArgumentError('A regular expression must be supplied as the [with] option of the configuration array.');
 			else
 				$expression = $options['with'];
@@ -499,7 +500,7 @@ class Validations
 				$range = $options[$range_options[0]];
 
 				if (!(Utils::is_a('range', $range)))
-					throw new  ValidationsArgumentError("$range_option must be an array composing a range of numbers with key [0] being less than key [1]");
+					throw new  ValidationsArgumentError("{$range_options[0]} must be an array composing a range of numbers with key [0] being less than key [1]");
 				$range_options = array('minimum', 'maximum');
 				$attr['minimum'] = $range[0];
 				$attr['maximum'] = $range[1];
@@ -716,7 +717,7 @@ class Errors implements IteratorAggregate
 	 * Retrieve error messages for an attribute.
 	 *
 	 * @param string $attribute Name of an attribute on the model
-	 * @return array or null if there is no error.
+	 * @return array|null
 	 */
 	public function __get($attribute)
 	{
@@ -756,7 +757,7 @@ class Errors implements IteratorAggregate
 	 * Returns the error message(s) for the specified attribute or null if none.
 	 *
 	 * @param string $attribute Name of an attribute on the model
-	 * @return string/array	Array of strings if several error occured on this attribute.
+	 * @return string|array	Array of strings if several error occured on this attribute.
 	 */
 	public function on($attribute)
 	{
@@ -819,7 +820,7 @@ class Errors implements IteratorAggregate
 	 * # )
 	 * </code>
 	 *
-	 * @param array $closure Closure to fetch the errors in some other format (optional)
+	 * @param \Closure|null $closure Closure to fetch the errors in some other format (optional)
 	 *                       This closure has the signature function($attribute, $message)
 	 *                       and is called for each available error message.
 	 * @return array

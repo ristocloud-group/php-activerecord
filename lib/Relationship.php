@@ -21,6 +21,16 @@ interface InterfaceRelationship
  *
  * @package ActiveRecord
  * @see http://www.phpactiverecord.org/guides/associations
+ * @property array $primary_key Primary key column(s) used for joins/eager-load conditions.
+ *           Real property on {@see HasMany} (inherited by {@see HasOne}); computed on first
+ *           access via {@see BelongsTo::__get()} for BelongsTo. Never touched on
+ *           {@see HasAndBelongsToMany} (unimplemented stub).
+ * @method void set_keys(string $model_class_name, bool $override = false) Infers/overwrites
+ *           $foreign_key and $primary_key from a model class name. Implemented by
+ *           {@see HasMany} (inherited by {@see HasOne}). Only ever invoked from
+ *           {@see AbstractRelationship::query_and_attach_related_models_eagerly()} when
+ *           $options['through'] is set, which is only a valid option for HasMany/HasOne —
+ *           so it is never called on a BelongsTo/HasAndBelongsToMany instance.
  */
 abstract class AbstractRelationship implements InterfaceRelationship
 {
@@ -41,7 +51,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
 	/**
 	 * Name of the foreign key.
 	 *
-	 * @var string
+	 * @var array
 	 */
 	public $foreign_key = array();
 
@@ -334,7 +344,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
 		}
 
 		// need to flip the logic when the key is on the other table
-		if ($this instanceof HasMany || $this instanceof HasOne)
+		if ($this instanceof HasMany)
 		{
 			$this->set_keys($from_table->class->getName());
 
@@ -372,6 +382,16 @@ abstract class AbstractRelationship implements InterfaceRelationship
 	 * @param Model $model The model this relationship belongs to
 	 */
 	abstract function load(Model $model);
+
+	/**
+	 * Eagerly loads the related model data for a set of models.
+	 *
+	 * @param array $models The models to load the association for
+	 * @param array $attributes The attributes from the related table that were pre-fetched for this relationship
+	 * @param array $includes The nested includes to eager load on the associated models
+	 * @param Table $table The Table for the class that owns this relationship
+	 */
+	abstract public function load_eagerly($models, $attributes, $includes, Table $table);
 };
 
 /**
@@ -435,10 +455,9 @@ class HasMany extends AbstractRelationship
 
 	protected $primary_key;
 
-	private $has_one = false;
 	private $through;
 
-    /** @var bool */
+    /** @var bool|null Unset until {@see load()} runs once; isset() is the deliberate init-guard. */
     private $initialized;
 
     /**
@@ -595,6 +614,11 @@ class HasAndBelongsToMany extends AbstractRelationship
 	{
 
 	}
+
+	public function load_eagerly($models, $attributes, $includes, Table $table)
+	{
+		throw new RelationshipException('has_and_belongs_to_many eager loading is not implemented');
+	}
 };
 
 /**
@@ -628,7 +652,7 @@ class HasAndBelongsToMany extends AbstractRelationship
  */
 class BelongsTo extends AbstractRelationship
 {
-    /** @var array */
+    /** @var array|null */
     private $primary_key_cache;
 
 	public function __construct($options=array())

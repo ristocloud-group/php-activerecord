@@ -75,7 +75,7 @@ function is_hash(&$array)
 /**
  * Strips a class name of any namespaces and namespace operator.
  *
- * @param string $class
+ * @param string|object $class_name
  * @return string stripped class name
  * @access public
  */
@@ -117,7 +117,7 @@ function has_absolute_namespace($class_name)
  * Returns true if all values in $haystack === $needle
  * @param $needle
  * @param $haystack
- * @return unknown_type
+ * @return bool
  */
 function all($needle, array $haystack)
 {
