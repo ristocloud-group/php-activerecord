@@ -372,6 +372,16 @@ abstract class AbstractRelationship implements InterfaceRelationship
 	 * @param Model $model The model this relationship belongs to
 	 */
 	abstract function load(Model $model);
+
+	/**
+	 * Eagerly loads the related model data for a set of models.
+	 *
+	 * @param array $models The models to load the association for
+	 * @param array $attributes The attributes from the related table that were pre-fetched for this relationship
+	 * @param array $includes The nested includes to eager load on the associated models
+	 * @param Table $table The Table for the class that owns this relationship
+	 */
+	abstract public function load_eagerly($models, $attributes, $includes, Table $table);
 };
 
 /**
@@ -594,6 +604,11 @@ class HasAndBelongsToMany extends AbstractRelationship
 	public function load(Model $model)
 	{
 
+	}
+
+	public function load_eagerly($models, $attributes, $includes, Table $table)
+	{
+		throw new RelationshipException('has_and_belongs_to_many eager loading is not implemented');
 	}
 };
 

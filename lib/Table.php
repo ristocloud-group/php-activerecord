@@ -305,7 +305,7 @@ class Table
 	 * @param $name string name of Relationship
 	 * @param $strict bool
 	 * @throws RelationshipException
-	 * @return Relationship or null
+	 * @return AbstractRelationship|null
 	 */
 	public function get_relationship($name, $strict=false)
 	{
@@ -365,7 +365,7 @@ class Table
 	/**
 	 * Add a relationship.
 	 *
-	 * @param Relationship $relationship a Relationship object
+	 * @param AbstractRelationship $relationship a relationship object
 	 */
 	private function add_relationship($relationship)
 	{
