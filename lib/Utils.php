@@ -75,7 +75,7 @@ function is_hash(&$array)
 /**
  * Strips a class name of any namespaces and namespace operator.
  *
- * @param string $class_name
+ * @param string|object $class_name
  * @return string stripped class name
  * @access public
  */
