@@ -282,6 +282,6 @@ class SQLBuilderTest extends DatabaseTest
         $this->sql->joins($joins);
         $this->sql->where(['id' => 1, 'name' => 'Tito']);
 
-        $this->assert_sql_has("SELECT * FROM authors $joins WHERE authors.id=? AND authors.name=?",(string) $this->sql);
+        $this->assert_sql_has("SELECT * FROM authors $joins WHERE authors.id=? AND authors.name=?", (string) $this->sql);
     }
 };

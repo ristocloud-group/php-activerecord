@@ -32,7 +32,7 @@
   "scripts": {
     "test": "phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --fail-on-deprecation --testdox --colors=always --log-junit junit.xml",
     "analyse": "phpstan analyse --memory-limit=1G",
-    "cs": "php-cs-fixer fix --dry-run --diff",
+    "cs": "php-cs-fixer fix --dry-run --diff --using-cache=no",
     "cs-fix": "php-cs-fixer fix"
   }
 }

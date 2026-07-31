@@ -118,7 +118,7 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
     {
         $column = new Column();
         $column->type = Column::DATETIME;
-        $this->assert_equals(null,$column->cast(null,$this->conn));
-        $this->assert_equals(null,$column->cast('',$this->conn));
+        $this->assert_equals(null, $column->cast(null, $this->conn));
+        $this->assert_equals(null, $column->cast('', $this->conn));
     }
 }

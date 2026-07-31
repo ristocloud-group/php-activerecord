@@ -215,6 +215,6 @@ class SerializationTest extends DatabaseTest
         $book = Book::find(1);
         ActiveRecord\CsvSerializer::$delimiter = ',';
         ActiveRecord\CsvSerializer::$enclosure = "'";
-        $this->assert_equals("1,1,2,'Ancient Art of Main Tanking',0,0",$book->to_csv());
+        $this->assert_equals("1,1,2,'Ancient Art of Main Tanking',0,0", $book->to_csv());
     }
 };

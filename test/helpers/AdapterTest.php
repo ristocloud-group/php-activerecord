@@ -421,6 +421,6 @@ abstract class AdapterTest extends DatabaseTest
     public function test_date_to_string()
     {
         $datetime = '2009-01-01';
-        $this->assert_equals($datetime,$this->conn->date_to_string(date_create($datetime)));
+        $this->assert_equals($datetime, $this->conn->date_to_string(date_create($datetime)));
     }
 }

@@ -184,12 +184,12 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
     public function test_hash_with_glue()
     {
         $a = new Expressions(null, ['id' => 1, 'name' => 'Tito'], ', ');
-        $this->assert_equals('id=?, name=?',$a->to_s());
+        $this->assert_equals('id=?, name=?', $a->to_s());
     }
 
     public function test_hash_with_array()
     {
-        $a = new Expressions(null,['id' => 1, 'name' => ['Tito','Mexican']]);
-        $this->assert_equals('id=? AND name IN(?,?)',$a->to_s());
+        $a = new Expressions(null, ['id' => 1, 'name' => ['Tito','Mexican']]);
+        $this->assert_equals('id=? AND name IN(?,?)', $a->to_s());
     }
 }
