@@ -1,29 +1,36 @@
 {
-    "name": "ristocloud-group/php-activerecord",
-    "type": "library",
-    "description": "php-activerecord is an open source ORM library based on the ActiveRecord pattern.",
-    "keywords": ["activerecord", "orm"],
-    "homepage": "http://www.phpactiverecord.org/",
-    "license": "MIT",
-    "require": {
-        "php": "^8.3",
-        "psr/log": "^3.0"
-    },
-    "require-dev": {
-        "monolog/monolog": "^3.0",
-        "phpunit/phpunit": "^12.0",
-        "phpstan/phpstan": "^2.0",
-        "squizlabs/php_codesniffer": "^3.10",
-        "predis/predis": "^2.0"
-    },
-    "suggest": {
-        "predis/predis": "Enables the redis:// schema cache adapter (compatible with Redis 6/7/8 and Valkey 7/8/9)"
-    },
-    "autoload": {
-        "files": [ "ActiveRecord.php" ]
-    },
-    "scripts": {
-        "test": "phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --fail-on-deprecation --testdox --colors=always --log-junit junit.xml",
-        "analyse": "phpstan analyse --memory-limit=1G"
-    }
+  "name": "ristocloud-group/php-activerecord",
+  "type": "library",
+  "description": "php-activerecord is an open source ORM library based on the ActiveRecord pattern.",
+  "keywords": [
+    "activerecord",
+    "orm"
+  ],
+  "homepage": "https://github.com/ristocloud-group/php-activerecord",
+  "license": "MIT",
+  "require": {
+    "php": "^8.3",
+    "psr/log": "^3.0",
+    "ext-pdo": "*"
+  },
+  "require-dev": {
+    "monolog/monolog": "^3.0",
+    "phpunit/phpunit": "^12.0",
+    "phpstan/phpstan": "^2.0",
+    "squizlabs/php_codesniffer": "^3.10",
+    "predis/predis": "^2.0"
+  },
+  "suggest": {
+    "predis/predis": "Enables the redis:// schema cache adapter (compatible with Redis 6/7/8 and Valkey 7/8/9)",
+    "ext-memcached": "Enables the memcache:// schema cache adapter"
+  },
+  "autoload": {
+    "files": [
+      "ActiveRecord.php"
+    ]
+  },
+  "scripts": {
+    "test": "phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --fail-on-deprecation --testdox --colors=always --log-junit junit.xml",
+    "analyse": "phpstan analyse --memory-limit=1G"
+  }
 }
