@@ -122,7 +122,7 @@ class Validations
 			{
 				$field = $attr[0];
 
-				if (!isset($data[$field]) || !is_array($data[$field]))
+				if (!isset($data[$field]))
 					$data[$field] = array();
 
 				$attr['validator'] = $validate;
@@ -266,9 +266,11 @@ class Validations
 				$enum = $options['in'];
 			elseif (isset($options['within']))
 				$enum = $options['within'];
+			else
+				throw new ValidationsArgumentError("Please specify [in] or [within] for validates_inclusion_of/validates_exclusion_of.");
 
 			if (!is_array($enum))
-				array($enum);
+				$enum = array($enum);
 
 			if ($this->is_null_with_option($var, $options) || $this->is_blank_with_option($var, $options))
 				continue;
@@ -354,10 +356,9 @@ class Validations
 
 				if ('odd' != $option && 'even' != $option)
 				{
-					$option_value = (float)$options[$option];
-
-					if (!is_numeric($option_value))
+					if (!is_numeric($options[$option]))
 						throw new ValidationsArgumentError("$option must be a number");
+					$option_value = (float)$options[$option];
 
 					$message = str_replace('%d', $option_value, $message);
 
@@ -427,7 +428,7 @@ class Validations
 			$attribute = $options[0];
 			$var = $this->model->$attribute;
 
-			if (is_null($options['with']) || !is_string($options['with']) || !is_string($options['with']))
+			if (is_null($options['with']) || !is_string($options['with']))
 				throw new ValidationsArgumentError('A regular expression must be supplied as the [with] option of the configuration array.');
 			else
 				$expression = $options['with'];

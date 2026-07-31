@@ -8,6 +8,8 @@ class BookValidations extends ActiveRecord\Model
 	static $alias_attribute = array('name_alias' => 'name', 'x' => 'secondary_author_id');
 	static $validates_presence_of = array();
 	static $validates_uniqueness_of = array();
+	static $validates_numericality_of = array();
+	static $validates_inclusion_of = array();
 	static $custom_validator_error_msg = 'failed custom validation';
 
 	// fired for every validation - but only used for custom validation test
@@ -32,7 +34,9 @@ class ValidationsTest extends DatabaseTest
 
 		BookValidations::$validates_presence_of[0] = 'name';
 		BookValidations::$validates_uniqueness_of[0] = 'name';
-		
+		BookValidations::$validates_numericality_of = array();
+		BookValidations::$validates_inclusion_of = array();
+
 		ValuestoreValidations::$validates_uniqueness_of[0] = 'key';
 	}
 
@@ -177,6 +181,45 @@ class ValidationsTest extends DatabaseTest
 		$book->save();
 		$this->assert_true($book->errors->is_invalid('name'));
 		$this->assert_equals(BookValidations::$custom_validator_error_msg, $book->errors->on('name'));
+	}
+
+	public function test_validates_numericality_of_throws_on_non_numeric_option()
+	{
+		BookValidations::$validates_numericality_of = array(
+			array('numeric_test', 'greater_than' => 'not_a_number')
+		);
+
+		$this->expectException(AR\ValidationsArgumentError::class);
+
+		$book = new BookValidations(array('numeric_test' => 5));
+		$book->is_valid();
+	}
+
+	public function test_validates_inclusion_of_accepts_scalar_in_option()
+	{
+		BookValidations::$validates_inclusion_of = array(
+			array('name', 'in' => 'active')
+		);
+
+		$book = new BookValidations(array('name' => 'inactive'));
+		$this->assert_false($book->is_valid());
+		$this->assert_true($book->errors->is_invalid('name'));
+
+		$book2 = new BookValidations(array('name' => 'active'));
+		$book2->is_valid();
+		$this->assert_false($book2->errors->is_invalid('name'));
+	}
+
+	public function test_validates_inclusion_of_throws_when_in_and_within_both_missing()
+	{
+		BookValidations::$validates_inclusion_of = array(
+			array('name')
+		);
+
+		$this->expectException(AR\ValidationsArgumentError::class);
+
+		$book = new BookValidations(array('name' => 'whatever'));
+		$book->is_valid();
 	}
 };
 

@@ -334,7 +334,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
 		}
 
 		// need to flip the logic when the key is on the other table
-		if ($this instanceof HasMany || $this instanceof HasOne)
+		if ($this instanceof HasMany)
 		{
 			$this->set_keys($from_table->class->getName());
 

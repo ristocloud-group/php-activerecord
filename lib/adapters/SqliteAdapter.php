@@ -58,13 +58,10 @@ class SqliteAdapter extends Connection
 		$column['type'] = Utils::squeeze(' ',$column['type']);
 		$matches = explode(' ',$column['type']);
 
-		if (!empty($matches))
-		{
-			$c->raw_type = strtolower($matches[0]);
+		$c->raw_type = strtolower($matches[0]);
 
-			if (count($matches) > 1)
-				$c->length = intval($matches[1]);
-		}
+		if (count($matches) > 1)
+			$c->length = intval($matches[1]);
 
 		$c->map_raw_type();
 

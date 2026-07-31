@@ -523,7 +523,7 @@ class Table
 		if (!array_key_exists('processed', $delegates))
 			$delegates['processed'] = false;
 
-		if (!empty($delegates) && !$delegates['processed'])
+		if (!$delegates['processed'])
 		{
 			foreach ($delegates as &$delegate)
 			{

@@ -85,7 +85,7 @@ class UndefinedPropertyException extends ModelException
 	/**
 	 * Sets the exception message to show the undefined property's name.
 	 *
-	 * @param string $property_name name of undefined property
+	 * @param string|array<string> $property_name name of undefined property
 	 * @return void
 	 */
 	public function __construct($class_name, $property_name)
