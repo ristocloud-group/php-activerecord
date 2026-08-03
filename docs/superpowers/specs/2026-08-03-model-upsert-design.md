@@ -274,18 +274,53 @@ Verify the constructed string shape and bind-value ordering in isolation.
 
 To keep these deterministic with small datasets, the adapter's bind-parameter limit is
 an **overridable static value**; tests lower it to force multiple chunks from a handful
-of rows (rather than inserting tens of thousands).
+of rows (rather than inserting tens of thousands). Each test restores the original limit
+in `tear_down()`.
 
-21. Chunk boundary: with the limit lowered, a batch that spans multiple chunks writes
-    **all** rows and returns the **summed** `rowCount()`.
-22. Atomic rollback: a failure in a later chunk (e.g. a bad row) rolls back the rows
-    written by earlier chunks — nothing persists (all-or-nothing).
-23. Joins an existing transaction: when `upsert()` is called inside a caller-opened
-    transaction, it does not commit independently; a subsequent caller `rollback()`
-    undoes the upsert too (no nested boundary created).
-24. Single chunk is not wrapped: a batch fitting in one statement issues no
-    `BEGIN`/`COMMIT` (asserts we don't wrap unnecessarily).
-25. `column_count > limit` (limit forced absurdly low) → `ActiveRecordException`.
+**Chunk math / boundaries**
+
+21. Single chunk (batch fits the limit) → **no** `BEGIN`/`COMMIT` wrapping, one
+    statement (asserts we don't wrap unnecessarily).
+22. Exact boundary: `rows == chunk_size` → exactly **one** chunk (guards the floor
+    division against an off-by-one that would emit an empty second chunk).
+23. `rows == chunk_size + 1` → exactly **two** chunks, the second holding the single
+    remainder row.
+24. Multi-chunk batch writes **all** rows and returns the **summed** `rowCount()`.
+25. Statement count: the number of executed upsert statements equals
+    `ceil(rows / chunk_size)` (asserted via a query counter / the logger).
+
+**Data integrity across chunks**
+
+26. Rows spread across chunks keep the correct `column => value` mapping — use distinct
+    values per row and verify every row persisted intact (guards against cross-chunk
+    bind-value bleed / mis-flattening).
+27. Mixed insert + update spanning multiple chunks: pre-existing rows are updated and new
+    rows inserted across the chunk boundary; summed count is correct.
+28. Timestamps applied uniformly: `created_at` / `updated_at` are set on **every**
+    inserted row regardless of which chunk it lands in.
+
+**Atomicity / transaction**
+
+29. Atomic rollback: a failure in a **later** chunk (e.g. an invalid row) rolls back the
+    rows written by earlier chunks — nothing new persists **and** previously-existing
+    rows retain their original values (not just "inserts removed").
+30. The connection is usable after a rolled-back chunked upsert (not left stuck in an
+    aborted transaction — a following query succeeds).
+31. Joins a caller-opened transaction (negative): `upsert()` does not commit on its own;
+    a subsequent caller `rollback()` also undoes the upsert (no nested boundary created).
+32. Joins a caller-opened transaction (positive): a subsequent caller `commit()`
+    persists the chunked upsert.
+
+**Plain-insert path also chunks**
+
+33. `update: []` on a large batch (spanning chunks) inserts all rows, wrapped in a
+    transaction — the chunking loop is shared with the conflict path.
+
+**Per-adapter limit + guards**
+
+34. `column_count > limit` (limit forced absurdly low) → `ActiveRecordException`.
+35. Adapter exposes the expected limit (MySQL/MariaDB & Postgres = 65535, SQLite = 999)
+    and `chunk_size == floor(limit / column_count)` — fast unit assertion, no DB.
 
 ## 11. Out of scope (v1)
 
