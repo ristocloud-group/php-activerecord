@@ -467,6 +467,27 @@ abstract class Connection
     }
 
     /**
+     * Builds the standard-SQL conflict clause for an upsert (used by Postgres and
+     * SQLite). MysqlAdapter overrides this with ON DUPLICATE KEY UPDATE.
+     *
+     * @param string[] $unique Column names forming the conflict target
+     * @param string[] $update Column names to overwrite on conflict
+     * @return string
+     */
+    public function upsert_conflict_clause(array $unique, array $update): string
+    {
+        $target = implode(', ', array_map([$this, 'quote_name'], $unique));
+
+        $sets = [];
+        foreach ($update as $column) {
+            $q = $this->quote_name($column);
+            $sets[] = "$q = EXCLUDED.$q";
+        }
+
+        return "ON CONFLICT ($target) DO UPDATE SET " . implode(', ', $sets);
+    }
+
+    /**
      * Return a date time formatted into the database's date format.
      *
      * @param \DateTime $datetime The DateTime object (native \DateTime or ActiveRecord\DateTime)
