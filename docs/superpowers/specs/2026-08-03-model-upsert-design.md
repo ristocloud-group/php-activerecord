@@ -209,7 +209,8 @@ mappings are **not** applied in this version. This is a documented limitation of
 | `lib/adapters/MysqlAdapter.php` | override `upsert_conflict_clause()` (`ON DUPLICATE KEY UPDATE ... VALUES(col)`); bind-parameter limit `65535` |
 | `lib/adapters/PgsqlAdapter.php` | bind-parameter limit `65535` |
 | `lib/adapters/SqliteAdapter.php` | bind-parameter limit `999` (conservative) |
-| `README` / `CLAUDE.md` | document `upsert` + raised minimum DB versions |
+| `examples/upsert/` | new runnable example: `upsert.sql`, `models/Flight.php`, `upsert.php` (see §11) |
+| `README` / `CLAUDE.md` | document `upsert` + raised minimum DB versions + link to the example (§11) |
 
 `Connection` may host a default bind-parameter limit that `SqliteAdapter` overrides,
 mirroring how `upsert_conflict_clause()` is structured.
@@ -322,7 +323,40 @@ in `tear_down()`.
 35. Adapter exposes the expected limit (MySQL/MariaDB & Postgres = 65535, SQLite = 999)
     and `chunk_size == floor(limit / column_count)` — fast unit assertion, no DB.
 
-## 11. Out of scope (v1)
+## 11. Examples & README references
+
+A runnable example lives under `examples/upsert/`, following the existing convention
+(one sub-directory per example: a `.sql` schema + a `.php` script + a `models/` dir), and
+the README's Basic CRUD section gains an `### Upsert` subsection that links to it. All of
+this lands on the feature branch **alongside the implementation**, so `master` never
+advertises an unimplemented method.
+
+**Files (`examples/upsert/`), mirroring the Laravel docs' `Flight` example:**
+
+- `upsert.sql` — a `flights` table (mysql-flavored, like the other examples' SQL) with
+  `departure`, `destination`, `price`, `created_at`, `updated_at`, and a
+  `UNIQUE (departure, destination)` index — the conflict target.
+- `models/Flight.php` — a bare `Flight extends ActiveRecord\Model` (table inferred).
+- `upsert.php` — self-contained (config init + explicit `require` of the model, in the
+  style of `examples/simple/simple.php`), demonstrating each capability with echoed
+  output:
+  1. Bulk insert-or-update with named args
+     `unique_by: ['departure', 'destination'], update: ['price']` (the Eloquent Flight
+     example), then a second call showing only `price` changes on conflict.
+  2. Default `$update` omitted → all provided columns overwritten.
+  3. String `unique_by` (single column).
+  4. Auto timestamps: print `created_at` / `updated_at` after insert, then after an
+     update (created_at preserved, updated_at bumped).
+  5. `update: []` → plain insert (comment noting it errors on duplicates).
+  6. Reading the returned affected-row count (with the MySQL 1/2 caveat in a comment).
+  7. A comment noting large batches are chunked automatically (§5.1) — no caller action.
+
+**README** — under `## Basic CRUD`, add `### Upsert` after `### Delete`: a short intro,
+one compact code block (the Flight example using named args `unique_by:` / `update:`),
+the emitted SQL per family as a comment (`ON DUPLICATE KEY UPDATE …` vs
+`ON CONFLICT … EXCLUDED`), and a link to `examples/upsert/`.
+
+## 12. Out of scope (v1)
 
 - `alias_attribute` translation of row keys.
 - Firing model events / running validations.
