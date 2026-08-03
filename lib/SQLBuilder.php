@@ -33,6 +33,12 @@ class SQLBuilder
     private $data;
     private $sequence;
 
+    // for upsert
+    private $upsert_columns;
+    private $upsert_row_count;
+    private $upsert_unique_by;
+    private $upsert_update;
+
     /**
      * Constructor.
      *
@@ -159,6 +165,17 @@ class SQLBuilder
         if ($pk && $sequence_name) {
             $this->sequence = [$pk,$sequence_name];
         }
+
+        return $this;
+    }
+
+    public function upsert(array $columns, int $row_count, array $unique_by, array $update)
+    {
+        $this->operation = 'UPSERT';
+        $this->upsert_columns = $columns;
+        $this->upsert_row_count = $row_count;
+        $this->upsert_unique_by = $unique_by;
+        $this->upsert_update = $update;
 
         return $this;
     }
@@ -361,6 +378,22 @@ class SQLBuilder
 
         $e = new Expressions($this->connection, $sql, array_values($this->data));
         return $e->to_s();
+    }
+
+    private function build_upsert()
+    {
+        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $this->upsert_columns));
+
+        $one_row = '(' . implode(', ', array_fill(0, count($this->upsert_columns), '?')) . ')';
+        $rows = implode(', ', array_fill(0, $this->upsert_row_count, $one_row));
+
+        $sql = "INSERT INTO $this->table ($keys) VALUES $rows";
+
+        if (!empty($this->upsert_update)) {
+            $sql .= ' ' . $this->connection->upsert_conflict_clause($this->upsert_unique_by, $this->upsert_update);
+        }
+
+        return $sql;
     }
 
     private function build_select()

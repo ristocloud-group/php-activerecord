@@ -284,4 +284,30 @@ class SQLBuilderTest extends DatabaseTest
 
         $this->assert_sql_has("SELECT * FROM authors $joins WHERE authors.id=? AND authors.name=?", (string) $this->sql);
     }
+
+    public function test_build_upsert_multi_row_with_conflict_clause()
+    {
+        $sql = new SQLBuilder($this->conn, 'venues');
+        $sql->upsert(['name', 'address', 'city'], 2, ['name', 'address'], ['city']);
+
+        $name = $this->conn->quote_name('name');
+        $addr = $this->conn->quote_name('address');
+        $city = $this->conn->quote_name('city');
+
+        $expected = "INSERT INTO venues ($name, $addr, $city) VALUES (?, ?, ?), (?, ?, ?) "
+            . $this->conn->upsert_conflict_clause(['name', 'address'], ['city']);
+
+        $this->assert_equals($expected, (string) $sql);
+    }
+
+    public function test_build_upsert_empty_update_omits_conflict_clause()
+    {
+        $sql = new SQLBuilder($this->conn, 'venues');
+        $sql->upsert(['name', 'address'], 1, ['name', 'address'], []);
+
+        $name = $this->conn->quote_name('name');
+        $addr = $this->conn->quote_name('address');
+
+        $this->assert_equals("INSERT INTO venues ($name, $addr) VALUES (?, ?)", (string) $sql);
+    }
 };
