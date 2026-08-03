@@ -21,7 +21,7 @@ Flight::upsert([
 ], unique_by: ['departure', 'destination'], update: ['price']);
 echo "Oakland->San Diego price is now: " . Flight::find_by_departure('Oakland')->price . "\n";
 
-// 2. Omit `update` -> every provided column is overwritten on conflict.
+// 2. Omit `update` -> every provided column except `created_at` is overwritten on conflict.
 Flight::upsert([
     ['departure' => 'Chicago', 'destination' => 'New York', 'price' => 175],
 ], unique_by: ['departure', 'destination']);
