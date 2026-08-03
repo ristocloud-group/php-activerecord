@@ -404,19 +404,52 @@ class Table
         }
         unset($row);
 
-        $sql = new SQLBuilder($this->conn, $this->get_fully_qualified_table_name());
-        $sql->upsert($columns, count($values), $unique_by, $update);
+        $max = $this->conn::$MAX_BIND_PARAMS;
+        $column_count = count($columns);
 
-        $bind = [];
-        foreach ($values as $row) {
-            foreach ($columns as $column) {
-                $bind[] = $row[$column];
-            }
+        if ($column_count > $max) {
+            throw new ActiveRecordException(
+                "upsert: a row has more columns ($column_count) than the adapter's bind-parameter limit ($max)."
+            );
         }
 
-        $sth = $this->conn->query(($this->last_sql = $sql->to_s()), $bind);
+        $chunk_size = intdiv($max, $column_count);
+        $chunks = array_chunk($values, $chunk_size);
 
-        return $sth->rowCount();
+        $use_transaction = count($chunks) > 1 && !$this->conn->inTransaction();
+        if ($use_transaction) {
+            $this->conn->transaction();
+        }
+
+        $affected = 0;
+
+        try {
+            foreach ($chunks as $chunk) {
+                $sql = new SQLBuilder($this->conn, $this->get_fully_qualified_table_name());
+                $sql->upsert($columns, count($chunk), $unique_by, $update);
+
+                $bind = [];
+                foreach ($chunk as $row) {
+                    foreach ($columns as $column) {
+                        $bind[] = $row[$column];
+                    }
+                }
+
+                $sth = $this->conn->query(($this->last_sql = $sql->to_s()), $bind);
+                $affected += $sth->rowCount();
+            }
+
+            if ($use_transaction) {
+                $this->conn->commit();
+            }
+        } catch (\Exception $e) {
+            if ($use_transaction) {
+                $this->conn->rollback();
+            }
+            throw $e;
+        }
+
+        return $affected;
     }
 
     public function update(&$data, $where)

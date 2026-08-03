@@ -177,4 +177,93 @@ abstract class UpsertTest extends DatabaseTest
             $this->assert_true(str_contains($sql, 'EXCLUDED.'));
         }
     }
+
+    public function test_upsert_chunks_large_batch_and_sums_affected()
+    {
+        $cls = get_class($this->conn);
+        $prev = $cls::$MAX_BIND_PARAMS;
+        $cls::$MAX_BIND_PARAMS = 6; // 3 columns -> chunk_size 2
+
+        try {
+            $rows = [];
+            for ($i = 0; $i < 5; $i++) {
+                $rows[] = ['name' => "Chunked $i", 'address' => "Addr $i", 'city' => "City $i"];
+            }
+            $affected = Venue::upsert($rows, ['name', 'address']);
+
+            $this->assert_equals(5, count(Venue::find('all', ['conditions' => "name LIKE 'Chunked %'"])));
+            $this->assert_true($affected >= 5);
+        } finally {
+            $cls::$MAX_BIND_PARAMS = $prev;
+        }
+    }
+
+    public function test_upsert_rolls_back_all_chunks_on_failure()
+    {
+        // authors rows carry author_id,name,created_at,updated_at = 4 columns after
+        // timestamp injection, so a limit of 8 gives chunk_size 2 -> 2 chunks for 3 rows.
+        $cls = get_class($this->conn);
+        $prev = $cls::$MAX_BIND_PARAMS;
+        $cls::$MAX_BIND_PARAMS = 8;
+
+        try {
+            $original = Author::find(1)->name; // fixture 'Tito'
+
+            // Chunk 1 updates author 1 and inserts author 950; chunk 2 fails because
+            // authors.name is NOT NULL on every adapter.
+            $threw = false;
+            try {
+                Author::upsert([
+                    ['author_id' => 1,   'name' => 'CHANGED'],
+                    ['author_id' => 950, 'name' => 'Ok'],
+                    ['author_id' => 951, 'name' => null], // NOT NULL violation -> error
+                ], 'author_id', ['name']);
+            } catch (ActiveRecord\DatabaseException $e) {
+                $threw = true;
+            }
+
+            $this->assert_true($threw);
+            $this->assert_equals($original, Author::find(1)->name); // chunk 1 rolled back
+            // Model::find($pk) throws RecordNotFound rather than returning null;
+            // find('first', ...) is the codebase's convention for a nullable lookup.
+            $this->assert_null(Author::find('first', ['conditions' => 'author_id = 950'])); // chunk 1 rolled back
+        } finally {
+            $cls::$MAX_BIND_PARAMS = $prev;
+        }
+    }
+
+    public function test_upsert_joins_caller_transaction_and_rolls_back()
+    {
+        $cls = get_class($this->conn);
+        $prev = $cls::$MAX_BIND_PARAMS;
+        $cls::$MAX_BIND_PARAMS = 6;
+
+        try {
+            $this->conn->transaction();
+            Venue::upsert([
+                ['name' => 'Txn A', 'address' => 'TA', 'city' => 'x'],
+                ['name' => 'Txn B', 'address' => 'TB', 'city' => 'y'],
+                ['name' => 'Txn C', 'address' => 'TC', 'city' => 'z'],
+            ], ['name', 'address']);
+            $this->conn->rollback();
+
+            $this->assert_null(Venue::find_by_name('Txn A'));
+        } finally {
+            $cls::$MAX_BIND_PARAMS = $prev;
+        }
+    }
+
+    public function test_upsert_throws_when_columns_exceed_limit()
+    {
+        $cls = get_class($this->conn);
+        $prev = $cls::$MAX_BIND_PARAMS;
+        $cls::$MAX_BIND_PARAMS = 2; // fewer than the 3 columns
+
+        try {
+            $this->expectException(ActiveRecord\ActiveRecordException::class);
+            Venue::upsert([['name' => 'A', 'address' => 'B', 'city' => 'C']], ['name', 'address']);
+        } finally {
+            $cls::$MAX_BIND_PARAMS = $prev;
+        }
+    }
 }
