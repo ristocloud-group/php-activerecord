@@ -29,6 +29,9 @@ class RecordNotFound extends ActiveRecordException {};
  */
 class DatabaseException extends ActiveRecordException
 {
+    /**
+     * @param Connection|\PDOStatement|string $adapter_or_string_or_mystery
+     */
     public function __construct($adapter_or_string_or_mystery)
     {
         if ($adapter_or_string_or_mystery instanceof Connection) {
@@ -86,6 +89,7 @@ class UndefinedPropertyException extends ModelException
     /**
      * Sets the exception message to show the undefined property's name.
      *
+     * @param string $class_name name of the model the property was accessed on
      * @param string|array<string> $property_name name of undefined property
      * @return void
      */
