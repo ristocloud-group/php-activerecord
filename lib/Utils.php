@@ -38,7 +38,7 @@ namespace ActiveRecord;
 
 use Closure;
 
-function classify($class_name, $singularize = false)
+function classify(string $class_name, bool $singularize = false): string
 {
     if ($singularize) {
         $class_name = Utils::singularize($class_name);
@@ -49,7 +49,11 @@ function classify($class_name, $singularize = false)
 }
 
 // http://snippets.dzone.com/posts/show/4660
-function array_flatten(array $array)
+/**
+ * @param list<mixed> $array
+ * @return list<mixed>
+ */
+function array_flatten(array $array): array
 {
     $i = 0;
 
@@ -66,7 +70,7 @@ function array_flatten(array $array)
 /**
  * Somewhat naive way to determine if an array is a hash.
  */
-function is_hash(&$array)
+function is_hash(mixed &$array): bool
 {
     if (!is_array($array)) {
         return false;
@@ -96,7 +100,10 @@ function denamespace($class_name)
     return $class_name;
 }
 
-function get_namespaces($class_name)
+/**
+ * @return list<string>|null
+ */
+function get_namespaces(string $class_name): ?array
 {
     if (has_namespace($class_name)) {
         return explode('\\', $class_name);
@@ -104,7 +111,7 @@ function get_namespaces($class_name)
     return null;
 }
 
-function has_namespace($class_name)
+function has_namespace(string $class_name): bool
 {
     if (strpos($class_name, '\\') !== false) {
         return true;
@@ -112,7 +119,7 @@ function has_namespace($class_name)
     return false;
 }
 
-function has_absolute_namespace($class_name)
+function has_absolute_namespace(string $class_name): bool
 {
     if (strpos($class_name, '\\') === 0) {
         return true;
@@ -122,11 +129,11 @@ function has_absolute_namespace($class_name)
 
 /**
  * Returns true if all values in $haystack === $needle
- * @param $needle
- * @param $haystack
+ * @param mixed $needle
+ * @param array<mixed> $haystack
  * @return bool
  */
-function all($needle, array $haystack)
+function all($needle, array $haystack): bool
 {
     foreach ($haystack as $value) {
         if ($value !== $needle) {
@@ -136,7 +143,12 @@ function all($needle, array $haystack)
     return true;
 }
 
-function collect(&$enumerable, $name_or_closure)
+/**
+ * @param array<int|string, mixed> $enumerable
+ * @param string|Closure $name_or_closure
+ * @return list<mixed>
+ */
+function collect(&$enumerable, $name_or_closure): array
 {
     $ret = [];
 
@@ -152,8 +164,12 @@ function collect(&$enumerable, $name_or_closure)
 
 /**
  * Wrap string definitions (if any) into arrays.
+ *
+ * @param array<int|string, mixed>|string $strings
+ * @param-out array<int|string, mixed> $strings
+ * @return array<int|string, mixed>
  */
-function wrap_strings_in_arrays(&$strings)
+function wrap_strings_in_arrays(&$strings): array
 {
     if (!is_array($strings)) {
         $strings = [[$strings]];
@@ -174,11 +190,21 @@ function wrap_strings_in_arrays(&$strings)
  */
 class Utils
 {
+    /**
+     * @param array<int, mixed> $options
+     * @return array<array-key, mixed>
+     */
     public static function extract_options($options)
     {
         return is_array(end($options)) ? end($options) : [];
     }
 
+    /**
+     * @param array<int|string, mixed> $conditions
+     * @param array<int, mixed>|string $condition
+     * @param string $conjuction
+     * @return array<int|string, mixed>
+     */
     public static function add_condition(&$conditions, $condition, $conjuction = 'AND')
     {
         if (is_array($condition)) {
@@ -195,6 +221,10 @@ class Utils
         return $conditions;
     }
 
+    /**
+     * @param string $attr
+     * @return string
+     */
     public static function human_attribute($attr)
     {
         $inflector = Inflector::instance();
@@ -204,11 +234,20 @@ class Utils
         return ucfirst(str_replace('_', ' ', $normal));
     }
 
+    /**
+     * @param int|float $number
+     * @return int
+     */
     public static function is_odd($number)
     {
         return $number & 1;
     }
 
+    /**
+     * @param string $type
+     * @param mixed $var
+     * @return bool
+     */
     public static function is_a($type, $var)
     {
         switch ($type) {
@@ -222,12 +261,17 @@ class Utils
         return false;
     }
 
+    /**
+     * @param mixed $var
+     * @return bool
+     */
     public static function is_blank($var)
     {
         return is_null($var) || 0 === strlen($var);
     }
 
-    private static $plural = [
+    /** @var array<string, string> */
+    private static array $plural = [
         '/(quiz)$/i'               => "$1zes",
         '/^(ox)$/i'                => "$1en",
         '/([m|l])ouse$/i'          => "$1ice",
@@ -249,7 +293,8 @@ class Utils
         '/$/'                      => "s",
     ];
 
-    private static $singular = [
+    /** @var array<string, string> */
+    private static array $singular = [
         '/(quiz)zes$/i'             => "$1",
         '/(matr)ices$/i'            => "$1ix",
         '/(vert|ind)ices$/i'        => "$1ex",
@@ -281,7 +326,8 @@ class Utils
         '/s$/i'                     => "",
     ];
 
-    private static $irregular = [
+    /** @var array<string, string> */
+    private static array $irregular = [
         'move'   => 'moves',
         'foot'   => 'feet',
         'goose'  => 'geese',
@@ -292,7 +338,8 @@ class Utils
         'person' => 'people',
     ];
 
-    private static $uncountable = [
+    /** @var list<string> */
+    private static array $uncountable = [
         'sheep',
         'fish',
         'deer',
@@ -304,6 +351,10 @@ class Utils
         'equipment',
     ];
 
+    /**
+     * @param string $string
+     * @return string|null
+     */
     public static function pluralize($string)
     {
         // save some time in the case that singular and plural are the same
@@ -330,6 +381,10 @@ class Utils
         return $string;
     }
 
+    /**
+     * @param string $string
+     * @return string|null
+     */
     public static function singularize($string)
     {
         // save some time in the case that singular and plural are the same
@@ -356,6 +411,11 @@ class Utils
         return $string;
     }
 
+    /**
+     * @param int $count
+     * @param string $string
+     * @return string|null
+     */
     public static function pluralize_if($count, $string)
     {
         if ($count == 1) {
@@ -365,6 +425,11 @@ class Utils
         }
     }
 
+    /**
+     * @param string $char
+     * @param string $string
+     * @return string|null
+     */
     public static function squeeze($char, $string)
     {
         return preg_replace("/$char+/", $char, $string);
