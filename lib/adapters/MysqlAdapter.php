@@ -117,5 +117,4 @@ class MysqlAdapter extends Connection
 
         return 'ON DUPLICATE KEY UPDATE ' . implode(', ', $sets);
     }
-
 }

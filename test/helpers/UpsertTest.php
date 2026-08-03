@@ -253,6 +253,33 @@ abstract class UpsertTest extends DatabaseTest
         }
     }
 
+    public function test_upsert_joins_caller_transaction_and_commits()
+    {
+        $cls = get_class($this->conn);
+        $prev = $cls::$MAX_BIND_PARAMS;
+        $cls::$MAX_BIND_PARAMS = 6;
+
+        try {
+            $this->conn->transaction();
+            Venue::upsert([
+                ['name' => 'Commit A', 'address' => 'CA', 'city' => 'x'],
+                ['name' => 'Commit B', 'address' => 'CB', 'city' => 'y'],
+                ['name' => 'Commit C', 'address' => 'CC', 'city' => 'z'],
+            ], ['name', 'address']);
+            $this->conn->commit();
+
+            $this->assert_not_null(Venue::find_by_name('Commit A'));
+        } finally {
+            $cls::$MAX_BIND_PARAMS = $prev;
+        }
+    }
+
+    public function test_upsert_zero_columns_throws()
+    {
+        $this->expectException(ActiveRecord\ActiveRecordException::class);
+        Venue::upsert([[]], 'name');
+    }
+
     public function test_upsert_throws_when_columns_exceed_limit()
     {
         $cls = get_class($this->conn);

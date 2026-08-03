@@ -348,7 +348,7 @@ class Table
         return $this->conn->query(($this->last_sql = $sql->to_s()), $values);
     }
 
-    public function upsert(array $values, $unique_by, ?array $update = null): int
+    public function upsert(array $values, array|string $unique_by, ?array $update = null): int
     {
         $unique_by = is_array($unique_by) ? $unique_by : [$unique_by];
 
@@ -407,6 +407,10 @@ class Table
         $max = $this->conn::$MAX_BIND_PARAMS;
         $column_count = count($columns);
 
+        if ($column_count === 0) {
+            throw new ActiveRecordException('upsert requires at least one column.');
+        }
+
         if ($column_count > $max) {
             throw new ActiveRecordException(
                 "upsert: a row has more columns ($column_count) than the adapter's bind-parameter limit ($max)."
@@ -442,7 +446,7 @@ class Table
             if ($use_transaction) {
                 $this->conn->commit();
             }
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             if ($use_transaction) {
                 $this->conn->rollback();
             }
