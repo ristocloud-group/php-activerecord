@@ -266,4 +266,23 @@ abstract class UpsertTest extends DatabaseTest
             $cls::$MAX_BIND_PARAMS = $prev;
         }
     }
+
+    public function test_upsert_empty_update_does_plain_insert()
+    {
+        Venue::upsert([['name' => 'PlainInsert', 'address' => 'PI St', 'city' => 'PI']], ['name', 'address'], []);
+        $this->assert_equals('PI', Venue::find_by_name('PlainInsert')->city);
+
+        $sql = $this->conn->last_query;
+        $this->assert_true(!str_contains($sql, 'ON CONFLICT'));
+        $this->assert_true(!str_contains($sql, 'ON DUPLICATE'));
+    }
+
+    public function test_upsert_empty_update_errors_on_duplicate()
+    {
+        $this->expectException(ActiveRecord\DatabaseException::class);
+        // Row 1 already exists on the UNIQUE(name,address) index.
+        Venue::upsert([
+            ['name' => 'Blender Theater at Gramercy', 'address' => '127 East 23rd Street', 'city' => 'Dupe'],
+        ], ['name', 'address'], []);
+    }
 }
