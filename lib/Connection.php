@@ -74,6 +74,12 @@ abstract class Connection
      * @var int
      */
     public static $DEFAULT_PORT = 0;
+    /**
+     * Maximum number of bind parameters allowed in a single prepared statement.
+     * Used by Table::upsert() to chunk large batches. Each concrete adapter
+     * declares its own so tests can override one adapter without affecting others.
+     */
+    public static $MAX_BIND_PARAMS = 65535;
 
     /**
      * Retrieve a database connection.

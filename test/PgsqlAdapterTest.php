@@ -41,4 +41,9 @@ class PgsqlAdapterTest extends AdapterTest
     {
         $this->assert_equals(3, $this->conn->query_column_info("user_newsletters")->rowCount());
     }
+
+    public function test_max_bind_params_default()
+    {
+        $this->assert_equals(65535, $this->conn::$MAX_BIND_PARAMS);
+    }
 }

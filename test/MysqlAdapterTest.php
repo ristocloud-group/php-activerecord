@@ -43,4 +43,9 @@ class MysqlAdapterTest extends AdapterTest
         $roundtrip = $this->conn->string_to_datetime($this->conn->datetime_to_string($datetime));
         $this->assert_equals($datetime->getTimestamp(), $roundtrip->getTimestamp());
     }
+
+    public function test_max_bind_params_default()
+    {
+        $this->assert_equals(65535, $this->conn::$MAX_BIND_PARAMS);
+    }
 }
