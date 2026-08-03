@@ -11,6 +11,7 @@
             <directory>./test/</directory>
             <exclude>./test/helpers/DatabaseTest.php</exclude>
             <exclude>./test/helpers/AdapterTest.php</exclude>
+            <exclude>./test/helpers/UpsertTest.php</exclude>
         </testsuite>
     </testsuites>
     <source>

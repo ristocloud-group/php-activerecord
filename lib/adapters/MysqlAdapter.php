@@ -15,6 +15,8 @@ class MysqlAdapter extends Connection
 {
     public static $DEFAULT_PORT = 3306;
 
+    public static $MAX_BIND_PARAMS = 65535;
+
     public static $datetime_format = 'Y-m-d H:i:s';
 
     public function limit($sql, $offset, $limit)
@@ -96,4 +98,23 @@ class MysqlAdapter extends Connection
         ];
     }
 
+    /**
+     * MySQL/MariaDB ignore the conflict target and rely on the table's PRIMARY/
+     * UNIQUE indexes. VALUES(col) is the portable form: the AS-alias syntax added
+     * in MySQL 8.0.19 is not supported by MariaDB, which reuses this adapter.
+     *
+     * @param string[] $unique Ignored on MySQL/MariaDB
+     * @param string[] $update Column names to overwrite on conflict
+     * @return string
+     */
+    public function upsert_conflict_clause(array $unique, array $update): string
+    {
+        $sets = [];
+        foreach ($update as $column) {
+            $q = $this->quote_name($column);
+            $sets[] = "$q = VALUES($q)";
+        }
+
+        return 'ON DUPLICATE KEY UPDATE ' . implode(', ', $sets);
+    }
 }

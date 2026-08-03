@@ -798,6 +798,21 @@ class Model
     }
 
     /**
+     * Bulk insert-or-update. Faithful to Laravel Eloquent's upsert: a single
+     * atomic operation that bypasses validations, callbacks and dirty-tracking.
+     *
+     * @param array<array<string,mixed>> $values Rows to insert/update (identical keys)
+     * @param array<string>|string $unique_by Column(s) identifying a record
+     * @param array<string>|null $update Columns to overwrite on conflict; null = all
+     *   inserted columns; [] = plain insert (error on duplicates)
+     * @return int Affected row count (summed across chunks)
+     */
+    public static function upsert(array $values, array|string $unique_by, ?array $update = null): int
+    {
+        return static::table()->upsert($values, $unique_by, $update);
+    }
+
+    /**
      * Save the model to the database.
      *
      * This function will automatically determine if an INSERT or UPDATE needs to occur.

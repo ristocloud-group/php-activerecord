@@ -17,6 +17,10 @@ class SqliteAdapter extends Connection
 {
     public static $datetime_format = 'Y-m-d H:i:s';
 
+    // SQLITE_MAX_VARIABLE_NUMBER is 999 before SQLite 3.32.0 and 32766 after,
+    // and is not readily queryable via PDO — use the safe lower bound.
+    public static $MAX_BIND_PARAMS = 999;
+
     protected function __construct($info)
     {
         if (!file_exists($info->host)) {

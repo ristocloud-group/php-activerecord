@@ -41,4 +41,24 @@ class PgsqlAdapterTest extends AdapterTest
     {
         $this->assert_equals(3, $this->conn->query_column_info("user_newsletters")->rowCount());
     }
+
+    public function test_max_bind_params_default()
+    {
+        $this->assert_equals(65535, $this->conn::$MAX_BIND_PARAMS);
+    }
+
+    public function test_upsert_conflict_clause_uses_on_conflict_excluded()
+    {
+        $clause = $this->conn->upsert_conflict_clause(['name', 'address'], ['city', 'phone']);
+
+        $name  = $this->conn->quote_name('name');
+        $addr  = $this->conn->quote_name('address');
+        $city  = $this->conn->quote_name('city');
+        $phone = $this->conn->quote_name('phone');
+
+        $this->assert_equals(
+            "ON CONFLICT ($name, $addr) DO UPDATE SET $city = EXCLUDED.$city, $phone = EXCLUDED.$phone",
+            $clause
+        );
+    }
 }

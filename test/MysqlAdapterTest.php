@@ -43,4 +43,23 @@ class MysqlAdapterTest extends AdapterTest
         $roundtrip = $this->conn->string_to_datetime($this->conn->datetime_to_string($datetime));
         $this->assert_equals($datetime->getTimestamp(), $roundtrip->getTimestamp());
     }
+
+    public function test_max_bind_params_default()
+    {
+        $this->assert_equals(65535, $this->conn::$MAX_BIND_PARAMS);
+    }
+
+    public function test_upsert_conflict_clause_uses_on_duplicate_key_update()
+    {
+        // MySQL/MariaDB ignore the unique columns and use the table's indexes.
+        $clause = $this->conn->upsert_conflict_clause(['ignored'], ['city', 'phone']);
+
+        $city  = $this->conn->quote_name('city');
+        $phone = $this->conn->quote_name('phone');
+
+        $this->assert_equals(
+            "ON DUPLICATE KEY UPDATE $city = VALUES($city), $phone = VALUES($phone)",
+            $clause
+        );
+    }
 }

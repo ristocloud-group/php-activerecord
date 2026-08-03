@@ -29,6 +29,7 @@ require_once 'SnakeCase_PHPUnit_Framework_TestCase.php';
 
 require_once 'DatabaseTest.php';
 require_once 'AdapterTest.php';
+require_once 'UpsertTest.php';
 
 require_once __DIR__ . '/../../ActiveRecord.php';
 

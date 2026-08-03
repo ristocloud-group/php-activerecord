@@ -80,4 +80,9 @@ class SqliteAdapterTest extends AdapterTest
 
     #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function test_i_have_a_default_port() {}
+
+    public function test_max_bind_params_is_conservative()
+    {
+        $this->assert_equals(999, $this->conn::$MAX_BIND_PARAMS);
+    }
 }

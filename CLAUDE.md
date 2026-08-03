@@ -16,6 +16,7 @@ Adapter support / priorities:
 - **MariaDB** — supported and tested. It reuses `MysqlAdapter` (its connection string uses the `mysql://` protocol, same as MySQL); `MariadbAdapterTest` extends `MysqlAdapterTest` and runs the same battery.
 - **Postgres** and **SQLite** — supported and tested (Postgres in CI, SQLite used heavily in tests). Keep them working; don't break them.
 - **Oracle (`oci`)** — **removed in v1.8.0.** The adapter was incomplete and never used. A residual `oci://` connection string now throws a clear `DatabaseException` from `Connection::load_adapter_class()`. Do not reintroduce it.
+- Supported minimums (policy, not enforced by `composer.json`): MySQL 8+ and MariaDB 10.11+.
 
 ## Commands
 

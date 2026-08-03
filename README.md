@@ -36,12 +36,12 @@ Of course, there are some differences which will be obvious to the user if they 
 
 ## Supported Databases ##
 
-- **MySQL** — the primary production target
-- **MariaDB**
+- **MySQL** — the primary production target. Supported minimum: MySQL 8+.
+- **MariaDB** — supported minimum: MariaDB 10.11+.
 - **PostgreSQL**
 - **SQLite**
 
-Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 9.7, MariaDB 11.4, PostgreSQL 18 and SQLite. The Oracle (`oci`) adapter was removed in v1.8.0.
+These are policy minimums; `composer.json` carries no database-version constraint. Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 9.7, MariaDB 11.4, PostgreSQL 18 and SQLite. The Oracle (`oci`) adapter was removed in v1.8.0.
 
 ## Features ##
 
@@ -242,6 +242,32 @@ $post->delete();
 # DELETE FROM `posts` WHERE id=1
 echo $post->title; # 'New real title'
 ```
+
+### Upsert ###
+`Model::upsert()` inserts or updates many rows in one atomic, bulk operation
+(modeled on Laravel Eloquent). It bypasses validations, callbacks and
+dirty-tracking. The second argument names the column(s) that identify a record;
+the optional third argument lists the columns to overwrite on conflict (all
+inserted columns except `created_at` when omitted). `created_at`/`updated_at`
+are managed automatically when those columns exist; if the table has
+`updated_at`, it is appended to the update list automatically whenever an
+update happens, even if you didn't list it in the third argument.
+
+```php
+Flight::upsert([
+    ['departure' => 'Oakland', 'destination' => 'San Diego', 'price' => 99],
+    ['departure' => 'Chicago', 'destination' => 'New York', 'price' => 150],
+], unique_by: ['departure', 'destination'], update: ['price']);
+# The `flights` table has an `updated_at` column, so it is appended to the
+# update list automatically even though only `price` was requested:
+# MySQL/MariaDB: INSERT ... VALUES (...),(...) ON DUPLICATE KEY UPDATE `price` = VALUES(`price`), `updated_at` = VALUES(`updated_at`)
+# Postgres:      INSERT ... VALUES (...),(...) ON CONFLICT ("departure", "destination") DO UPDATE SET "price" = EXCLUDED."price", "updated_at" = EXCLUDED."updated_at"
+# SQLite uses the same ON CONFLICT ... EXCLUDED form as Postgres, with identifiers quoted in backticks.
+```
+
+On MySQL/MariaDB the `unique_by` columns are ignored and the table's PRIMARY/UNIQUE
+indexes are used. Large batches are chunked automatically and run inside a
+transaction. A full runnable example lives in [`examples/upsert/`](examples/upsert/).
 
 ## Contributing ##
 

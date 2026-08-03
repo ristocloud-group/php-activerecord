@@ -74,6 +74,12 @@ abstract class Connection
      * @var int
      */
     public static $DEFAULT_PORT = 0;
+    /**
+     * Maximum number of bind parameters allowed in a single prepared statement.
+     * Used by Table::upsert() to chunk large batches. Each concrete adapter
+     * declares its own so tests can override one adapter without affecting others.
+     */
+    public static $MAX_BIND_PARAMS = 65535;
 
     /**
      * Retrieve a database connection.
@@ -458,6 +464,27 @@ abstract class Connection
     {
         return $string[0] === static::$QUOTE_CHARACTER || $string[strlen($string) - 1] === static::$QUOTE_CHARACTER
             ? $string : static::$QUOTE_CHARACTER . $string . static::$QUOTE_CHARACTER;
+    }
+
+    /**
+     * Builds the standard-SQL conflict clause for an upsert (used by Postgres and
+     * SQLite). MysqlAdapter overrides this with ON DUPLICATE KEY UPDATE.
+     *
+     * @param string[] $unique Column names forming the conflict target
+     * @param string[] $update Column names to overwrite on conflict
+     * @return string
+     */
+    public function upsert_conflict_clause(array $unique, array $update): string
+    {
+        $target = implode(', ', array_map([$this, 'quote_name'], $unique));
+
+        $sets = [];
+        foreach ($update as $column) {
+            $q = $this->quote_name($column);
+            $sets[] = "$q = EXCLUDED.$q";
+        }
+
+        return "ON CONFLICT ($target) DO UPDATE SET " . implode(', ', $sets);
     }
 
     /**

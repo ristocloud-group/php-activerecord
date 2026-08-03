@@ -15,6 +15,7 @@ class PgsqlAdapter extends Connection
 {
     public static $QUOTE_CHARACTER = '"';
     public static $DEFAULT_PORT = 5432;
+    public static $MAX_BIND_PARAMS = 65535;
 
     public function supports_sequences()
     {
