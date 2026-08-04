@@ -197,7 +197,7 @@ class Validations
 
         foreach ($attrs as $attr) {
             $options = array_merge($configuration, $attr);
-            $this->record->add_on_blank($options[0], $options['message']);
+            $this->record->add_on_blank($options[0] ?? '', $options['message']);
         }
     }
 
@@ -274,7 +274,7 @@ class Validations
 
         foreach ($attrs as $attr) {
             $options = array_merge($configuration, $attr);
-            $attribute = $options[0];
+            $attribute = $options[0] ?? '';
             $var = $this->model->$attribute;
 
             if (isset($options['in'])) {
@@ -338,7 +338,7 @@ class Validations
         // (if only_integer is false) or applying it to the regular expression /\A[+\-]?\d+\Z/ (if only_integer is set to true).
         foreach ($attrs as $attr) {
             $options = array_merge($configuration, $attr);
-            $attribute = $options[0];
+            $attribute = $options[0] ?? '';
             $var = $this->model->$attribute;
 
             $numericalityOptions = array_intersect_key(self::$ALL_NUMERICALITY_CHECKS, $options);
@@ -435,7 +435,7 @@ class Validations
 
         foreach ($attrs as $attr) {
             $options = array_merge($configuration, $attr);
-            $attribute = $options[0];
+            $attribute = $options[0] ?? '';
             $var = $this->model->$attribute;
 
             if (is_null($options['with']) || !is_string($options['with'])) {
@@ -503,7 +503,7 @@ class Validations
                     throw new ValidationsArgumentError('Too many range options specified.  Choose only one.');
             }
 
-            $attribute = $options[0];
+            $attribute = $options[0] ?? '';
             $var = $this->model->$attribute;
             if ($this->is_null_with_option($var, $options) || $this->is_blank_with_option($var, $options)) {
                 continue;
@@ -597,12 +597,13 @@ class Validations
             $pk = $this->model->get_primary_key();
             $pk_value = $this->model->{$pk[0]};
 
-            if (is_array($options[0])) {
-                $add_record = join("_and_", $options[0]);
-                $fields = $options[0];
+            $field_config = $options[0] ?? '';
+            if (is_array($field_config)) {
+                $add_record = join("_and_", $field_config);
+                $fields = $field_config;
             } else {
-                $add_record = $options[0];
-                $fields = [$options[0]];
+                $add_record = $field_config;
+                $fields = [$field_config];
             }
 
             $sql = "";
