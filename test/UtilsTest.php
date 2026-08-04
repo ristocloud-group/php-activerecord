@@ -97,6 +97,20 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals($class_names, $good_class_names);
     }
 
+    public function test_pluralize()
+    {
+        // exercises the regex-transform branches whose preg_replace result is
+        // now coalesced to a guaranteed string (never null)
+        $this->assert_equals('order_statuses', AR\Utils::pluralize('order_status'));
+        $this->assert_equals('os_types', AR\Utils::pluralize('os_type'));
+        $this->assert_equals('photos', AR\Utils::pluralize('photo'));
+        $this->assert_equals('passes', AR\Utils::pluralize('pass'));
+        // uncountable words are returned unchanged
+        $this->assert_equals('information', AR\Utils::pluralize('information'));
+        // contract: always a string, never null
+        $this->assert_true(is_string(AR\Utils::pluralize('photo')));
+    }
+
     public function test_singularize()
     {
         $this->assert_equals('order_status', AR\Utils::singularize('order_status'));

@@ -204,7 +204,7 @@ abstract class Connection
                 $info->db = $matches[2][0];
             }
         } elseif (substr($info->host, 0, 8) == 'windows(') {
-            $info->host = urldecode(substr($info->host, 8) . '/' . substr($info->db, 0, -1));
+            $info->host = urldecode(substr($info->host, 8) . '/' . substr($info->db ?? '', 0, -1));
             $info->db = null;
         }
 
@@ -531,6 +531,10 @@ abstract class Connection
         $errors = \DateTime::getLastErrors();
 
         if ($errors && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) {
+            return null;
+        }
+
+        if (false === $date) {
             return null;
         }
 
