@@ -17,44 +17,59 @@ namespace ActiveRecord;
  */
 class Table
 {
-    private static $cache = [];
+    /** @var array<string, self> */
+    private static array $cache = [];
 
+    /** @var \ReflectionClass<Model>|null */
     public $class;
     /** @var Connection|null */
     public $conn;
+    /** @var list<string> */
     public $pk;
+    /** @var string|null */
     public $last_sql;
 
-    // Name/value pairs of columns in this table
+    /**
+     * Name/value pairs of columns in this table
+     * @var array<string, Column>
+     */
     public $columns = [];
 
     /**
      * Name of the table.
+     * @var string|null
      */
     public $table;
 
     /**
      * Name of the database (optional)
+     * @var string|null
      */
     public $db_name;
 
     /**
      * Name of the sequence for this table (optional). Defaults to {$table}_seq
+     * @var string|null
      */
     public $sequence;
 
     /**
      * A instance of CallBack for this model/table
      * @static
-     * @var object ActiveRecord\CallBack
+     * @var CallBack|null
      */
     public $callback;
 
     /**
      * List of relationships for this table.
+     * @var array<string, AbstractRelationship>
      */
-    private $relationships = [];
+    private array $relationships = [];
 
+    /**
+     * @param string $model_class_name
+     * @return self
+     */
     public static function load($model_class_name)
     {
         if (!isset(self::$cache[$model_class_name])) {
@@ -67,6 +82,10 @@ class Table
         return self::$cache[$model_class_name];
     }
 
+    /**
+     * @param string|null $model_class_name
+     * @return void
+     */
     public static function clear_cache($model_class_name = null)
     {
         if ($model_class_name && array_key_exists($model_class_name, self::$cache)) {
@@ -76,6 +95,9 @@ class Table
         }
     }
 
+    /**
+     * @param string $class_name
+     */
     public function __construct($class_name)
     {
         $this->class = Reflections::instance()->add($class_name)->get($class_name);
@@ -97,6 +119,10 @@ class Table
         }, ['prepend' => true]);
     }
 
+    /**
+     * @param bool $close
+     * @return Connection
+     */
     public function reestablish_connection($close = true)
     {
         if ($close) {
@@ -109,6 +135,9 @@ class Table
         return ($this->conn = ConnectionManager::get_connection($connection));
     }
 
+    /**
+     * @return void
+     */
     public function drop_connection()
     {
         // if connection name property is null the connection manager will use the default connection
@@ -122,6 +151,10 @@ class Table
         $this->conn = null;
     }
 
+    /**
+     * @param list<string>|string $joins
+     * @return string
+     */
     public function create_joins($joins)
     {
         if (!is_array($joins)) {
@@ -160,6 +193,10 @@ class Table
         return $ret;
     }
 
+    /**
+     * @param array<string, mixed> $options
+     * @return SQLBuilder
+     */
     public function options_to_sql($options)
     {
         $table = array_key_exists('from', $options) ? $options['from'] : $this->get_fully_qualified_table_name();
@@ -217,6 +254,10 @@ class Table
         return $sql;
     }
 
+    /**
+     * @param array<string, mixed> $options
+     * @return list<Model>
+     */
     public function find($options)
     {
         $sql = $this->options_to_sql($options);
@@ -226,6 +267,13 @@ class Table
         return $this->find_by_sql($sql->to_s(), $sql->get_where_values(), $readonly, $eager_load);
     }
 
+    /**
+     * @param string $sql
+     * @param array<int, mixed>|null $values
+     * @param bool $readonly
+     * @param array<int|string, mixed>|string|null $includes
+     * @return list<Model>
+     */
     public function find_by_sql($sql, $values = null, $readonly = false, $includes = null)
     {
         $this->last_sql = $sql;
@@ -258,12 +306,12 @@ class Table
     /**
      * Executes an eager load of a given named relationship for this table.
      *
-     * @param $models array found modesl for this table
-     * @param $attrs array of attrs from $models
-     * @param $includes array eager load directives
+     * @param list<Model> $models found models for this table
+     * @param list<array<string, mixed>> $attrs attrs from $models
+     * @param array<int|string, mixed>|string $includes eager load directives
      * @return void
      */
-    private function execute_eager_load($models = [], $attrs = [], $includes = [])
+    private function execute_eager_load(array $models = [], array $attrs = [], array|string $includes = [])
     {
         if (!is_array($includes)) {
             $includes = [$includes];
@@ -283,6 +331,10 @@ class Table
         }
     }
 
+    /**
+     * @param string $inflected_name
+     * @return Column|null
+     */
     public function get_column_by_inflected_name($inflected_name)
     {
         foreach ($this->columns as $raw_name => $column) {
@@ -293,6 +345,10 @@ class Table
         return null;
     }
 
+    /**
+     * @param bool $quote_name
+     * @return string
+     */
     public function get_fully_qualified_table_name($quote_name = true)
     {
         $table = $quote_name ? $this->conn->quote_name($this->table) : $this->table;
@@ -308,8 +364,8 @@ class Table
      * Retrieve a relationship object for this table. Strict as true will throw an error
      * if the relationship name does not exist.
      *
-     * @param $name string name of Relationship
-     * @param $strict bool
+     * @param int|string $name name of Relationship
+     * @param bool $strict
      * @throws RelationshipException
      * @return AbstractRelationship|null
      */
@@ -329,7 +385,7 @@ class Table
     /**
      * Does a given relationship exist?
      *
-     * @param $name string name of Relationship
+     * @param int|string $name name of Relationship
      * @return bool
      */
     public function has_relationship($name)
@@ -337,6 +393,12 @@ class Table
         return array_key_exists($name, $this->relationships);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     * @param string|null $pk
+     * @param string|null $sequence_name
+     * @return mixed
+     */
     public function insert(&$data, $pk = null, $sequence_name = null)
     {
         $data = $this->process_data($data);
@@ -348,6 +410,11 @@ class Table
         return $this->conn->query(($this->last_sql = $sql->to_s()), $values);
     }
 
+    /**
+     * @param list<array<string, mixed>> $values
+     * @param string|list<string> $unique_by
+     * @param list<string>|null $update
+     */
     public function upsert(array $values, array|string $unique_by, ?array $update = null): int
     {
         $unique_by = is_array($unique_by) ? $unique_by : [$unique_by];
@@ -456,6 +523,11 @@ class Table
         return $affected;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     * @param array<string, mixed>|string $where
+     * @return mixed
+     */
     public function update(&$data, $where)
     {
         $data = $this->process_data($data);
@@ -467,6 +539,10 @@ class Table
         return $this->conn->query(($this->last_sql = $sql->to_s()), $values);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     * @return mixed
+     */
     public function delete($data)
     {
         $data = $this->process_data($data);
@@ -482,12 +558,16 @@ class Table
      * Add a relationship.
      *
      * @param AbstractRelationship $relationship a relationship object
+     * @return void
      */
-    private function add_relationship($relationship)
+    private function add_relationship(AbstractRelationship $relationship)
     {
         $this->relationships[$relationship->attribute_name] = $relationship;
     }
 
+    /**
+     * @return void
+     */
     private function get_meta_data()
     {
         // as more adapters are added probably want to do this a better way
@@ -504,11 +584,11 @@ class Table
     /**
      * Replaces any aliases used in a hash based condition.
      *
-     * @param $hash array A hash
-     * @param $map array Hash of used_name => real_name
-     * @return array Array with any aliases replaced with their read field name
+     * @param array<string, mixed> $hash A hash
+     * @param array<string, string> $map Hash of used_name => real_name
+     * @return array<string, mixed> Array with any aliases replaced with their read field name
      */
-    private function map_names(&$hash, &$map)
+    private function map_names(array &$hash, array &$map): array
     {
         $ret = [];
 
@@ -522,7 +602,12 @@ class Table
         return $ret;
     }
 
-    private function &process_data($hash)
+    /**
+     * @template T of array<int|string, mixed>|null
+     * @param T $hash
+     * @return T
+     */
+    private function &process_data(?array $hash): ?array
     {
         if (!$hash) {
             return $hash;
@@ -542,7 +627,7 @@ class Table
         return $hash;
     }
 
-    private function set_primary_key()
+    private function set_primary_key(): void
     {
         if (($pk = $this->class->getStaticPropertyValue('pk', null)) || ($pk = $this->class->getStaticPropertyValue('primary_key', null))) {
             $this->pk = is_array($pk) ? $pk : [$pk];
@@ -557,7 +642,7 @@ class Table
         }
     }
 
-    private function set_table_name()
+    private function set_table_name(): void
     {
         if (($table = $this->class->getStaticPropertyValue('table', null)) || ($table = $this->class->getStaticPropertyValue('table_name', null))) {
             $this->table = $table;
@@ -575,7 +660,7 @@ class Table
         }
     }
 
-    private function set_sequence_name()
+    private function set_sequence_name(): void
     {
         if (!$this->conn->supports_sequences()) {
             return;
@@ -586,7 +671,7 @@ class Table
         }
     }
 
-    private function set_associations()
+    private function set_associations(): void
     {
         require_once 'Relationship.php';
         $namespace = $this->class->getNamespaceName();
@@ -633,7 +718,7 @@ class Table
      *       'to'       => 'delegate_to_relationship',
      *       'prefix'	=> 'prefix')
      */
-    private function set_delegates()
+    private function set_delegates(): void
     {
         $delegates = $this->class->getStaticPropertyValue('delegate', []);
         $new = [];
@@ -674,7 +759,7 @@ class Table
     /**
      * @deprecated Model.php now checks for get|set_ methods via method_exists so there is no need for declaring static g|setters.
      */
-    private function set_setters_and_getters()
+    private function set_setters_and_getters(): void
     {
         $getters = $this->class->getStaticPropertyValue('getters', []);
         $setters = $this->class->getStaticPropertyValue('setters', []);
