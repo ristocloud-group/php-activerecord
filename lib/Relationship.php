@@ -603,11 +603,7 @@ class HasMany extends AbstractRelationship
      */
     private function inject_foreign_key_for_new_association(Model $model, array &$attributes): array
     {
-        // pre-existing: set_keys() expects a class name string; this passes the Model
-        // instance itself. Latent bug, not fixed here per task scope — see
-        // task-A9-report.md concerns. Likely should be set_keys(get_class($model)) as in load().
-        // @phpstan-ignore argument.type
-        $this->set_keys($model);
+        $this->set_keys(get_class($model));
         $primary_key = Inflector::instance()->variablize($this->foreign_key[0]);
 
         if (!isset($attributes[$primary_key])) {
