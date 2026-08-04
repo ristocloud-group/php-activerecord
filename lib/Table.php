@@ -20,7 +20,7 @@ class Table
     /** @var array<string, self> */
     private static array $cache = [];
 
-    /** @var \ReflectionClass<Model>|null */
+    /** @var \ReflectionClass<object>|null */
     public $class;
     /** @var Connection|null */
     public $conn;
