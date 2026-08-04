@@ -201,3 +201,32 @@ public function test_underscorify_returns_string()
 - **Nota su Reflections:36 (`class-string`):** è un `argument.type` che emerge a livello 8; se sopravvive al censimento C1 come bug reale diventa un PR-bug con la stessa struttura, altrimenti si risolve con `@param class-string $x` nella tipizzazione.
 - **Placeholder:** nessun TODO/TBD; i censimenti L7/L8 sono step d'azione reali (rigenerare la lista è necessario perché le righe si spostano dopo PR-A), non segnaposto.
 - **Coerenza tipi/nomi:** livelli e comandi coerenti; branch `phpstan/level-6|7|8`; ordine foglie→core rispettato.
+
+---
+
+## Esito PR-A (livello 6) — completato 2026-08-04
+
+PR-A eseguito task-per-task (A0–A14) su branch `phpstan/level-6`. **L'intera `lib/` è pulita al livello 6 su PHP 8.3 e 8.5**, baseline invariata a 6 voci (i due messaggi `is_array` di Config e Model riscritti per il testo, per la policy approvata), **zero `@phpstan-ignore`**, `composer run analyse`/`cs`/`test` verdi (883 test). Review finale di tutto il branch: **Ship**, nessun difetto Critical/Important.
+
+Due fix forzati dalla tipizzazione onesta, entrambi con test/verifica:
+- `Relationship::inject_foreign_key_for_new_association` → `set_keys(get_class($model))` (bug reale: prima passava il `Model`, TypeError quando la FK non era ancora inferita) + 2 test di regressione in `test/RelationshipTest.php`.
+- `Validations::validate` → invoca l'hook opzionale via `$model_reflection->getMethod('validate')->invoke(...)` (comportamento identico, nessuna soppressione).
+- `Table::$class` corretto a `\ReflectionClass<object>` (allineato a `Reflections::get()`; risolve un errore di varianza solo-8.5).
+
+### Item scoperti durante PR-A → per PR-B (liv.7), PR-C (liv.8) e i bug-PR
+
+Latenti/bug (candidati bug-PR con test):
+- **Inflector** `underscorify`/`keyify`/`tableize`/`variablize`: `@return string` ma `preg_replace` può dare `null` (è il **Bug 2** del piano).
+- **Utils** `is_odd()` ritorna `int` non `bool`; `pluralize`/`singularize`/`pluralize_if`/`squeeze` possono dare `null` senza guardia ai call-site.
+- **Connection** `string_to_datetime` (`DateTime|false`, **Bug 1**) e `substr` su `string|null` (~206, **Bug 3**) — emergono a L7/L8.
+- **Model** `to_json/to_xml/to_csv/to_array` return `array|string` vs firma — **Bug 4, BC-gated, STOP e chiedi**.
+- `Table::upsert(array|string $unique_by)` → `SQLBuilder::upsert(array)`: **verificato NON un bug vivo** — `Table::upsert` normalizza `is_array($unique_by) ? … : [$unique_by]` prima dell'uso. (Solo un `argument.type` che potrebbe apparire a L7 e va risolto con annotazione, non un fix.)
+
+Minor/accuratezza (da rifinire nei pass L7/L8, non bloccanti):
+- `DatabaseException` `@param` union omette `\Throwable`/`\Stringable` (passati dai call-site di Connection); allargare.
+- `Reflections::get` `@param string` troppo stretto (accetta anche `object`).
+- `XmlSerializer::xml_encode` `@return string` vs `preg_replace` null (L7/8).
+- PgsqlAdapter `create_column` allargato a `array<string,mixed>` (ambiguità protocollo testo pgsql).
+- `Memcache::write` senza default `$expire` (File/Redis usano `0`) — incoerenza di contratto pre-esistente.
+- `upsert_conflict_clause` (da PR#9) usa tipi nativi su metodo pubblico (pre-esistente).
+- Nit cosmetici: `SQLBuilder:367` `$new` dopo `@return`; `get_meta_data` senza `: void` nativo per coerenza; `wrap_strings_in_arrays` `@return` largo.
