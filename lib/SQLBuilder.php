@@ -13,31 +13,41 @@ namespace ActiveRecord;
  */
 class SQLBuilder
 {
-    private $connection;
-    private $operation = 'SELECT';
-    private $table;
-    private $select = '*';
-    private $joins;
-    private $order;
-    private $limit;
-    private $offset;
-    private $group;
-    private $having;
-    private $update;
+    private Connection $connection;
+    private string $operation = 'SELECT';
+    private string $table;
+    private string $select = '*';
+    private ?string $joins = null;
+    private ?string $order = null;
+    private ?int $limit = null;
+    private ?int $offset = null;
+    private ?string $group = null;
+    private ?string $having = null;
+    private ?string $update = null;
 
     // for where
-    private $where;
-    private $where_values = [];
+    private ?string $where = null;
+
+    /** @var list<mixed> */
+    private array $where_values = [];
 
     // for insert/update
-    private $data;
-    private $sequence;
+    /** @var array<string, mixed>|null */
+    private ?array $data = null;
+
+    /** @var array{0: string, 1: string}|null */
+    private ?array $sequence = null;
 
     // for upsert
-    private $upsert_columns;
-    private $upsert_row_count;
-    private $upsert_unique_by;
-    private $upsert_update;
+    /** @var list<string>|null */
+    private ?array $upsert_columns = null;
+    private ?int $upsert_row_count = null;
+
+    /** @var list<string>|null */
+    private ?array $upsert_unique_by = null;
+
+    /** @var list<string>|null */
+    private ?array $upsert_update = null;
 
     /**
      * Constructor.
@@ -82,7 +92,7 @@ class SQLBuilder
     /**
      * Returns the bind values.
      *
-     * @return array
+     * @return list<mixed>
      */
     public function bind_values()
     {
@@ -99,47 +109,77 @@ class SQLBuilder
         return array_flatten($ret);
     }
 
+    /**
+     * @return list<mixed>
+     */
     public function get_where_values()
     {
         return $this->where_values;
     }
 
+    /**
+     * @return $this
+     */
     public function where(/* (conditions, values) || (hash) */)
     {
         $this->apply_where_conditions(func_get_args());
         return $this;
     }
 
+    /**
+     * @param string|null $order
+     * @return $this
+     */
     public function order($order)
     {
         $this->order = $order;
         return $this;
     }
 
+    /**
+     * @param string|null $group
+     * @return $this
+     */
     public function group($group)
     {
         $this->group = $group;
         return $this;
     }
 
+    /**
+     * @param string|null $having
+     * @return $this
+     */
     public function having($having)
     {
         $this->having = $having;
         return $this;
     }
 
+    /**
+     * @param int|string $limit
+     * @return $this
+     */
     public function limit($limit)
     {
         $this->limit = intval($limit);
         return $this;
     }
 
+    /**
+     * @param int|string $offset
+     * @return $this
+     */
     public function offset($offset)
     {
         $this->offset = intval($offset);
         return $this;
     }
 
+    /**
+     * @param string $select
+     * @return $this
+     */
     public function select($select)
     {
         $this->operation = 'SELECT';
@@ -147,12 +187,22 @@ class SQLBuilder
         return $this;
     }
 
+    /**
+     * @param string|null $joins
+     * @return $this
+     */
     public function joins($joins)
     {
         $this->joins = $joins;
         return $this;
     }
 
+    /**
+     * @param array<string, mixed> $hash
+     * @param string|null $pk
+     * @param string|null $sequence_name
+     * @return $this
+     */
     public function insert($hash, $pk = null, $sequence_name = null)
     {
         if (!is_hash($hash)) {
@@ -169,6 +219,12 @@ class SQLBuilder
         return $this;
     }
 
+    /**
+     * @param list<string> $columns
+     * @param list<string> $unique_by
+     * @param list<string> $update
+     * @return $this
+     */
     public function upsert(array $columns, int $row_count, array $unique_by, array $update)
     {
         $this->operation = 'UPSERT';
@@ -180,11 +236,16 @@ class SQLBuilder
         return $this;
     }
 
+    /**
+     * @param array<string, mixed>|string $mixed
+     * @return $this
+     */
     public function update($mixed)
     {
         $this->operation = 'UPDATE';
 
         if (is_hash($mixed)) {
+            /** @var array<string, mixed> $mixed */
             $this->data = $mixed;
         } elseif (is_string($mixed)) {
             $this->update = $mixed;
@@ -195,6 +256,9 @@ class SQLBuilder
         return $this;
     }
 
+    /**
+     * @return $this
+     */
     public function delete()
     {
         $this->operation = 'DELETE';
@@ -204,6 +268,9 @@ class SQLBuilder
 
     /**
      * Reverses an order clause.
+     *
+     * @param string|null $order
+     * @return string|null
      */
     public static function reverse_order($order)
     {
@@ -231,11 +298,11 @@ class SQLBuilder
      * Converts a string like "id_and_name_or_z" into a conditions value like array("id=? AND name=? OR z=?", values, ...).
      *
      * @param Connection $connection
-     * @param $name Underscored string
-     * @param $values Array of values for the field names. This is used
+     * @param string $name Underscored string
+     * @param array<int, mixed> $values Array of values for the field names. This is used
      *   to determine what kind of bind marker to use: =?, IN(?), IS NULL
-     * @param $map A hash of "mapped_column_name" => "real_column_name"
-     * @return array|null A conditions array in the form array(sql_string, value1, value2,...)
+     * @param array<string, string>|null $map A hash of "mapped_column_name" => "real_column_name"
+     * @return list<mixed>|null A conditions array in the form array(sql_string, value1, value2,...)
      */
     public static function create_conditions_from_underscored_string(Connection $connection, $name, &$values = [], &$map = null)
     {
@@ -275,9 +342,9 @@ class SQLBuilder
      * Like create_conditions_from_underscored_string but returns a hash of name => value array instead.
      *
      * @param string $name A string containing attribute names connected with _and_ or _or_
-     * @param $args Array of values for each attribute in $name
-     * @param $map A hash of "mapped_column_name" => "real_column_name"
-     * @return array A hash of array(name => value, ...)
+     * @param array<int, mixed> $values Array of values for each attribute in $name
+     * @param array<string, string>|null $map A hash of "mapped_column_name" => "real_column_name"
+     * @return array<string, mixed> A hash of array(name => value, ...)
      */
     public static function create_hash_from_underscored_string($name, &$values = [], &$map = null)
     {
@@ -296,10 +363,10 @@ class SQLBuilder
      * prepends table name to hash of field names to get around ambiguous fields when SQL builder
      * has joins
      *
-     * @param array $hash
-     * @return array $new
+     * @param array<string, mixed> $hash
+     * @return array<string, mixed> $new
      */
-    private function prepend_table_name_to_fields($hash = [])
+    private function prepend_table_name_to_fields(array $hash = []): array
     {
         $new = [];
         $table = $this->connection->quote_name($this->table);
@@ -312,7 +379,10 @@ class SQLBuilder
         return $new;
     }
 
-    private function apply_where_conditions($args)
+    /**
+     * @param list<mixed> $args
+     */
+    private function apply_where_conditions(array $args): void
     {
         require_once 'Expressions.php';
         $num_args = count($args);
@@ -342,7 +412,7 @@ class SQLBuilder
         }
     }
 
-    private function build_delete()
+    private function build_delete(): string
     {
         $sql = "DELETE FROM $this->table";
 
@@ -363,7 +433,7 @@ class SQLBuilder
         return $sql;
     }
 
-    private function build_insert()
+    private function build_insert(): string
     {
         require_once 'Expressions.php';
         $keys = join(',', $this->quoted_key_names());
@@ -380,7 +450,7 @@ class SQLBuilder
         return $e->to_s();
     }
 
-    private function build_upsert()
+    private function build_upsert(): string
     {
         $keys = implode(', ', array_map([$this->connection, 'quote_name'], $this->upsert_columns));
 
@@ -396,7 +466,7 @@ class SQLBuilder
         return $sql;
     }
 
-    private function build_select()
+    private function build_select(): string
     {
         $sql = "SELECT $this->select FROM $this->table";
 
@@ -427,7 +497,7 @@ class SQLBuilder
         return $sql;
     }
 
-    private function build_update()
+    private function build_update(): string
     {
         if ($this->update) {
             $set = $this->update;
@@ -454,7 +524,10 @@ class SQLBuilder
         return $sql;
     }
 
-    private function quoted_key_names()
+    /**
+     * @return list<string>
+     */
+    private function quoted_key_names(): array
     {
         $keys = [];
 
