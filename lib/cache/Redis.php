@@ -28,8 +28,8 @@ class Redis
     private string $namespace;
 
     /**
-     * @param array $url     result of parse_url() on the redis:// string
-     * @param array $options the options array passed to set_cache()
+     * @param array<string, mixed> $url     result of parse_url() on the redis:// string
+     * @param array<string, mixed> $options the options array passed to set_cache()
      */
     public function __construct(array $url, array $options = [])
     {
@@ -86,6 +86,9 @@ class Redis
         }
     }
 
+    /**
+     * @param string $key
+     */
     public function read($key): mixed
     {
         $value = $this->client->get($key);
@@ -97,6 +100,11 @@ class Redis
         return $result === false ? null : $result;
     }
 
+    /**
+     * @param string $key
+     * @param mixed $value
+     * @param int $expire
+     */
     public function write($key, $value, $expire = 0): void
     {
         $payload = serialize($value);
