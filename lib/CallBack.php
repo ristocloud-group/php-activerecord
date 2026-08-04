@@ -89,6 +89,7 @@ class CallBack
      *
      * @var object
      */
+    /** @var \ReflectionClass<object> */
     private $klass;
 
     /**
