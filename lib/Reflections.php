@@ -18,7 +18,7 @@ class Reflections extends Singleton
     /**
      * Current reflections.
      *
-     * @var array
+     * @var array<string, ReflectionClass<object>|null>
      */
     private $reflections = [];
 
@@ -58,7 +58,7 @@ class Reflections extends Singleton
      * Get a cached ReflectionClass.
      *
      * @param string $class Optional name of a class
-     * @return ReflectionClass|null
+     * @return ReflectionClass<object>|null
      * @throws ActiveRecordException if class was not found
      */
     public function get($class = null)

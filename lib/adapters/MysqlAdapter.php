@@ -15,6 +15,9 @@ class MysqlAdapter extends Connection
 {
     public static $DEFAULT_PORT = 3306;
 
+    /**
+     * @var int
+     */
     public static $MAX_BIND_PARAMS = 65535;
 
     public static $datetime_format = 'Y-m-d H:i:s';
@@ -36,6 +39,11 @@ class MysqlAdapter extends Connection
         return $this->query('SHOW TABLES');
     }
 
+    /**
+     * @param array{field: string, type: string, null: string, key: string, default: string|null, extra: string} $column
+     *   One row from SHOW COLUMNS FROM (PDO::ATTR_CASE_LOWER lower-cases the driver's Field/Type/Null/Key/Default/Extra keys).
+     * @return Column
+     */
     public function create_column(&$column)
     {
         $c = new Column();
@@ -70,17 +78,27 @@ class MysqlAdapter extends Connection
         return $c;
     }
 
+    /**
+     * @param string $charset
+     * @return void
+     */
     public function set_encoding($charset)
     {
         $params = [$charset];
         $this->query('SET NAMES ?', $params);
     }
 
+    /**
+     * @return bool
+     */
     public function accepts_limit_and_order_for_update_and_delete()
     {
         return true;
     }
 
+    /**
+     * @return array<string, string|array{name: string, length?: int}>
+     */
     public function native_database_types()
     {
         return [

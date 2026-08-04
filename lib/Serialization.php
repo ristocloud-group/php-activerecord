@@ -45,14 +45,26 @@ use XmlWriter;
  */
 abstract class Serialization
 {
+    /**
+     * @var Model
+     */
     protected $model;
+
+    /**
+     * @var array<string, mixed>
+     */
     protected $options;
+
+    /**
+     * @var array<string, mixed>
+     */
     protected $attributes;
 
     /**
      * The default format to serialize DateTime objects to.
      *
      * @see DateTime
+     * @var string
      */
     public static $DATETIME_FORMAT = 'iso8601';
 
@@ -93,7 +105,7 @@ abstract class Serialization
      * Constructs a {@link Serialization} object.
      *
      * @param Model $model The model to serialize
-     * @param array &$options Options for serialization
+     * @param array<string, mixed> &$options Options for serialization
      * @return Serialization
      */
     public function __construct(Model $model, &$options)
@@ -104,7 +116,7 @@ abstract class Serialization
         $this->parse_options();
     }
 
-    private function parse_options()
+    private function parse_options(): void
     {
         $this->check_only();
         $this->check_except();
@@ -113,7 +125,7 @@ abstract class Serialization
         $this->check_only_method();
     }
 
-    private function check_only()
+    private function check_only(): void
     {
         if (isset($this->options['only'])) {
             $this->options_to_a('only');
@@ -123,7 +135,7 @@ abstract class Serialization
         }
     }
 
-    private function check_except()
+    private function check_except(): void
     {
         if (isset($this->options['except']) && !isset($this->options['only'])) {
             $this->options_to_a('except');
@@ -131,7 +143,7 @@ abstract class Serialization
         }
     }
 
-    private function check_methods()
+    private function check_methods(): void
     {
         if (isset($this->options['methods'])) {
             $this->options_to_a('methods');
@@ -144,7 +156,7 @@ abstract class Serialization
         }
     }
 
-    private function check_only_method()
+    private function check_only_method(): void
     {
         if (isset($this->options['only_method'])) {
             $method = $this->options['only_method'];
@@ -154,7 +166,7 @@ abstract class Serialization
         }
     }
 
-    private function check_include()
+    private function check_include(): void
     {
         if (isset($this->options['include'])) {
             $this->options_to_a('include');
@@ -197,6 +209,10 @@ abstract class Serialization
         }
     }
 
+    /**
+     * @param string $key
+     * @return void
+     */
     final protected function options_to_a($key)
     {
         if (!is_array($this->options[$key])) {
@@ -206,7 +222,7 @@ abstract class Serialization
 
     /**
      * Returns the attributes array.
-     * @return array
+     * @return array<string, mixed>
      */
     final public function to_a()
     {
@@ -230,7 +246,7 @@ abstract class Serialization
 
     /**
      * Performs the serialization.
-     * @return string|array
+     * @return string|array<string, mixed>
      */
     abstract public function to_s();
 };
@@ -242,10 +258,13 @@ abstract class Serialization
  */
 class ArraySerializer extends Serialization
 {
+    /**
+     * @var bool
+     */
     public static $include_root = false;
 
     /**
-     * @return array|string
+     * @return array<string, mixed>|string
      */
     public function to_s()
     {
@@ -260,8 +279,14 @@ class ArraySerializer extends Serialization
  */
 class JsonSerializer extends ArraySerializer
 {
+    /**
+     * @var bool
+     */
     public static $include_root = false;
 
+    /**
+     * @return string
+     */
     public function to_s()
     {
         parent::$include_root = self::$include_root;
@@ -280,19 +305,28 @@ class JsonSerializer extends ArraySerializer
  */
 class XmlSerializer extends Serialization
 {
-    private $writer;
+    private ?XmlWriter $writer = null;
 
+    /**
+     * @param array<string, mixed> &$options
+     */
     public function __construct(Model $model, &$options)
     {
         $this->includes_with_class_name_element = true;
         parent::__construct($model, $options);
     }
 
+    /**
+     * @return string
+     */
     public function to_s()
     {
         return $this->xml_encode();
     }
 
+    /**
+     * @return string
+     */
     private function xml_encode()
     {
         $this->writer = new XmlWriter();
@@ -311,7 +345,11 @@ class XmlSerializer extends Serialization
         return $xml;
     }
 
-    private function write($data, $tag = null)
+    /**
+     * @param array<int|string, mixed>|object $data
+     * @param int|string|null $tag
+     */
+    private function write($data, $tag = null): void
     {
         foreach ($data as $attr => $value) {
             if ($tag != null) {
@@ -342,9 +380,19 @@ class XmlSerializer extends Serialization
  */
 class CsvSerializer extends Serialization
 {
+    /**
+     * @var string
+     */
     public static $delimiter = ',';
+
+    /**
+     * @var string
+     */
     public static $enclosure = '"';
 
+    /**
+     * @return string
+     */
     public function to_s()
     {
         if (@$this->options['only_header'] == true) {
@@ -353,16 +401,26 @@ class CsvSerializer extends Serialization
         return $this->row();
     }
 
+    /**
+     * @return string
+     */
     private function header()
     {
         return $this->to_csv(array_keys($this->to_a()));
     }
 
+    /**
+     * @return string
+     */
     private function row()
     {
         return $this->to_csv($this->to_a());
     }
 
+    /**
+     * @param array<int|string, mixed> $arr
+     * @return string
+     */
     private function to_csv($arr)
     {
         $outstream = fopen('php://temp', 'w');

@@ -39,11 +39,15 @@ class DateTime extends \DateTime
 {
     /**
      * Default format used for format() and __toString()
+     *
+     * @var string
      */
     public static $DEFAULT_FORMAT = 'rfc2822';
 
     /**
      * Pre-defined format strings.
+     *
+     * @var array<string, string>
      */
     public static $FORMATS = [
         'db'      => 'Y-m-d H:i:s',
@@ -63,9 +67,14 @@ class DateTime extends \DateTime
         'rss'     => \DateTime::RSS,
         'w3c'     => \DateTime::W3C];
 
-    private $model;
-    private $attribute_name;
+    private ?Model $model = null;
+    private ?string $attribute_name = null;
 
+    /**
+     * @param Model $model
+     * @param string $attribute_name
+     * @return void
+     */
     public function attribute_of($model, $attribute_name)
     {
         $this->model = $model;
@@ -122,7 +131,7 @@ class DateTime extends \DateTime
         return $this->format();
     }
 
-    private function flag_dirty()
+    private function flag_dirty(): void
     {
         if ($this->model) {
             $this->model->flag_dirty($this->attribute_name);

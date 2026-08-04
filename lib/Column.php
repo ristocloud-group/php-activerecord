@@ -24,7 +24,7 @@ class Column
     /**
      * Map a type to an column type.
      * @static
-     * @var array
+     * @var array<string, int>
      */
     public static $TYPE_MAPPING = [
         'datetime'	=> self::DATETIME,

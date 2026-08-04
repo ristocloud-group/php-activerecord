@@ -19,6 +19,9 @@ class SqliteAdapter extends Connection
 
     // SQLITE_MAX_VARIABLE_NUMBER is 999 before SQLite 3.32.0 and 32766 after,
     // and is not readily queryable via PDO — use the safe lower bound.
+    /**
+     * @var int
+     */
     public static $MAX_BIND_PARAMS = 999;
 
     protected function __construct($info)
@@ -47,6 +50,11 @@ class SqliteAdapter extends Connection
         return $this->query("SELECT name FROM sqlite_master");
     }
 
+    /**
+     * @param array{cid: int, name: string, type: string, notnull: int, dflt_value: string|null, pk: int} $column
+     *   One row from `pragma table_info($table)`.
+     * @return Column
+     */
     public function create_column($column)
     {
         $c = new Column();
@@ -90,16 +98,26 @@ class SqliteAdapter extends Connection
         return $c;
     }
 
+    /**
+     * @param string $charset
+     * @return void
+     */
     public function set_encoding($charset)
     {
         throw new ActiveRecordException("SqliteAdapter::set_charset not supported.");
     }
 
+    /**
+     * @return bool
+     */
     public function accepts_limit_and_order_for_update_and_delete()
     {
         return true;
     }
 
+    /**
+     * @return array<string, string|array{name: string, length?: int}>
+     */
     public function native_database_types()
     {
         return [

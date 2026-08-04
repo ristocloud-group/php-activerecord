@@ -20,10 +20,32 @@ class Expressions
 {
     public const ParameterMarker = '?';
 
+    /**
+     * @var string|null the built SQL fragment, e.g. 'name = ? AND id = ?'
+     */
     private $expressions;
+
+    /**
+     * @var list<mixed> bind values, positionally aligned with the '?' markers in $expressions
+     */
     private $values = [];
+
+    /**
+     * @var Connection|null
+     */
     private $connection;
 
+    /**
+     * Any further arguments beyond $expressions are read positionally via func_get_args(): when
+     * $expressions is a string, they are its bind values; when $expressions is an array, a single
+     * extra argument is accepted as the glue string used to join conditions (e.g. ', ').
+     *
+     * @param Connection|null                   $connection  a Connection instance, or null to fall back
+     *                                                        to naive quoting
+     * @param array<int|string, mixed>|string|null $expressions either a raw SQL fragment with '?' markers,
+     *                                                        or a hash of column => value conditions to be
+     *                                                        AND/OR-ed together (see {@link build_sql_from_hash})
+     */
     public function __construct($connection, $expressions = null /* [, $values ... ] */)
     {
         $values = null;
@@ -47,6 +69,11 @@ class Expressions
     /**
      * Bind a value to the specific one based index. There must be a bind marker
      * for each value bound or to_s() will throw an exception.
+     *
+     * @param int   $parameter_number one-based index of the bind marker to set
+     * @param mixed $value            the value to bind
+     *
+     * @return void
      */
     public function bind($parameter_number, $value)
     {
@@ -57,6 +84,11 @@ class Expressions
         $this->values[$parameter_number - 1] = $value;
     }
 
+    /**
+     * @param list<mixed> $values bind values, positionally aligned with the '?' markers
+     *
+     * @return void
+     */
     public function bind_values($values)
     {
         $this->values = $values;
@@ -64,6 +96,8 @@ class Expressions
 
     /**
      * Returns all the values currently bound.
+     *
+     * @return list<mixed>
      */
     public function values()
     {
@@ -72,6 +106,8 @@ class Expressions
 
     /**
      * Returns the connection object.
+     *
+     * @return Connection|null
      */
     public function get_connection()
     {
@@ -82,13 +118,23 @@ class Expressions
      * Sets the connection object. It is highly recommended to set this so we can
      * use the adapter's native escaping mechanism.
      *
-     * @param string $connection a Connection instance
+     * @param Connection|null $connection a Connection instance
+     *
+     * @return void
      */
     public function set_connection($connection)
     {
         $this->connection = $connection;
     }
 
+    /**
+     * @param bool                $substitute whether to inline the actual (quoted) values instead of
+     *                                         leaving '?' bind markers in the returned string
+     * @param array<string, mixed>|null $options  supports a 'values' key to override the bound values
+     *                                             used for substitution
+     *
+     * @return string
+     */
     public function to_s($substitute = false, &$options = null)
     {
         if (!$options) {
@@ -123,7 +169,14 @@ class Expressions
         return $ret;
     }
 
-    private function build_sql_from_hash(&$hash, $glue)
+    /**
+     * @param array<int|string, mixed> &$hash a hash of column => value (or column => list-of-values)
+     *                                         conditions to be joined into a SQL fragment
+     * @param string                    $glue  the boolean operator used to join each condition, e.g. ' AND '
+     *
+     * @return array{0: string, 1: list<mixed>} the built SQL fragment and its positional bind values
+     */
+    private function build_sql_from_hash(array &$hash, string $glue): array
     {
         $sql = $g = "";
 
@@ -145,7 +198,16 @@ class Expressions
         return [$sql,array_values($hash)];
     }
 
-    private function substitute(&$values, $substitute, $pos, $parameter_index)
+    /**
+     * @param list<mixed> &$values          the bound values, positionally aligned with the '?' markers
+     * @param bool         $substitute       whether to inline the actual (quoted) value(s) instead of
+     *                                       returning bind marker(s)
+     * @param int          $pos              index of the current '?' marker within $this->expressions
+     * @param int          $parameter_index  index of the value to substitute within $values
+     *
+     * @return mixed a substituted SQL fragment (string), or the original character at $pos when not substituting
+     */
+    private function substitute(array &$values, bool $substitute, int $pos, int $parameter_index): mixed
     {
         $value = $values[$parameter_index];
 
@@ -169,7 +231,13 @@ class Expressions
         return $this->expressions[$pos];
     }
 
-    private function stringify_value($value)
+    /**
+     * @param mixed $value a single bind value
+     *
+     * @return mixed the value rendered as a literal SQL fragment: the string "NULL" for null, a quoted
+     *                string for strings, or the original scalar value passed through unchanged otherwise
+     */
+    private function stringify_value(mixed $value): mixed
     {
         if (is_null($value)) {
             return "NULL";
@@ -178,7 +246,7 @@ class Expressions
         return is_string($value) ? $this->quote_string($value) : $value;
     }
 
-    private function quote_string($value)
+    private function quote_string(string $value): string
     {
         if ($this->connection) {
             return $this->connection->escape($value);

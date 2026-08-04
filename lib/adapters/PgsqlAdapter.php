@@ -15,6 +15,9 @@ class PgsqlAdapter extends Connection
 {
     public static $QUOTE_CHARACTER = '"';
     public static $DEFAULT_PORT = 5432;
+    /**
+     * @var int
+     */
     public static $MAX_BIND_PARAMS = 65535;
 
     public function supports_sequences()
@@ -72,6 +75,13 @@ class PgsqlAdapter extends Connection
         return $this->query("SELECT tablename FROM pg_tables WHERE schemaname NOT IN('information_schema','pg_catalog')");
     }
 
+    /**
+     * @param array<string, mixed> $column
+     *   One row from query_column_info(): field/type/default are text, but
+     *   not_nullable/pk/attlen come back through the pgsql driver's text
+     *   protocol, so their PHP type (string vs bool/int) isn't guaranteed.
+     * @return Column
+     */
     public function create_column(&$column)
     {
         $c = new Column();
@@ -112,11 +122,18 @@ class PgsqlAdapter extends Connection
         return $c;
     }
 
+    /**
+     * @param string $charset
+     * @return void
+     */
     public function set_encoding($charset)
     {
         $this->query("SET NAMES '$charset'");
     }
 
+    /**
+     * @return array<string, string|array{name: string, length?: int}>
+     */
     public function native_database_types()
     {
         return [

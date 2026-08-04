@@ -104,11 +104,19 @@ abstract class Inflector
         return preg_replace(['/[_\- ]+/','/([a-z])([A-Z])/'], ['_','\\1_\\2'], trim($s));
     }
 
+    /**
+     * @param string $class_name
+     * @return string
+     */
     public function keyify($class_name)
     {
         return strtolower($this->underscorify(denamespace($class_name))) . '_id';
     }
 
+    /**
+     * @param string $s
+     * @return string
+     */
     abstract public function variablize($s);
 }
 
@@ -117,12 +125,20 @@ abstract class Inflector
  */
 class StandardInflector extends Inflector
 {
+    /**
+     * @param string|null $s
+     * @return string
+     */
     public function tableize($s)
     {
         $s ??= "";
         return Utils::pluralize(strtolower($this->underscorify($s)));
     }
 
+    /**
+     * @param string|null $s
+     * @return string
+     */
     public function variablize($s)
     {
         $s ??= "";

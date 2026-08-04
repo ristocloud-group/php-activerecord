@@ -45,14 +45,20 @@ use Traversable;
  */
 class Validations
 {
-    private $model;
-    private $options = [];
-    private $validators = [];
-    private $record;
+    private Model $model;
 
-    /** @var ReflectionClass|null */
+    /** @var array<string, mixed> */
+    private $options = [];
+
+    /** @var array<int, string> */
+    private $validators = [];
+
+    private Errors $record;
+
+    /** @var ReflectionClass<object>|null */
     private $klass;
 
+    /** @var list<string> */
     private static $VALIDATION_FUNCTIONS = [
         'validates_presence_of',
         'validates_size_of',
@@ -64,6 +70,7 @@ class Validations
         'validates_uniqueness_of',
     ];
 
+    /** @var array<string, mixed> */
     private static $DEFAULT_VALIDATION_OPTIONS = [
         'on' => 'save',
         'allow_null' => false,
@@ -71,6 +78,7 @@ class Validations
         'message' => null,
     ];
 
+    /** @var array<string, mixed> */
     private static $ALL_RANGE_OPTIONS = [
         'is' => null,
         'within' => null,
@@ -79,6 +87,7 @@ class Validations
         'maximum' => null,
     ];
 
+    /** @var array<string, mixed> */
     private static $ALL_NUMERICALITY_CHECKS = [
         'greater_than' => null,
         'greater_than_or_equal_to'  => null,
@@ -103,6 +112,9 @@ class Validations
         $this->validators = array_intersect(array_keys($this->klass->getStaticProperties()), self::$VALIDATION_FUNCTIONS);
     }
 
+    /**
+     * @return Errors
+     */
     public function get_record()
     {
         return $this->record;
@@ -111,7 +123,7 @@ class Validations
     /**
      * Returns validator data.
      *
-     * @return array
+     * @return array<string, list<array<string, mixed>>>
      */
     public function rules()
     {
@@ -146,10 +158,10 @@ class Validations
             $this->$validate(wrap_strings_in_arrays($definition));
         }
 
-        $model_reflection = Reflections::instance()->get($this->model);
+        $model_reflection = Reflections::instance()->get(get_class($this->model));
 
         if ($model_reflection->hasMethod('validate') && $model_reflection->getMethod('validate')->isPublic()) {
-            $this->model->validate();
+            $model_reflection->getMethod('validate')->invoke($this->model);
         }
 
         $this->record->clear_model();
@@ -176,7 +188,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_presence_of($attrs)
     {
@@ -208,7 +221,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_inclusion_of($attrs)
     {
@@ -227,7 +241,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      * @see validates_inclusion_of
      */
     public function validates_exclusion_of($attrs)
@@ -250,7 +265,8 @@ class Validations
      * @see validates_inclusion_of
      * @see validates_exclusion_of
      * @param string $type Either inclusion or exclusion
-     * @param $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_inclusion_or_exclusion_of($type, $attrs)
     {
@@ -310,7 +326,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_numericality_of($attrs)
     {
@@ -381,7 +398,8 @@ class Validations
     /**
      * Alias of {@link validates_length_of}
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_size_of($attrs)
     {
@@ -408,7 +426,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_format_of($attrs)
     {
@@ -457,7 +476,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings. (Even if this is set to false, a null string is always shorter than a maximum value.)</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_length_of($attrs)
     {
@@ -561,7 +581,8 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
-     * @param array $attrs Validation definition
+     * @param list<array<int|string, mixed>> $attrs Validation definition
+     * @return void
      */
     public function validates_uniqueness_of($attrs)
     {
@@ -609,12 +630,18 @@ class Validations
         }
     }
 
-    private function is_null_with_option($var, &$options)
+    /**
+     * @param array<string, mixed> $options
+     */
+    private function is_null_with_option(mixed $var, array &$options): bool
     {
         return (is_null($var) && (isset($options['allow_null']) && $options['allow_null']));
     }
 
-    private function is_blank_with_option($var, &$options)
+    /**
+     * @param array<string, mixed> $options
+     */
+    private function is_blank_with_option(mixed $var, array &$options): bool
     {
         return (Utils::is_blank($var) && (isset($options['allow_blank']) && $options['allow_blank']));
     }
@@ -624,12 +651,16 @@ class Validations
  * Class that holds {@link Validations} errors.
  *
  * @package ActiveRecord
+ * @implements IteratorAggregate<int, string>
  */
 class Errors implements IteratorAggregate
 {
-    private $model;
+    private ?Model $model = null;
+
+    /** @var array<string, list<string>>|null */
     private $errors;
 
+    /** @var array<string, string> */
     public static $DEFAULT_ERROR_MESSAGES = [
         'inclusion'    => "is not included in the list",
         'exclusion'    => "is reserved",
@@ -667,6 +698,8 @@ class Errors implements IteratorAggregate
     /**
      * Nulls $model so we don't get pesky circular references. $model is only needed during the
      * validation process and so can be safely cleared once that is done.
+     *
+     * @return void
      */
     public function clear_model()
     {
@@ -677,7 +710,8 @@ class Errors implements IteratorAggregate
      * Add an error message.
      *
      * @param string $attribute Name of an attribute on the model
-     * @param string $msg The error message
+     * @param string|null $msg The error message
+     * @return void
      */
     public function add($attribute, $msg)
     {
@@ -697,6 +731,7 @@ class Errors implements IteratorAggregate
      *
      * @param string $attribute Name of an attribute on the model
      * @param string $msg The error message
+     * @return void
      */
     public function add_on_empty($attribute, $msg)
     {
@@ -713,7 +748,7 @@ class Errors implements IteratorAggregate
      * Retrieve error messages for an attribute.
      *
      * @param string $attribute Name of an attribute on the model
-     * @return array|null
+     * @return list<string>|null
      */
     public function __get($attribute)
     {
@@ -729,6 +764,7 @@ class Errors implements IteratorAggregate
      *
      * @param string $attribute Name of an attribute on the model
      * @param string $msg The error message
+     * @return void
      */
     public function add_on_blank($attribute, $msg)
     {
@@ -756,7 +792,7 @@ class Errors implements IteratorAggregate
      * Returns the error message(s) for the specified attribute or null if none.
      *
      * @param string $attribute Name of an attribute on the model
-     * @return string|array	Array of strings if several error occured on this attribute.
+     * @return string|list<string>|null Array of strings if several error occured on this attribute.
      */
     public function on($attribute)
     {
@@ -776,6 +812,8 @@ class Errors implements IteratorAggregate
      * #  "state" => array("is the wrong length (should be 2 chars)",
      * # )
      * </code>
+     *
+     * @return array<string, list<string>>|null
      */
     public function get_raw_errors()
     {
@@ -794,7 +832,7 @@ class Errors implements IteratorAggregate
      * # )
      * </code>
      *
-     * @return array
+     * @return list<string>
      */
     public function full_messages()
     {
@@ -822,7 +860,7 @@ class Errors implements IteratorAggregate
      * @param \Closure|null $closure Closure to fetch the errors in some other format (optional)
      *                       This closure has the signature function($attribute, $message)
      *                       and is called for each available error message.
-     * @return array
+     * @return array<string, list<string>>
      */
     public function to_array($closure = null)
     {
@@ -873,6 +911,8 @@ class Errors implements IteratorAggregate
 
     /**
      * Clears out all error messages.
+     *
+     * @return void
      */
     public function clear()
     {
@@ -908,7 +948,7 @@ class Errors implements IteratorAggregate
      *   echo "$msg\n";
      * </code>
      *
-     * @return ArrayIterator
+     * @return ArrayIterator<int, string>
      */
     public function getIterator(): Traversable
     {

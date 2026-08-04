@@ -6,7 +6,7 @@ class Memcache
 {
     public const DEFAULT_PORT = 11211;
 
-    private $memcached;
+    private \Memcached $memcached;
 
     /**
      * Creates a Memcache instance.
@@ -17,7 +17,7 @@ class Memcache
      * <li><b>host:</b> host for the memcached server </li>
      * <li><b>port:</b> port for the memcached server </li>
      * </ul>
-     * @param array $options
+     * @param array<string, mixed> $options
      */
     public function __construct($options)
     {
@@ -29,16 +29,29 @@ class Memcache
         }
     }
 
+    /**
+     * @return void
+     */
     public function flush()
     {
         $this->memcached->flush();
     }
 
+    /**
+     * @param string $key
+     * @return mixed
+     */
     public function read($key)
     {
         return $this->memcached->get($key);
     }
 
+    /**
+     * @param string $key
+     * @param mixed $value
+     * @param int $expire
+     * @return void
+     */
     public function write($key, $value, $expire)
     {
         $this->memcached->set($key, $value, $expire);

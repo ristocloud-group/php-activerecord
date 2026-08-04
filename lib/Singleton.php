@@ -19,7 +19,7 @@ abstract class Singleton
     /**
      * Array of cached singleton objects.
      *
-     * @var array
+     * @var array<class-string, static>
      */
     private static $instances = [];
 

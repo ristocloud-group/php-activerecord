@@ -12,7 +12,10 @@ use Closure;
  */
 class Cache
 {
+    /** @var File|Memcache|Redis|null */
     public static $adapter = null;
+
+    /** @var array<string, mixed> */
     public static $options = [];
 
     /**
@@ -37,7 +40,8 @@ class Cache
      * (Note: expiring needs to be implemented in your cache store.)
      *
      * @param string $url URL to your cache server
-     * @param array $options Specify additional options
+     * @param array<string, mixed> $options Specify additional options
+     * @return void
      */
     public static function initialize($url, $options = [])
     {
@@ -54,6 +58,9 @@ class Cache
         static::$options = array_merge(['expire' => 30, 'namespace' => ''], $options);
     }
 
+    /**
+     * @return void
+     */
     public static function flush()
     {
         if (static::$adapter) {
@@ -61,6 +68,11 @@ class Cache
         }
     }
 
+    /**
+     * @param string $key
+     * @param Closure $closure
+     * @return mixed
+     */
     public static function get($key, $closure)
     {
         $key = self::get_namespace() . $key;
@@ -76,7 +88,7 @@ class Cache
         return $value;
     }
 
-    private static function get_namespace()
+    private static function get_namespace(): string
     {
         return (isset(static::$options['namespace']) && strlen(static::$options['namespace']) > 0) ? (static::$options['namespace'] . "::") : "";
     }

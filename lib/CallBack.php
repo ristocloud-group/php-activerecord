@@ -64,7 +64,7 @@ class CallBack
     /**
      * List of available callbacks.
      *
-     * @var array
+     * @var list<string>
      */
     protected static $VALID_CALLBACKS = [
         'after_construct',
@@ -93,14 +93,14 @@ class CallBack
 
     /**
      * List of public methods of the given model
-     * @var array|null
+     * @var list<string>|null
      */
     private $publicMethods;
 
     /**
      * Holds data for registered callbacks.
      *
-     * @var array
+     * @var array<string, list<Closure|string>>
      */
     private $registry = [];
 
@@ -138,8 +138,8 @@ class CallBack
     /**
      * Returns all the callbacks registered for a callback type.
      *
-     * @param $name string Name of a callback (see {@link VALID_CALLBACKS $VALID_CALLBACKS})
-     * @return array array of callbacks or null if invalid callback name.
+     * @param string $name Name of a callback (see {@link VALID_CALLBACKS $VALID_CALLBACKS})
+     * @return list<Closure|string>|null array of callbacks or null if invalid callback name.
      */
     public function get_callbacks($name)
     {
@@ -209,7 +209,7 @@ class CallBack
      *
      * @param string $name Name of callback type (see {@link VALID_CALLBACKS $VALID_CALLBACKS})
      * @param mixed $closure_or_method_name Either a closure or the name of a method on the {@link Model}
-     * @param array $options Options array
+     * @param array<string, mixed> $options Options array
      * @return void
      * @throws ActiveRecordException if invalid callback type or callback method was not found
      */

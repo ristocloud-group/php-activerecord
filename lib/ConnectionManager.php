@@ -45,6 +45,7 @@ class ConnectionManager extends Singleton
      * If $name is null the default connection will be dropped.
      *
      * @param string $name Name of the connection to forget about
+     * @return void
      */
     public static function drop_connection($name = null)
     {

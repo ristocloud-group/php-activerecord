@@ -90,14 +90,14 @@ class Model
     /**
      * Contains model values as column_name => value
      *
-     * @var array
+     * @var array<string, mixed>
      */
     private $attributes = [];
 
     /**
      * Flag whether or not this model's attributes have been modified since it will either be null or an array of column_names that have been modified
      *
-     * @var array|null
+     * @var array<string, bool>|null
      */
     private $__dirty = null;
 
@@ -111,7 +111,7 @@ class Model
     /**
      * Array of relationship objects as model_attribute_name => relationship
      *
-     * @var array
+     * @var array<string, mixed>
      */
     private $__relationships = [];
 
@@ -175,7 +175,7 @@ class Model
      * echo $person->alias_first_name;
      * </code>
      *
-     * @var array
+     * @var array<string, string>
      */
     public static $alias_attribute = [];
 
@@ -197,7 +197,7 @@ class Model
      * echo $person->id; # => null
      * </code>
      *
-     * @var array
+     * @var list<string>
      */
     public static $attr_accessible = [];
 
@@ -209,7 +209,7 @@ class Model
      *
      * If the attribute is both accessible and protected, it is treated as protected.
      *
-     * @var array
+     * @var list<string>
      */
     public static $attr_protected = [];
 
@@ -233,7 +233,7 @@ class Model
      * $person->woot_name # same as calling $person->host->name
      * </code>
      *
-     * @var array
+     * @var list<array<int|string, mixed>>
      */
     public static $delegate = [];
 
@@ -248,7 +248,7 @@ class Model
      * new Person(array('first_name' => 'Tito', 'last_name' => 'the Grief'));
      * </code>
      *
-     * @param array $attributes Hash containing names and values to mass assign to the model
+     * @param array<string, mixed> $attributes Hash containing names and values to mass assign to the model
      * @param boolean $guard_attributes Set to true to guard protected/non-accessible attributes
      * @param boolean $instantiating_via_find Set to true if this model is being created from a find call
      * @param boolean $new_record Set to true if this should be considered a new record
@@ -542,6 +542,7 @@ class Model
      * Flags an attribute as dirty.
      *
      * @param string $name Attribute name
+     * @return void
      */
     public function flag_dirty($name)
     {
@@ -580,7 +581,7 @@ class Model
     /**
      * Returns a copy of the model's attributes hash.
      *
-     * @return array A copy of the model's attribute data
+     * @return array<string, mixed> A copy of the model's attribute data
      */
     public function attributes()
     {
@@ -591,7 +592,7 @@ class Model
      * Retrieve the primary key name.
      *
      * @param bool $first Set to true to return the first value in the pk array only
-     * @return ($first is true ? string : array) The primary key for the model
+     * @return ($first is true ? string : list<string>) The primary key for the model
      */
     public function get_primary_key($first = false)
     {
@@ -634,7 +635,7 @@ class Model
      * );
      * </code>
      *
-     * @return array An array containing validator data for this model.
+     * @return array<string, list<array<string, mixed>>> An array containing validator data for this model.
      */
     public function get_validation_rules()
     {
@@ -647,8 +648,8 @@ class Model
     /**
      * Returns an associative array containing values for all the attributes in $attributes
      *
-     * @param array $attributes Array containing attribute names
-     * @return array A hash containing $name => $value
+     * @param list<string> $attributes Array containing attribute names
+     * @return array<string, mixed> A hash containing $name => $value
      */
     public function get_values_for($attributes)
     {
@@ -677,7 +678,7 @@ class Model
      * delegated or null if not delegated.
      *
      * @param string $name Name of an attribute
-     * @param array $delegate An array containing delegate data
+     * @param array<int|string, mixed> $delegate An array containing delegate data
      * @return mixed delegated attribute name or null
      */
     private function is_delegated($name, &$delegate)
@@ -722,6 +723,7 @@ class Model
      *
      * @throws ReadOnlyException
      * @param string $method_name Name of method that was invoked on model for exception message
+     * @return void
      */
     private function verify_not_readonly($method_name)
     {
@@ -734,6 +736,7 @@ class Model
      * Flag model as readonly.
      *
      * @param boolean $readonly Set to true to put the model into readonly mode
+     * @return void
      */
     public function readonly($readonly = true)
     {
@@ -785,7 +788,7 @@ class Model
     /**
      * Creates a model and saves it to the database.
      *
-     * @param array $attributes Array of the models attributes
+     * @param array<string, mixed> $attributes Array of the models attributes
      * @param boolean $validate True if the validators should be run
      * @return Model
      */
@@ -947,8 +950,8 @@ class Model
      * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
      * </ul>
      *
-     * @params array $options
-     * return integer Number of rows affected
+     * @param mixed $options
+     * @return int Number of rows affected
      */
     public static function delete_all($options = [])
     {
@@ -1003,8 +1006,8 @@ class Model
      * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
      * </ul>
      *
-     * @params array $options
-     * return integer Number of rows affected
+     * @param array<string, mixed> $options
+     * @return int Number of rows affected
      */
     public static function update_all($options = [])
     {
@@ -1064,7 +1067,7 @@ class Model
     /**
      * Helper that creates an array of values for the primary key(s).
      *
-     * @return array An array in the form array(key_name => value, ...)
+     * @return array<string, mixed> An array in the form array(key_name => value, ...)
      */
     public function values_for_pk()
     {
@@ -1074,8 +1077,8 @@ class Model
     /**
      * Helper to return a hash of values for the specified attributes.
      *
-     * @param array $attribute_names Array of attribute names
-     * @return array An array in the form array(name => value, ...)
+     * @param list<string> $attribute_names Array of attribute names
+     * @return array<string, mixed> An array in the form array(name => value, ...)
      */
     public function values_for($attribute_names)
     {
@@ -1155,6 +1158,8 @@ class Model
 
     /**
      * Updates a model's timestamps.
+     *
+     * @return void
      */
     public function set_timestamps()
     {
@@ -1172,7 +1177,7 @@ class Model
     /**
      * Mass update the model with an array of attribute data and saves to the database.
      *
-     * @param array $attributes An attribute data array in the form array(name => value, ...)
+     * @param array<string, mixed> $attributes An attribute data array in the form array(name => value, ...)
      * @return boolean True if successfully updated and saved otherwise false
      */
     public function update_attributes($attributes)
@@ -1201,7 +1206,8 @@ class Model
      * but DOES NOT save it to the database.
      *
      * @see update_attributes
-     * @param array $attributes An array containing data to update in the form array(name => value, ...)
+     * @param array<string, mixed> $attributes An array containing data to update in the form array(name => value, ...)
+     * @return void
      */
     public function set_attributes(array $attributes)
     {
@@ -1212,8 +1218,9 @@ class Model
      * Passing $guard_attributes as true will throw an exception if an attribute does not exist.
      *
      * @throws UndefinedPropertyException
-     * @param array $attributes An array in the form array(name => value, ...)
+     * @param array<string, mixed> $attributes An array in the form array(name => value, ...)
      * @param boolean $guard_attributes Flag of whether or not protected/non-accessible attributes should be guarded
+     * @return void
      */
     private function set_attributes_via_mass_assignment(array &$attributes, $guard_attributes)
     {
@@ -1262,7 +1269,7 @@ class Model
      *
      * @internal This should <strong>only</strong> be used by eager load
      * @param Model|null $model
-     * @param $name of relationship for this table
+     * @param string $name of relationship for this table
      * @return void
      */
     public function set_relationship_from_eager_load(?Model $model, $name)
@@ -1313,6 +1320,7 @@ class Model
      * Resets the dirty array.
      *
      * @see dirty_attributes
+     * @return void
      */
     public function reset_dirty()
     {
@@ -1322,7 +1330,7 @@ class Model
     /**
      * A list of valid finder options.
      *
-     * @var array
+     * @var list<string>
      */
     public static $VALID_OPTIONS = ['conditions', 'limit', 'offset', 'order', 'select', 'joins', 'include', 'readonly', 'group', 'from', 'having'];
 
@@ -1361,7 +1369,7 @@ class Model
      *
      * @param string $method Name of method
      * @param mixed $args Method args
-     * @return Model|array|int|string|null Model or null for the find-by-attributes and
+     * @return Model|list<Model>|int|string|null Model or null for the find-by-attributes and
      *   find-or-create-by-attributes dynamic finders, an array of Model for the
      *   find-all-by-attributes finder, int|string for the count-by-attributes finder
      * @throws ActiveRecordException if invalid query
@@ -1439,7 +1447,7 @@ class Model
      * Alias for self::find('all').
      *
      * @see find
-     * @return array array of records found
+     * @return list<Model> array of records found
      */
     public static function all(/* ... */)
     {
@@ -1628,7 +1636,7 @@ class Model
      *
      * @see find
      * @param mixed $values An array containing values for the pk, or a single pk value
-     * @param array $options An options array
+     * @param array<string, mixed> $options An options array
      * @return Model
      * @throws RecordNotFound if a record could not be found
      */
@@ -1664,8 +1672,8 @@ class Model
      * </code>
      *
      * @param string $sql The raw SELECT query
-     * @param array $values An array of values for any parameters that needs to be bound
-     * @return array An array of models
+     * @param array<int, mixed>|null $values An array of values for any parameters that needs to be bound
+     * @return list<Model> An array of models
      */
     public static function find_by_sql($sql, $values = null)
     {
@@ -1676,7 +1684,7 @@ class Model
      * Helper method to run arbitrary queries against the model's database connection.
      *
      * @param string $sql SQL to execute
-     * @param array $values Bind values, if any, for the query
+     * @param array<int, mixed>|null $values Bind values, if any, for the query
      * @return object A PDOStatement object
      */
     public static function query($sql, $values = null)
@@ -1687,7 +1695,7 @@ class Model
     /**
      * Determines if the specified array is a valid ActiveRecord options array.
      *
-     * @param array $array An options array
+     * @param array<string, mixed> $array An options array
      * @param bool $throw True to throw an exception if not valid
      * @return boolean True if valid otherwise valse
      * @throws ActiveRecordException if the array contained any invalid options
@@ -1716,7 +1724,7 @@ class Model
      *
      * @internal This needs to eventually support composite keys.
      * @param mixed $args Primary key value(s)
-     * @return array An array in the form array(name => value, ...)
+     * @return array<string, mixed> An array in the form array(name => value, ...)
      */
     public static function pk_conditions($args)
     {
@@ -1729,8 +1737,8 @@ class Model
      * Pulls out the options hash from $array if any.
      *
      * @internal DO NOT remove the reference on $array.
-     * @param array &$array An array
-     * @return array A valid options array
+     * @param list<mixed> &$array An array
+     * @return array<string, mixed> A valid options array
      */
     public static function extract_and_validate_options(array &$array)
     {
@@ -1759,7 +1767,7 @@ class Model
      * Returns a JSON representation of this model.
      *
      * @see Serialization
-     * @param array $options An array containing options for json serialization (see {@link Serialization} for valid options)
+     * @param array<string, mixed> $options An array containing options for json serialization (see {@link Serialization} for valid options)
      * @return string JSON representation of the model
      */
     public function to_json(array $options = [])
@@ -1771,7 +1779,7 @@ class Model
      * Returns an XML representation of this model.
      *
      * @see Serialization
-     * @param array $options An array containing options for xml serialization (see {@link Serialization} for valid options)
+     * @param array<string, mixed> $options An array containing options for xml serialization (see {@link Serialization} for valid options)
      * @return string XML representation of the model
      */
     public function to_xml(array $options = [])
@@ -1796,7 +1804,7 @@ class Model
     * </code>
     *
     * @see Serialization
-    * @param array $options An array containing options for csv serialization (see {@link Serialization} for valid options)
+    * @param array<string, mixed> $options An array containing options for csv serialization (see {@link Serialization} for valid options)
     * @return string CSV representation of the model
     */
     public function to_csv(array $options = [])
@@ -1808,8 +1816,8 @@ class Model
      * Returns an Array representation of this model.
      *
      * @see Serialization
-     * @param array $options An array containing options for json serialization (see {@link Serialization} for valid options)
-     * @return array Array representation of the model
+     * @param array<string, mixed> $options An array containing options for json serialization (see {@link Serialization} for valid options)
+     * @return array<string, mixed> Array representation of the model
      */
     public function to_array(array $options = [])
     {
@@ -1830,8 +1838,8 @@ class Model
      * </ul>
      *
      * @param string $type Either Xml, Json, Csv or Array
-     * @param array $options Options array for the serializer
-     * @return string|array Serialized representation of the model
+     * @param array<string, mixed> $options Options array for the serializer
+     * @return string|array<string, mixed> Serialized representation of the model
      */
     private function serialize($type, $options)
     {

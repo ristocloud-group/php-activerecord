@@ -215,6 +215,37 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals($author->id, $author->build_book()->author_id);
     }
 
+    /**
+     * Regression test: HasMany::build_association()/create_association() must infer the
+     * foreign key correctly even when the relationship's keys have never been set (i.e.
+     * load() has not run yet on this relationship instance).
+     *
+     * $author->build_books(...) (the test above) goes through Model::__call(), which always
+     * accesses $this->books first to lazily load the relationship -- and that load() call
+     * happens to populate $foreign_key/$primary_key as a side effect, before build_association()
+     * ever runs. That masks a bug where HasMany's private inject_foreign_key_for_new_association()
+     * calls $this->set_keys($model) with the Model *instance*, instead of $this->set_keys(get_class($model))
+     * like every other call site (see HasMany::load()). To exercise the buggy path directly, this
+     * calls build_association()/create_association() straight on a freshly-constructed relationship
+     * object (obtained via Table::get_relationship(), before anything has loaded it), so
+     * $foreign_key/$primary_key are genuinely still unset when the association is built.
+     */
+    public function test_has_many_build_association_infers_foreign_key_without_prior_load()
+    {
+        $author = Author::first();
+        $relationship = Author::table()->get_relationship('books');
+        $book = $relationship->build_association($author, ['name' => 'a new book']);
+        $this->assert_equals($author->id, $book->author_id);
+    }
+
+    public function test_has_many_create_association_infers_foreign_key_without_prior_load()
+    {
+        $author = Author::first();
+        $relationship = Author::table()->get_relationship('books');
+        $book = $relationship->create_association($author, ['name' => 'a new book']);
+        $this->assert_equals($author->id, $book->author_id);
+    }
+
     public function test_belongs_to_create_association()
     {
         $event = $this->get_relationship();

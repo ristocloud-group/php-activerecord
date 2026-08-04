@@ -24,18 +24,25 @@ class File
      * <ul>
      * <li><b>path:</b> directory to which cache files will be written</li>
      * </ul>
-     * @param array $options
+     * @param array<string, mixed> $options
      */
     public function __construct($options)
     {
         $this->cache_dir = $options["path"];
     }
 
+    /**
+     * @return void
+     */
     public function flush()
     {
         array_map("unlink", glob($this->get_cache_path_for_key("*")));
     }
 
+    /**
+     * @param string $key
+     * @return mixed
+     */
     public function read($key)
     {
         $cache_path = $this->get_cache_path_for_key($key);
@@ -64,6 +71,12 @@ class File
         return $envelope['value'];
     }
 
+    /**
+     * @param string $key
+     * @param mixed $value
+     * @param int $expire
+     * @return void
+     */
     public function write($key, $value, $expire = 0)
     {
         if (!is_dir($this->cache_dir)) {
@@ -87,7 +100,7 @@ class File
         rename($tmp_path, $cache_path);
     }
 
-    private function get_cache_path_for_key($key)
+    private function get_cache_path_for_key(string $key): string
     {
         return $this->cache_dir . "/" . $key;
     }
