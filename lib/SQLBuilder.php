@@ -15,8 +15,8 @@ class SQLBuilder
 {
     private Connection $connection;
     private string $operation = 'SELECT';
-    private string $table;
-    private string $select = '*';
+    private ?string $table;
+    private ?string $select = '*';
     private ?string $joins = null;
     private ?string $order = null;
     private ?int $limit = null;
@@ -53,7 +53,7 @@ class SQLBuilder
      * Constructor.
      *
      * @param Connection $connection A database connection object
-     * @param string $table Name of a table
+     * @param string|null $table Name of a table
      * @return SQLBuilder
      * @throws ActiveRecordException if connection was invalid
      */
@@ -177,7 +177,7 @@ class SQLBuilder
     }
 
     /**
-     * @param string $select
+     * @param string|null $select
      * @return $this
      */
     public function select($select)
