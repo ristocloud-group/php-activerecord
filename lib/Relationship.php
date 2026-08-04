@@ -13,8 +13,21 @@ namespace ActiveRecord;
  */
 interface InterfaceRelationship
 {
+    /**
+     * @param array<int|string, mixed> $options
+     */
     public function __construct($options = []);
+
+    /**
+     * @param array<int|string, mixed> $attributes
+     * @return Model
+     */
     public function build_association(Model $model, $attributes = []);
+
+    /**
+     * @param array<int|string, mixed> $attributes
+     * @return Model
+     */
     public function create_association(Model $model, $attributes = []);
 }
 
@@ -23,7 +36,7 @@ interface InterfaceRelationship
  *
  * @package ActiveRecord
  * @see http://www.phpactiverecord.org/guides/associations
- * @property array $primary_key Primary key column(s) used for joins/eager-load conditions.
+ * @property list<string> $primary_key Primary key column(s) used for joins/eager-load conditions.
  *           Real property on {@see HasMany} (inherited by {@see HasOne}); computed on first
  *           access via {@see BelongsTo::__get()} for BelongsTo. Never touched on
  *           {@see HasAndBelongsToMany} (unimplemented stub).
@@ -53,14 +66,14 @@ abstract class AbstractRelationship implements InterfaceRelationship
     /**
      * Name of the foreign key.
      *
-     * @var array
+     * @var list<string>
      */
     public $foreign_key = [];
 
     /**
      * Options of the relationship.
      *
-     * @var array
+     * @var array<string, mixed>
      */
     protected $options = [];
 
@@ -74,14 +87,14 @@ abstract class AbstractRelationship implements InterfaceRelationship
     /**
      * List of valid options for relationships.
      *
-     * @var array
+     * @var list<string>
      */
     protected static $valid_association_options = ['class_name', 'class', 'foreign_key', 'conditions', 'select', 'readonly', 'namespace'];
 
     /**
      * Constructs a relationship.
      *
-     * @param array $options Options for the relationship (see {@link valid_association_options})
+     * @param array<int|string, mixed> $options Options for the relationship (see {@link valid_association_options})
      * @return mixed
      */
     public function __construct($options = [])
@@ -112,6 +125,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
     }
 
+    /**
+     * @return Table
+     */
     public function get_table()
     {
         return Table::load($this->class_name);
@@ -135,11 +151,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * $models.
      *
      * @param Table $table
-     * @param $models array of model objects
-     * @param $attributes array of attributes from $models
-     * @param $includes array of eager load directives
-     * @param $query_keys -> key(s) to be queried for on included/related table
-     * @param $model_values_keys -> key(s)/value(s) to be used in query from model which is including
+     * @param list<Model> $models array of model objects
+     * @param list<array<string, mixed>> $attributes array of attributes from $models
+     * @param list<mixed> $includes array of eager load directives
+     * @param list<string> $query_keys -> key(s) to be queried for on included/related table
+     * @param list<string> $model_values_keys -> key(s)/value(s) to be used in query from model which is including
      * @return void
      */
     protected function query_and_attach_related_models_eagerly(Table $table, $models, $attributes, $includes = [], $query_keys = [], $model_values_keys = [])
@@ -224,7 +240,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * Creates a new instance of specified {@link Model} with the attributes pre-loaded.
      *
      * @param Model $model The model which holds this association
-     * @param array $attributes Hash containing attributes to initialize the model with
+     * @param array<int|string, mixed> $attributes Hash containing attributes to initialize the model with
      * @return Model
      */
     public function build_association(Model $model, $attributes = [])
@@ -237,7 +253,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * Creates a new instance of {@link Model} and invokes save.
      *
      * @param Model $model The model which holds this association
-     * @param array $attributes Hash containing attributes to initialize the model with
+     * @param array<int|string, mixed> $attributes Hash containing attributes to initialize the model with
      * @return Model
      */
     public function create_association(Model $model, $attributes = [])
@@ -247,6 +263,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
         return $this->append_record_to_associate($model, $new_record);
     }
 
+    /**
+     * @return Model
+     */
     protected function append_record_to_associate(Model $associate, Model $record)
     {
         $association = & $associate->{$this->attribute_name};
@@ -260,6 +279,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
         return $record;
     }
 
+    /**
+     * @param array<int|string, mixed> $options
+     * @return array<string, mixed>
+     */
     protected function merge_association_options($options)
     {
         $available_options = array_merge(self::$valid_association_options, static::$valid_association_options);
@@ -272,6 +295,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
         return $valid_options;
     }
 
+    /**
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
     protected function unset_non_finder_options($options)
     {
         foreach (array_keys($options) as $option) {
@@ -296,6 +323,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $this->set_class_name(classify($this->attribute_name, $singularize));
     }
 
+    /**
+     * @param string $class_name
+     * @return void
+     */
     protected function set_class_name($class_name)
     {
         if (!has_absolute_namespace($class_name) && isset($this->options['namespace'])) {
@@ -311,6 +342,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $this->class_name = $class_name;
     }
 
+    /**
+     * @param list<string> $condition_keys
+     * @param list<string> $value_keys
+     * @return array<int, mixed>|null
+     */
     protected function create_conditions_from_keys(Model $model, $condition_keys = [], $value_keys = [])
     {
         $condition_string = implode('_and_', $condition_keys);
@@ -383,16 +419,18 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * This will load the related model data.
      *
      * @param Model $model The model this relationship belongs to
+     * @return Model|array<int, Model>|null
      */
     abstract public function load(Model $model);
 
     /**
      * Eagerly loads the related model data for a set of models.
      *
-     * @param array $models The models to load the association for
-     * @param array $attributes The attributes from the related table that were pre-fetched for this relationship
-     * @param array $includes The nested includes to eager load on the associated models
+     * @param list<Model> $models The models to load the association for
+     * @param list<array<string, mixed>> $attributes The attributes from the related table that were pre-fetched for this relationship
+     * @param list<mixed> $includes The nested includes to eager load on the associated models
      * @param Table $table The Table for the class that owns this relationship
+     * @return void
      */
     abstract public function load_eagerly($models, $attributes, $includes, Table $table);
 };
@@ -452,12 +490,14 @@ class HasMany extends AbstractRelationship
      * <li><b>through:</b> name of a model</li>
      * </ul>
      *
-     * @var array
+     * @var list<string>
      */
     protected static $valid_association_options = ['primary_key', 'order', 'group', 'having', 'limit', 'offset', 'through', 'source'];
 
+    /** @var list<string>|null */
     protected $primary_key;
 
+    /** @var string|null */
     private $through;
 
     /** @var bool|null Unset until {@see load()} runs once; isset() is the deliberate init-guard. */
@@ -466,7 +506,7 @@ class HasMany extends AbstractRelationship
     /**
      * Constructs a {@link HasMany} relationship.
      *
-     * @param array $options Options for the association
+     * @param array<int|string, mixed> $options Options for the association
      * @return HasMany
      */
     public function __construct($options = [])
@@ -490,6 +530,11 @@ class HasMany extends AbstractRelationship
         }
     }
 
+    /**
+     * @param string $model_class_name
+     * @param bool $override
+     * @return void
+     */
     protected function set_keys($model_class_name, $override = false)
     {
         //infer from class_name
@@ -502,6 +547,9 @@ class HasMany extends AbstractRelationship
         }
     }
 
+    /**
+     * @return Model|array<int, Model>|null
+     */
     public function load(Model $model)
     {
         $class_name = $this->class_name;
@@ -548,8 +596,17 @@ class HasMany extends AbstractRelationship
         return $class_name::find($this->poly_relationship ? 'all' : 'first', $options);
     }
 
-    private function inject_foreign_key_for_new_association(Model $model, &$attributes)
+    /**
+     * @param array<int|string, mixed> $attributes
+     * @param-out array<int|string, mixed> $attributes
+     * @return array<int|string, mixed>
+     */
+    private function inject_foreign_key_for_new_association(Model $model, array &$attributes): array
     {
+        // pre-existing: set_keys() expects a class name string; this passes the Model
+        // instance itself. Latent bug, not fixed here per task scope — see
+        // task-A9-report.md concerns. Likely should be set_keys(get_class($model)) as in load().
+        // @phpstan-ignore argument.type
         $this->set_keys($model);
         $primary_key = Inflector::instance()->variablize($this->foreign_key[0]);
 
@@ -560,18 +617,32 @@ class HasMany extends AbstractRelationship
         return $attributes;
     }
 
+    /**
+     * @param array<int|string, mixed> $attributes
+     * @return Model
+     */
     public function build_association(Model $model, $attributes = [])
     {
         $attributes = $this->inject_foreign_key_for_new_association($model, $attributes);
         return parent::build_association($model, $attributes);
     }
 
+    /**
+     * @param array<int|string, mixed> $attributes
+     * @return Model
+     */
     public function create_association(Model $model, $attributes = [])
     {
         $attributes = $this->inject_foreign_key_for_new_association($model, $attributes);
         return parent::create_association($model, $attributes);
     }
 
+    /**
+     * @param list<Model> $models
+     * @param list<array<string, mixed>> $attributes
+     * @param list<mixed> $includes
+     * @return void
+     */
     public function load_eagerly($models, $attributes, $includes, Table $table)
     {
         $this->set_keys($table->class->name);
@@ -606,6 +677,9 @@ class HasOne extends HasMany {};
  */
 class HasAndBelongsToMany extends AbstractRelationship
 {
+    /**
+     * @param array<int|string, mixed> $options
+     */
     public function __construct($options = [])
     {
         /* options =>
@@ -617,8 +691,22 @@ class HasAndBelongsToMany extends AbstractRelationship
          */
     }
 
-    public function load(Model $model) {}
+    /**
+     * Unimplemented stub (see class-level @todo); always returns null.
+     *
+     * @return null
+     */
+    public function load(Model $model)
+    {
+        return null;
+    }
 
+    /**
+     * @param list<Model> $models
+     * @param list<array<string, mixed>> $attributes
+     * @param list<mixed> $includes
+     * @return void
+     */
     public function load_eagerly($models, $attributes, $includes, Table $table)
     {
         throw new RelationshipException('has_and_belongs_to_many eager loading is not implemented');
@@ -656,7 +744,7 @@ class HasAndBelongsToMany extends AbstractRelationship
  */
 class BelongsTo extends AbstractRelationship
 {
-    /** @var array|null */
+    /** @var list<string>|null */
     private $primary_key_cache;
 
     public function __construct($options = [])
@@ -673,6 +761,10 @@ class BelongsTo extends AbstractRelationship
         }
     }
 
+    /**
+     * @param string $name
+     * @return mixed
+     */
     public function __get($name)
     {
         if ($name === 'primary_key') {
