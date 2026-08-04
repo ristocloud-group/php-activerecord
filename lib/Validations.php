@@ -161,7 +161,7 @@ class Validations
         $model_reflection = Reflections::instance()->get(get_class($this->model));
 
         if ($model_reflection->hasMethod('validate') && $model_reflection->getMethod('validate')->isPublic()) {
-            call_user_func([$this->model, 'validate']);
+            $model_reflection->getMethod('validate')->invoke($this->model);
         }
 
         $this->record->clear_model();
