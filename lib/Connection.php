@@ -17,7 +17,7 @@ use Psr\Log\LoggerInterface;
  * The base class for database connection adapters.
  *
  * @package ActiveRecord
- * @method Column create_column(array $column) Builds a {@see Column} from one raw row of
+ * @method Column create_column(array<string, mixed> $column) Builds a {@see Column} from one raw row of
  *         driver-specific column-metadata (as returned by query_column_info()). Implemented
  *         by every concrete adapter (Mysql/Pgsql/Sqlite); some accept $column by reference
  *         as a micro-optimization, none rely on mutating the caller's array.
@@ -57,7 +57,7 @@ abstract class Connection
     public static $datetime_format = 'Y-m-d H:i:s T';
     /**
      * Default PDO options to set for each connection.
-     * @var array
+     * @var array<int, int|bool>
      */
     public static $PDO_OPTIONS = [
         PDO::ATTR_CASE => PDO::CASE_LOWER,
@@ -78,6 +78,7 @@ abstract class Connection
      * Maximum number of bind parameters allowed in a single prepared statement.
      * Used by Table::upsert() to chunk large batches. Each concrete adapter
      * declares its own so tests can override one adapter without affecting others.
+     * @var int
      */
     public static $MAX_BIND_PARAMS = 65535;
 
@@ -268,7 +269,7 @@ abstract class Connection
      * Retrieves column meta data for the specified table.
      *
      * @param string $table Name of a table
-     * @return array An array of {@link Column} objects.
+     * @return array<string, Column> An array of {@link Column} objects, keyed by column name.
      */
     public function columns($table)
     {
@@ -308,7 +309,7 @@ abstract class Connection
      * Execute a raw SQL query on the database.
      *
      * @param string $sql Raw SQL string to execute.
-     * @param array &$values Optional array of bind values
+     * @param array<int, mixed> &$values Optional array of bind values
      * @return mixed A result set object
      */
     public function query($sql, &$values = [])
@@ -341,7 +342,7 @@ abstract class Connection
      * Execute a query that returns maximum of one row with one field and return it.
      *
      * @param string $sql Raw SQL string to execute.
-     * @param array &$values Optional array of values to bind to the query.
+     * @param array<int, mixed> &$values Optional array of values to bind to the query.
      * @return mixed
      */
     public function query_and_fetch_one($sql, &$values = [])
@@ -356,6 +357,7 @@ abstract class Connection
      *
      * @param string $sql Raw SQL string to execute.
      * @param Closure $handler Closure that will be passed the fetched results.
+     * @return void
      */
     public function query_and_fetch($sql, Closure $handler)
     {
@@ -369,7 +371,7 @@ abstract class Connection
     /**
      * Returns all tables for the current database.
      *
-     * @return array Array containing table names.
+     * @return list<string> Array containing table names.
      */
     public function tables()
     {
@@ -385,6 +387,8 @@ abstract class Connection
 
     /**
      * Starts a transaction.
+     *
+     * @return void
      */
     public function transaction()
     {
@@ -395,6 +399,8 @@ abstract class Connection
 
     /**
      * Commits the current transaction.
+     *
+     * @return void
      */
     public function commit()
     {
@@ -405,6 +411,8 @@ abstract class Connection
 
     /**
      * Rollback a transaction.
+     *
+     * @return void
      */
     public function rollback()
     {
@@ -415,6 +423,8 @@ abstract class Connection
 
     /**
      * Indicates whether or not this connection is currently executing within a DB transaction
+     *
+     * @return bool
      */
     public function inTransaction()
     {
@@ -555,26 +565,35 @@ abstract class Connection
 
     /**
      * Executes query to specify the character set for this connection.
+     *
+     * @param string $charset
+     * @return void
      */
     abstract public function set_encoding($charset);
 
-    /*
+    /**
      * Returns an array mapping of native database types
+     *
+     * @return array<string, string|array{name: string, length?: int}>
      */
-
     abstract public function native_database_types();
 
     /**
      * Specifies whether or not adapter can use LIMIT/ORDER clauses with DELETE & UPDATE operations
      *
      * @internal
-     * @returns boolean (FALSE by default)
+     * @return bool (FALSE by default)
      */
     public function accepts_limit_and_order_for_update_and_delete()
     {
         return false;
     }
 
+    /**
+     * Closes the underlying PDO connection.
+     *
+     * @return void
+     */
     public function close()
     {
         // Clear reference to PDO conn so that PHP will garbage collect and trigger PDO to close DB conn
