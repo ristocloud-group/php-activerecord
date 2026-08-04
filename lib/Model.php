@@ -1837,16 +1837,20 @@ class Model
      * <li><b>include:</b> a string or array of associated models to include in the final serialized product.</li>
      * </ul>
      *
-     * @param string $type Either Xml, Json, Csv or Array
+     * @param 'Xml'|'Json'|'Csv'|'Array' $type Either Xml, Json, Csv or Array
      * @param array<string, mixed> $options Options array for the serializer
-     * @return string|array<string, mixed> Serialized representation of the model
+     * @return ($type is 'Array' ? array<string, mixed> : string) Serialized representation of the model
      */
     private function serialize($type, $options)
     {
         require_once 'Serialization.php';
-        $class = "ActiveRecord\\{$type}Serializer";
-        $serializer = new $class($this, $options);
-        return $serializer->to_s();
+
+        return match ($type) {
+            'Xml' => (new XmlSerializer($this, $options))->to_s(),
+            'Json' => (new JsonSerializer($this, $options))->to_s(),
+            'Csv' => (new CsvSerializer($this, $options))->to_s(),
+            'Array' => (new ArraySerializer($this, $options))->to_s(),
+        };
     }
 
     /**
