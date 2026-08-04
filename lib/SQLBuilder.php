@@ -311,6 +311,11 @@ class SQLBuilder
         }
 
         $parts = preg_split('/(_and_|_or_)/i', $name, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        if (false === $parts) {
+            $parts = [];
+        }
+
         $num_values = count($values);
         $conditions = [''];
 
@@ -349,6 +354,11 @@ class SQLBuilder
     public static function create_hash_from_underscored_string($name, &$values = [], &$map = null)
     {
         $parts = preg_split('/(_and_|_or_)/i', $name);
+
+        if (false === $parts) {
+            $parts = [];
+        }
+
         $hash = [];
 
         for ($i = 0,$n = count($parts); $i < $n; ++$i) {
