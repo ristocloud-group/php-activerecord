@@ -29,7 +29,7 @@ abstract class Inflector
      */
     public function camelize($s)
     {
-        $s = preg_replace('/[_-]+/', '_', trim($s));
+        $s = preg_replace('/[_-]+/', '_', trim($s)) ?? '';
         $s = str_replace(' ', '_', $s);
 
         $camelized = '';
@@ -101,7 +101,7 @@ abstract class Inflector
      */
     public function underscorify($s)
     {
-        return preg_replace(['/[_\- ]+/','/([a-z])([A-Z])/'], ['_','\\1_\\2'], trim($s));
+        return preg_replace(['/[_\- ]+/','/([a-z])([A-Z])/'], ['_','\\1_\\2'], trim($s)) ?? '';
     }
 
     /**
