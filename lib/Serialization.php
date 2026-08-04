@@ -190,6 +190,7 @@ abstract class Serialization
                         $includes = [];
 
                         foreach ($assoc as $a) {
+                            /** @var Model $a */
                             $serialized = new $serializer_class($a, $options);
 
                             if ($this->includes_with_class_name_element) {
@@ -241,7 +242,14 @@ abstract class Serialization
      */
     final public function __toString()
     {
-        return $this->to_s();
+        $result = $this->to_s();
+        if (!is_string($result)) {
+            // to_s() returns an array only for ArraySerializer, for which a
+            // string cast was already a fatal error; use to_array() instead.
+            throw new ActiveRecordException('__toString() is not supported on an array serializer; use to_a()/to_array()');
+        }
+
+        return $result;
     }
 
     /**
@@ -351,14 +359,14 @@ class XmlSerializer extends Serialization
      */
     private function write($data, $tag = null): void
     {
-        foreach ($data as $attr => $value) {
+        foreach ((array) $data as $attr => $value) {
             if ($tag != null) {
                 $attr = $tag;
             }
 
             if (is_array($value) || is_object($value)) {
                 if (!is_int(key($value))) {
-                    $this->writer->startElement($attr);
+                    $this->writer->startElement((string) $attr);
                     $this->write($value);
                     $this->writer->endElement();
                 } else {
@@ -368,7 +376,7 @@ class XmlSerializer extends Serialization
                 continue;
             }
 
-            $this->writer->writeElement($attr, $value);
+            $this->writer->writeElement((string) $attr, $value);
         }
     }
 }
@@ -424,6 +432,9 @@ class CsvSerializer extends Serialization
     private function to_csv($arr)
     {
         $outstream = fopen('php://temp', 'w');
+        if (false === $outstream) {
+            throw new ActiveRecordException('Could not open a temporary stream for CSV serialization');
+        }
         fputcsv($outstream, $arr, self::$delimiter, self::$enclosure, '\\');
         rewind($outstream);
         $buffer = trim(stream_get_contents($outstream));
