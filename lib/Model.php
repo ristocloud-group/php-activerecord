@@ -812,7 +812,11 @@ class Model
      */
     public static function upsert(array $values, array|string $unique_by, ?array $update = null): int
     {
-        return static::table()->upsert($values, $unique_by, $update);
+        return static::table()->upsert(
+            array_values($values),
+            is_array($unique_by) ? array_values($unique_by) : $unique_by,
+            null === $update ? null : array_values($update)
+        );
     }
 
     /**
@@ -1637,7 +1641,8 @@ class Model
      * @see find
      * @param mixed $values An array containing values for the pk, or a single pk value
      * @param array<string, mixed> $options An options array
-     * @return Model
+     * @return Model|list<Model> A single Model when $values is a scalar or a single-element
+     *   array; a list<Model> when $values is a multi-element array of primary keys
      * @throws RecordNotFound if a record could not be found
      */
     public static function find_by_pk($values, $options)
