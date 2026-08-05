@@ -429,4 +429,15 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_not_null(Author::find_by_created_at($now));
         $this->assert_not_null(Author::find_by_created_at($arnow));
     }
+
+    public function test_table_exists_returns_bool_via_exists_query()
+    {
+        $table = Author::table();
+        $this->assert_true($table->exists(['select' => '1', 'conditions' => ['author_id' => 1]]));
+        $this->assert_false($table->exists(['select' => '1', 'conditions' => ['author_id' => -1]]));
+
+        // it must NOT be a COUNT
+        $this->assert_sql_has('EXISTS', $this->conn->last_query);
+        $this->assert_sql_doesnt_has('COUNT', $this->conn->last_query);
+    }
 };
