@@ -435,6 +435,17 @@ class RelationshipTest extends DatabaseTest
         $this->assert_true($reviews[0] instanceof BookReview);
     }
 
+    public function test_gh22_has_one_through_has_many_chain()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_one = [['book_review', 'through' => 'books']];
+
+        $review = Author::find(1)->book_review;
+
+        $this->assert_true($review instanceof BookReview);
+        $this->assert_equals(1, $review->book_id);
+    }
+
     public function test_has_many_through_with_invalid_class_name()
     {
         $this->expectException(ReflectionException::class);
