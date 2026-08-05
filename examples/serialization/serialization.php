@@ -29,7 +29,7 @@ $p = Product::create([
 ]);
 
 // only / except pick or drop columns.
-out('to_json only: '   . $p->to_json(['only' => ['name', 'price']]));
+out('to_json only: ' . $p->to_json(['only' => ['name', 'price']]));
 out('to_json except: ' . $p->to_json(['except' => ['secret_cost', 'category_id']]));
 
 // methods adds computed values from model methods.

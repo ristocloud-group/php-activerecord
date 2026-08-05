@@ -44,7 +44,7 @@ out('post count: ' . count($ada->posts));
 // Note: this fork's has_many :through only supports the join-table shape (see
 // tags/taggings below) -- not a plain one-to-many chain like "comments through
 // posts" -- so comments are aggregated across the author's posts directly.
-$comment_total = array_sum(array_map(fn (Post $post): int => count($post->comments), $ada->posts));
+$comment_total = array_sum(array_map(fn(Post $post): int => count($post->comments), $ada->posts));
 out('author comment count (via posts): ' . $comment_total);
 
 // has_many :through many-to-many (post <-> tags via taggings)
