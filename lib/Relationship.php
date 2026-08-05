@@ -57,6 +57,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
     public $attribute_name;
 
     /**
+     * Typed, validated view of the declared relationship definition.
+     */
+    protected RelationshipOptions $def;
+
+    /**
      * Class name of the associated model.
      *
      * @var string
@@ -99,6 +104,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     public function __construct($options = [])
     {
+        $this->def = RelationshipOptions::from_array($options);
         $this->attribute_name = $options[0];
         $this->options = $this->merge_association_options($options);
 
@@ -838,6 +844,8 @@ class HasAndBelongsToMany extends AbstractRelationship
      */
     public function __construct($options = [])
     {
+        $this->def = RelationshipOptions::from_array($options);
+
         /* options =>
          *   join_table - name of the join table if not in lexical order
          *   foreign_key -
