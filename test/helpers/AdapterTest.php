@@ -423,4 +423,18 @@ abstract class AdapterTest extends DatabaseTest
         $datetime = '2009-01-01';
         $this->assert_equals($datetime, $this->conn->date_to_string(date_create($datetime)));
     }
+
+    public function test_exists_sql_yields_integer_scalar()
+    {
+        // at least one author exists -> 1
+        $sql = $this->conn->exists_sql('SELECT 1 FROM authors');
+        $this->assert_same(1, (int) $this->conn->query_and_fetch_one($sql));
+
+        // no matching row -> 0. Also proves Postgres' boolean is normalized to an
+        // integer here rather than coming back as the string 't'/'f'.
+        $none = $this->conn->exists_sql(
+            'SELECT 1 FROM authors WHERE ' . $this->conn->quote_name('author_id') . ' = -1'
+        );
+        $this->assert_same(0, (int) $this->conn->query_and_fetch_one($none));
+    }
 }
