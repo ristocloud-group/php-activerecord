@@ -248,6 +248,16 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_true(Author::exists(['conditions' => 'parent_author_id IS NOT NULL']));
     }
 
+    public function test_exists_honors_joins_option()
+    {
+        // Tito (author 1) has a book -> INNER JOIN yields a row -> true
+        $this->assert_true(Author::exists(['joins' => ['books'], 'conditions' => ['authors.author_id = ?', 1]]));
+        // Bill Clinton (author 3) has no book -> INNER JOIN yields nothing -> false
+        $this->assert_false(Author::exists(['joins' => ['books'], 'conditions' => ['authors.author_id = ?', 3]]));
+        // the join actually reached the emitted SQL
+        $this->assert_sql_has('JOIN', $this->conn->last_query);
+    }
+
     public function test_find_by_call_static()
     {
         $this->assert_equals('Tito', Author::find_by_name('Tito')->name);

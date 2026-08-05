@@ -361,6 +361,7 @@ abstract class Connection
      * not already yield an integer override this to normalize to 1/0.
      *
      * @param string $inner a complete inner SELECT, e.g. "SELECT 1 FROM t WHERE …"
+     * @return string
      */
     public function exists_sql(string $inner): string
     {

@@ -1532,14 +1532,13 @@ class Model
     {
         $options = self::finder_conditions_from_args(func_get_args());
 
-        // Existence only needs the WHERE clause; select a constant and drop
-        // ordering/paging/grouping so the database can stop at the first match.
-        $exists_options = ['select' => '1'];
-        if (isset($options['conditions'])) {
-            $exists_options['conditions'] = $options['conditions'];
-        }
+        // Existence needs the full filtering shape (conditions, joins, from,
+        // group, having) but not ordering/paging; select a constant so the
+        // database can stop at the first matching row.
+        $options['select'] = '1';
+        unset($options['order'], $options['limit'], $options['offset']);
 
-        return static::table()->exists($exists_options);
+        return static::table()->exists($options);
     }
 
     /**

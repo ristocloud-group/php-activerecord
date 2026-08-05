@@ -304,8 +304,9 @@ class Table
         $conn = $this->connection();
         $sql = $this->options_to_sql($options);
         $values = $sql->get_where_values();
+        $this->last_sql = $conn->exists_sql($sql->to_s());
 
-        return (bool) (int) $conn->query_and_fetch_one($conn->exists_sql($sql->to_s()), $values);
+        return (bool) (int) $conn->query_and_fetch_one($this->last_sql, $values);
     }
 
     /**

@@ -94,11 +94,11 @@ private static function finder_conditions_from_args(array $args): array
 public static function exists(/* ... */)
 {
     $options = self::finder_conditions_from_args(func_get_args());
-    // existence only needs conditions; drop ordering/paging/grouping noise
-    $options = ['conditions' => $options['conditions'] ?? null, 'select' => '1'];
-    if (is_null($options['conditions'])) {
-        unset($options['conditions']);
-    }
+    // Existence needs the full filtering shape (conditions, joins, from,
+    // group, having) but not ordering/paging; select a constant so the
+    // database can stop at the first matching row.
+    $options['select'] = '1';
+    unset($options['order'], $options['limit'], $options['offset']);
     return static::table()->exists($options);
 }
 ```
@@ -154,9 +154,12 @@ Model::exists($args)
 - **Argument forms** — `exists(123)` (pk), `exists(['conditions' => …])`,
   `exists(['id' => 1, 'name' => 'x'])` (hash) all preserved via the shared
   `finder_conditions_from_args()` helper.
-- **Inner query kept minimal** — only `conditions` + `select '1'`; `order`,
-  `limit`, `offset`, `group`, `having` are dropped because they are irrelevant
-  to existence and keep the `EXISTS` subquery clean and valid on every backend.
+- **Filtering options preserved, paging dropped** — `conditions`, `joins`,
+  `from`, `group`, and `having` are carried through unchanged (with `select`
+  overridden to `'1'`) because they affect which rows match and so affect the
+  existence result; only `order`, `limit`, and `offset` are dropped, since
+  they only affect ordering/pagination of rows that already matched and are
+  irrelevant to a yes/no existence check.
 - **Result normalization** — MySQL/SQLite return `1/0`; Postgres returns a
   boolean normalized to `1/0` via `::int`. `(bool)(int)$scalar` yields the
   correct boolean everywhere.
