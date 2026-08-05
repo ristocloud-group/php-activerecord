@@ -482,6 +482,63 @@ abstract class AbstractRelationship implements InterfaceRelationship
     }
 
     /**
+     * Resolves the association on the *through* (middle) model that points at
+     * this relationship's target — the equivalent of Rails' "source".
+     *
+     * The middle model is the target of the `through` relationship. We probe its
+     * declared associations by name, trying (in order): the singular of our
+     * attribute name, that singular re-pluralized, and the attribute name
+     * itself. The first that resolves wins; `null` means none matched (callers
+     * then keep the historical join-table behavior).
+     *
+     * @param AbstractRelationship $through the owner's `through` relationship
+     * @return AbstractRelationship|null
+     */
+    protected function resolve_source_relationship(AbstractRelationship $through): ?AbstractRelationship
+    {
+        $middle_table = $through->get_table();
+        $singular = Utils::singularize($this->attribute_name);
+
+        foreach ([$singular, Utils::pluralize($singular), $this->attribute_name] as $name) {
+            $source = $middle_table->get_relationship($name);
+            if (null !== $source) {
+                return $source;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Builds the INNER JOIN that hops from this relationship's target table to
+     * the `through` (middle) table for the reverse-FK (has_many→has_many) chain:
+     *
+     *     INNER JOIN <middle> ON(<target>.<source_fk> = <middle>.<source_pk>)
+     *
+     * The keys come from the middle model's own `has_many` to the target
+     * ($source). Kept separate from {@see construct_inner_join_sql()} so the
+     * historical join-table path is left untouched (issue #22, Approach B).
+     *
+     * @param Table $middle_table the `through` model's table
+     * @param HasMany $source the middle→target has_many association
+     * @return string
+     */
+    protected function construct_through_reverse_join_sql(Table $middle_table, HasMany $source): string
+    {
+        $source->set_keys($middle_table->class->getName());
+        if (null === $source->primary_key) {
+            throw new RelationshipException("Could not determine source primary key for relationship '{$this->attribute_name}'");
+        }
+
+        $target_name = $this->get_table()->get_fully_qualified_table_name();
+        $middle_name = $middle_table->get_fully_qualified_table_name();
+        $target_fk = $source->foreign_key[0]; // FK on the target table (e.g. book_id)
+        $middle_pk = $source->primary_key[0]; // middle PK (e.g. book_id)
+
+        return "INNER JOIN $middle_name ON($target_name.$target_fk = $middle_name.$middle_pk)";
+    }
+
+    /**
      * This will load the related model data.
      *
      * @param Model $model The model this relationship belongs to
@@ -635,18 +692,39 @@ class HasMany extends AbstractRelationship
                     throw new HasManyThroughAssociationException('has_many through can only use a belongs_to or has_many association');
                 }
 
-                // save old keys as we will be reseting them below for inner join convenience
-                $pk = $this->primary_key;
-                $fk = $this->foreign_key;
+                $source = $this->resolve_source_relationship($through_relationship);
 
-                $this->set_keys($this->get_table()->class->getName(), true);
+                if ($source instanceof HasMany && $through_relationship instanceof HasMany) {
+                    // Reverse-FK chain (issue #22): the middle model has_many the
+                    // target, so hop target.<source_fk> = middle.<source_pk> and
+                    // filter by the through model's own owner FK on the middle
+                    // table. The owner FK column (e.g. books.author_id) is left
+                    // unqualified in the condition: it is unambiguous because the
+                    // target table does not carry it, and qualifying it would be
+                    // mangled by quote_name().
+                    $through_table = $through_relationship->get_table();
+                    $this->options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
 
-                $through_table = $through_relationship->get_table();
-                $this->options['joins'] = $this->construct_inner_join_sql($through_table, true);
+                    $through_relationship->set_keys($model::table()->class->getName());
+                    if (null === $through_relationship->primary_key) {
+                        throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
+                    }
+                    $this->foreign_key = [$through_relationship->foreign_key[0]];
+                    $this->primary_key = $through_relationship->primary_key;
+                } else {
+                    // save old keys as we will be reseting them below for inner join convenience
+                    $pk = $this->primary_key;
+                    $fk = $this->foreign_key;
 
-                // reset keys
-                $this->primary_key = $pk;
-                $this->foreign_key = $fk;
+                    $this->set_keys($this->get_table()->class->getName(), true);
+
+                    $through_table = $through_relationship->get_table();
+                    $this->options['joins'] = $this->construct_inner_join_sql($through_table, true);
+
+                    // reset keys
+                    $this->primary_key = $pk;
+                    $this->foreign_key = $fk;
+                }
             }
 
             $this->initialized = true;

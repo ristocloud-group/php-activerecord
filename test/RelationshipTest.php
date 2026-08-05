@@ -24,6 +24,13 @@ class RelationshipTest extends DatabaseTest
         Employee::$has_one = [['position']];
         Host::$has_many = [['events', 'order' => 'id asc']];
 
+        Author::$has_many = [['books']];
+        Author::$has_one = [
+            ['awesome_person', 'foreign_key' => 'author_id', 'primary_key' => 'author_id'],
+            ['parent_author', 'class_name' => 'Author', 'foreign_key' => 'parent_author_id']];
+        Book::$has_many = [];
+        Book::$belongs_to = [['author']];
+
         foreach ($this->relationship_names as $name) {
             if (preg_match("/$name/", $this->name(), $match)) {
                 $this->relationship_name = $match[0];
@@ -412,6 +419,20 @@ class RelationshipTest extends DatabaseTest
 
         $venue = $this->get_relationship();
         $this->assert_true(count($venue->hostess) > 0);
+    }
+
+    public function test_gh22_has_many_through_has_many_chain()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_many = [['books'], ['book_reviews', 'through' => 'books']];
+
+        $reviews = Author::find(1)->book_reviews;
+
+        $this->assert_equals(2, count($reviews));
+        $ids = [$reviews[0]->id, $reviews[1]->id];
+        sort($ids);
+        $this->assert_equals([1, 2], $ids);
+        $this->assert_true($reviews[0] instanceof BookReview);
     }
 
     public function test_has_many_through_with_invalid_class_name()
