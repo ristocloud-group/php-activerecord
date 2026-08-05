@@ -1472,6 +1472,30 @@ class Model
     }
 
     /**
+     * Build a validated finder options array from the variadic count()/exists()
+     * arguments: a bare primary-key value, a conditions hash, or a trailing
+     * options hash. This is the parsing count() has always done, factored out so
+     * count() and exists() cannot diverge.
+     *
+     * @param list<mixed> $args
+     * @return array<string, mixed>
+     */
+    private static function finder_conditions_from_args(array $args): array
+    {
+        $options = static::extract_and_validate_options($args); // by-ref: pops trailing options hash
+
+        if (!empty($args) && !is_null($args[0]) && !empty($args[0])) {
+            if (is_hash($args[0])) {
+                $options['conditions'] = $args[0];
+            } else {
+                $options['conditions'] = call_user_func_array([static::class, 'pk_conditions'], $args);
+            }
+        }
+
+        return $options;
+    }
+
+    /**
      * Get a count of qualifying records.
      *
      * <code>
@@ -1483,17 +1507,8 @@ class Model
      */
     public static function count(/* ... */)
     {
-        $args = func_get_args();
-        $options = static::extract_and_validate_options($args);
+        $options = self::finder_conditions_from_args(func_get_args());
         $options['select'] = 'COUNT(*)';
-
-        if (!empty($args) && !is_null($args[0]) && !empty($args[0])) {
-            if (is_hash($args[0])) {
-                $options['conditions'] = $args[0];
-            } else {
-                $options['conditions'] = call_user_func_array([static::class, 'pk_conditions'], $args);
-            }
-        }
 
         $table = static::table();
         $sql = $table->options_to_sql($options);
@@ -1515,7 +1530,15 @@ class Model
      */
     public static function exists(/* ... */)
     {
-        return call_user_func_array([static::class, 'count'], func_get_args()) > 0;
+        $options = self::finder_conditions_from_args(func_get_args());
+
+        // Existence needs the full filtering shape (conditions, joins, from,
+        // group, having) but not ordering/paging; select a constant so the
+        // database can stop at the first matching row.
+        $options['select'] = '1';
+        unset($options['order'], $options['limit'], $options['offset']);
+
+        return static::table()->exists($options);
     }
 
     /**

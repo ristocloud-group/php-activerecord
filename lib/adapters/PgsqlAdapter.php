@@ -40,6 +40,12 @@ class PgsqlAdapter extends Connection
         return $sql . ' LIMIT ' . intval($limit) . ' OFFSET ' . intval($offset);
     }
 
+    public function exists_sql(string $inner): string
+    {
+        // Postgres EXISTS() returns a boolean (t/f); cast so the scalar is 1/0.
+        return "SELECT EXISTS($inner)::int";
+    }
+
     public function query_column_info($table)
     {
         $sql = <<<SQL

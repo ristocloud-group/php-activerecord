@@ -294,6 +294,22 @@ class Table
     }
 
     /**
+     * Whether any row matches $options, without counting: emits an EXISTS query
+     * that stops at the first matching row.
+     *
+     * @param array<string, mixed> $options
+     */
+    public function exists($options): bool
+    {
+        $conn = $this->connection();
+        $sql = $this->options_to_sql($options);
+        $values = $sql->get_where_values();
+        $this->last_sql = $conn->exists_sql($sql->to_s());
+
+        return (bool) (int) $conn->query_and_fetch_one($this->last_sql, $values);
+    }
+
+    /**
      * @param string $sql
      * @param array<int, mixed>|null $values
      * @param bool $readonly

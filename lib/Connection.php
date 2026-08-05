@@ -355,6 +355,20 @@ abstract class Connection
     }
 
     /**
+     * Wrap an inner SELECT in an existence check the database can short-circuit
+     * at the first matching row. Returns a query that yields a single scalar
+     * 1/0 row (so it fits query_and_fetch_one()). Adapters whose EXISTS() does
+     * not already yield an integer override this to normalize to 1/0.
+     *
+     * @param string $inner a complete inner SELECT, e.g. "SELECT 1 FROM t WHERE …"
+     * @return string
+     */
+    public function exists_sql(string $inner): string
+    {
+        return "SELECT EXISTS($inner)";
+    }
+
+    /**
      * Execute a raw SQL query and fetch the results.
      *
      * @param string $sql Raw SQL string to execute.

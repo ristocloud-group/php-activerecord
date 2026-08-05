@@ -1,0 +1,284 @@
+# Design: optimize `Model::exists()` to avoid `COUNT(*)`
+
+**Date:** 2026-08-05
+**Status:** approved (design)
+**Branch:** `feat/optimize-model-exists`
+
+## Problem
+
+`Model::exists()` currently delegates to `Model::count()`:
+
+```php
+public static function exists(/* ... */)
+{
+    return call_user_func_array([static::class, 'count'], func_get_args()) > 0;
+}
+```
+
+`count()` emits `SELECT COUNT(*) FROM t WHERE …`, which forces the database to
+find and **count every matching row** even though the caller only needs to know
+whether *at least one* exists. For an existence check on a non-unique condition
+that matches many rows, this is wasted work: the engine enumerates the whole
+matching set before we throw the number away and compare `> 0`.
+
+Goal: make `exists()` stop at the first matching row, improving latency and
+resource use, while keeping its `boolean` contract and leaving `count()`
+untouched (counting legitimately needs `COUNT`).
+
+## Approach
+
+Emit a standard SQL `EXISTS` query that the optimizer can short-circuit at the
+first matching row:
+
+```sql
+SELECT EXISTS(SELECT 1 FROM `t` WHERE …)          -- MySQL / MariaDB / SQLite → 1 / 0
+SELECT EXISTS(SELECT 1 FROM  t  WHERE …)::int      -- Postgres → 1 / 0
+```
+
+`EXISTS` is supported natively by every adapter we ship (MySQL, MariaDB,
+Postgres, SQLite). It always returns exactly one row (a scalar `1`/`0`), so it
+reuses `Connection::query_and_fetch_one()` cleanly. The only per-adapter wrinkle
+is that `SELECT EXISTS(…)` yields `1/0` on MySQL/SQLite but a `t/f` boolean on
+Postgres; casting Postgres to `::int` normalizes every backend to `1/0`.
+
+### Why not the alternatives
+
+- **`SELECT 1 … LIMIT 1` + row-presence check** — equally fast and fully
+  portable, but zero matches return *no row*, so it can't use
+  `query_and_fetch_one` (`$row[0]` on `false`) and needs a bespoke fetch. The
+  `EXISTS` scalar is cleaner and is the form the maintainer selected.
+- **`SELECT CASE WHEN EXISTS(…) THEN 1 ELSE 0 END`** — portable with no
+  per-adapter code, but more verbose; rejected in favor of the direct `EXISTS`
+  form with a one-line Postgres cast.
+- **Keep `COUNT(*)` but add `LIMIT 1`** — does not help: `COUNT` aggregates and
+  ignores `LIMIT`.
+
+## Components
+
+Three focused changes, following the existing object model (Model → Table →
+Connection/adapter).
+
+### 1. `lib/Model.php`
+
+Extract the argument-parsing logic currently inline in `count()` into a private
+helper so `count()` and `exists()` cannot drift:
+
+```php
+/**
+ * Turn the variadic finder args (pk value(s) | conditions hash | options hash)
+ * into a validated options array. Mirrors the parsing count() has always done.
+ *
+ * @param list<mixed> $args
+ * @return array<string, mixed>
+ */
+private static function finder_conditions_from_args(array $args): array
+{
+    $options = static::extract_and_validate_options($args); // by-ref: pops the options hash
+    if (!empty($args) && !is_null($args[0]) && !empty($args[0])) {
+        if (is_hash($args[0])) {
+            $options['conditions'] = $args[0];
+        } else {
+            $options['conditions'] = call_user_func_array([static::class, 'pk_conditions'], $args);
+        }
+    }
+    return $options;
+}
+```
+
+`count()` becomes: `$options = self::finder_conditions_from_args($args); $options['select'] = 'COUNT(*)'; …`
+(behavior identical to today).
+
+`exists()` becomes:
+
+```php
+public static function exists(/* ... */)
+{
+    $options = self::finder_conditions_from_args(func_get_args());
+    // Existence needs the full filtering shape (conditions, joins, from,
+    // group, having) but not ordering/paging; select a constant so the
+    // database can stop at the first matching row.
+    $options['select'] = '1';
+    unset($options['order'], $options['limit'], $options['offset']);
+    return static::table()->exists($options);
+}
+```
+
+### 2. `lib/Table.php`
+
+```php
+/**
+ * @param array<string, mixed> $options
+ */
+public function exists($options): bool
+{
+    $sql = $this->options_to_sql($options);           // builds SELECT 1 FROM t WHERE …
+    $existence_sql = $this->conn->exists_sql($sql->to_s());
+    $values = $sql->get_where_values();
+    return (bool) (int) $this->conn->query_and_fetch_one($existence_sql, $values);
+}
+```
+
+### 3. `lib/Connection.php` + `lib/adapters/PgsqlAdapter.php`
+
+```php
+// Connection (default — correct for MySQL, MariaDB, SQLite)
+public function exists_sql(string $inner): string
+{
+    return "SELECT EXISTS($inner)";
+}
+
+// PgsqlAdapter override — normalize the boolean result to 1/0
+public function exists_sql(string $inner): string
+{
+    return "SELECT EXISTS($inner)::int";
+}
+```
+
+## Data flow
+
+```
+Model::exists($args)
+  → finder_conditions_from_args($args)         // pk | hash | conditions
+  → ['select' => '1', 'conditions' => …]
+  → Table::exists($options)
+      → options_to_sql()                        // SELECT 1 FROM `t` WHERE …  (+ bind values)
+      → Connection::exists_sql($innerSql)       // wrap: SELECT EXISTS( … )  [ ::int on pgsql ]
+      → Connection::query_and_fetch_one($sql, $values)   // scalar 1 / 0
+  → (bool) (int) $scalar
+```
+
+## Edge cases
+
+- **No arguments** — `exists()` → `SELECT EXISTS(SELECT 1 FROM t)` → `true` iff
+  the table has any row (same semantics as `count() > 0` today).
+- **Argument forms** — `exists(123)` (pk), `exists(['conditions' => …])`,
+  `exists(['id' => 1, 'name' => 'x'])` (hash) all preserved via the shared
+  `finder_conditions_from_args()` helper.
+- **Filtering options preserved, paging dropped** — `conditions`, `joins`,
+  `from`, `group`, and `having` are carried through unchanged (with `select`
+  overridden to `'1'`) because they affect which rows match and so affect the
+  existence result; only `order`, `limit`, and `offset` are dropped, since
+  they only affect ordering/pagination of rows that already matched and are
+  irrelevant to a yes/no existence check.
+- **Result normalization** — MySQL/SQLite return `1/0`; Postgres returns a
+  boolean normalized to `1/0` via `::int`. `(bool)(int)$scalar` yields the
+  correct boolean everywhere.
+
+## Testing
+
+**Regression** — the existing `exists()` assertions in `ActiveRecordFindTest`,
+`CallbackTest`, and `ActiveRecordWriteTest` assert only the boolean result and
+must stay green.
+
+**New behavioral tests** (`ActiveRecordFindTest`, default connection = MySQL):
+- `exists(pk)` true/false, hash form, `conditions` form, and no-argument form
+  (`true` on a populated table).
+- Query shape: `assert_sql_has('EXISTS', $table->last_sql)` and
+  `assert_sql_doesnt_has('COUNT', …)` — proves the `COUNT` is gone.
+- A "many matches" condition that returns `true` — behavioral evidence of the
+  short-circuit.
+
+**Per-adapter coverage** — add a method to the shared `AdapterTest` battery so
+existence is verified on `Mysql / Mariadb / Pgsql / Sqlite`. This is what
+actually exercises the Postgres `::int` path.
+
+## Performance validation (empirical)
+
+Include a documented micro-benchmark in the PR on MySQL: the same condition
+matching many rows, comparing `SELECT COUNT(*)` vs `SELECT EXISTS(SELECT 1 …)`
+with `EXPLAIN` plus repeated timing.
+
+Expectation: `EXISTS` terminates at the first matching row (EXPLAIN `rows` ≈ 1),
+`COUNT` enumerates the full matching set. `EXISTS` is **never worse** —
+equivalent for PK/unique lookups and for zero-match conditions (both must scan
+the index range to conclude), and materially better as the number of matching
+rows grows.
+
+## Backward compatibility
+
+No contract break: `exists()` still returns `boolean`, `count()` is unchanged,
+and the extracted helper is private. The only observable change is the SQL text
+`exists()` emits (`COUNT(*)` → `EXISTS`). No public signature, return type, or
+thrown-exception type changes. Flagged explicitly in the PR per the repo's BC
+gate; a consumer depending on `exists()` emitting a `COUNT` is not a supported
+contract.
+
+## Out of scope
+
+- Optimizing `count()` (it must count).
+- Any new public API surface (the adapter method and the Model helper are
+  internal plumbing).
+
+## Benchmark results
+
+Measured on MySQL 8 (the `mysql` service container), via a scratch script
+(`test/scratch_exists_bench.php`, not committed — deleted after this run) that
+created `bench_rows(id INT PRIMARY KEY AUTO_INCREMENT, flag INT, INDEX(flag))`,
+inserted 100,000 rows all with `flag = 1`, and compared:
+
+```sql
+SELECT COUNT(*) FROM bench_rows WHERE flag = 1
+SELECT EXISTS(SELECT 1 FROM bench_rows WHERE flag = 1)
+```
+
+**EXPLAIN — `FORMAT=TRADITIONAL` (flat `rows` column):**
+
+```
+COUNT(*):
+  select_type=SIMPLE  rows=50000  extra=Using index
+
+EXISTS(...):
+  select_type=PRIMARY   rows=NULL   extra=No tables used
+  select_type=SUBQUERY  rows=50000  extra=Using index
+```
+
+The flat `rows` column reports the same raw index-lookup cardinality estimate
+(50000) for the subquery's access path in both cases — MySQL 8's traditional
+EXPLAIN output doesn't surface the `LIMIT` short-circuit as a distinct `rows`
+value here, since it's the same `ref` access on the `flag` index either way.
+
+**EXPLAIN — default `FORMAT=TREE` (shows the optimizer's short-circuit):**
+
+```
+COUNT(*):
+-> Aggregate: count(0)  (cost=16535 rows=1)
+    -> Covering index lookup on bench_rows using flag (flag = 1)  (cost=5014 rows=50000)
+
+EXISTS(...):
+-> Rows fetched before execution  (cost=0..0 rows=1)
+-> Select #2 (subquery in projection; run only once)
+    -> Limit: 1 row(s)  (cost=5014 rows=1)
+        -> Covering index lookup on bench_rows using flag (flag = 1)  (cost=5014 rows=50000)
+```
+
+This is the decisive plan-level evidence: `EXISTS` wraps the identical
+covering-index lookup in a **`Limit: 1 row(s)`** node (`rows=1`), while
+`COUNT(*)` feeds the same lookup straight into an `Aggregate` with no limit —
+it must enumerate every one of the ~50000 estimated matching rows to produce
+the count.
+
+> **Note on the `rows=50000` figure vs. the 100,000-row dataset:** every
+> captured `rows` estimate above reads `50000`, not `100000`, even though
+> 100% of rows have `flag = 1`. This is InnoDB's persistent-cardinality
+> statistics (`innodb_stats_persistent`), sampled mid-load — before all
+> 100k rows existed — and never refreshed with `ANALYZE TABLE` before the
+> `EXPLAIN`s ran; it's a stale optimizer *estimate*, not a re-measured
+> count, and it's identical for both queries only because they share the
+> same `ref` access path on the `flag` index. It is **not** the evidence
+> this benchmark relies on. The decisive evidence is (a) the `Limit: 1
+> row(s)` plan node that appears only in the `EXISTS` tree-format plan,
+> and (b) the measured wall-clock timings below — both of which are
+> independent of this stale cardinality sample.
+
+**Timing (1000 iterations each, same connection, same warmed table):**
+
+| Query                              | Avg latency |
+|-------------------------------------|-------------|
+| `SELECT COUNT(*) ... WHERE flag = 1` | 5.5618 ms   |
+| `SELECT EXISTS(SELECT 1 ... WHERE flag = 1)` | 0.2217 ms |
+
+**Interpretation:** `EXISTS` stops at the first matching row (the query plan's
+explicit `Limit: 1 row(s)` node), while `COUNT(*)` enumerates the full matching
+set before returning a number that `exists()` was only going to compare `> 0`.
+On this 100k-row, all-matching dataset, `EXISTS` was **~25x faster**
+(0.22 ms vs 5.56 ms average), confirming the design's premise empirically.

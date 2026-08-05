@@ -230,6 +230,34 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_false(Author::exists(['conditions' => 'author_id=999999']));
     }
 
+    public function test_exists_emits_exists_not_count()
+    {
+        Author::exists(1);
+        $this->assert_sql_has('EXISTS', $this->conn->last_query);
+        $this->assert_sql_doesnt_has('COUNT', $this->conn->last_query);
+    }
+
+    public function test_exists_no_args_checks_table_not_empty()
+    {
+        $this->assert_true(Author::exists());
+    }
+
+    public function test_exists_true_when_many_rows_match()
+    {
+        // several authors share a non-null parent_author_id; existence is still true
+        $this->assert_true(Author::exists(['conditions' => 'parent_author_id IS NOT NULL']));
+    }
+
+    public function test_exists_honors_joins_option()
+    {
+        // Tito (author 1) has a book -> INNER JOIN yields a row -> true
+        $this->assert_true(Author::exists(['joins' => ['books'], 'conditions' => ['authors.author_id = ?', 1]]));
+        // Bill Clinton (author 3) has no book -> INNER JOIN yields nothing -> false
+        $this->assert_false(Author::exists(['joins' => ['books'], 'conditions' => ['authors.author_id = ?', 3]]));
+        // the join actually reached the emitted SQL
+        $this->assert_sql_has('JOIN', $this->conn->last_query);
+    }
+
     public function test_find_by_call_static()
     {
         $this->assert_equals('Tito', Author::find_by_name('Tito')->name);
@@ -428,5 +456,16 @@ class ActiveRecordFindTest extends DatabaseTest
         Author::find(1)->update_attribute('created_at', $now);
         $this->assert_not_null(Author::find_by_created_at($now));
         $this->assert_not_null(Author::find_by_created_at($arnow));
+    }
+
+    public function test_table_exists_returns_bool_via_exists_query()
+    {
+        $table = Author::table();
+        $this->assert_true($table->exists(['select' => '1', 'conditions' => ['author_id' => 1]]));
+        $this->assert_false($table->exists(['select' => '1', 'conditions' => ['author_id' => -1]]));
+
+        // it must NOT be a COUNT
+        $this->assert_sql_has('EXISTS', $this->conn->last_query);
+        $this->assert_sql_doesnt_has('COUNT', $this->conn->last_query);
     }
 };
