@@ -175,6 +175,7 @@ jobs:
           php -r '
           $x = simplexml_load_file("coverage.xml");
           $n = $x->xpath("//project/metrics");
+          if ($n === false || !isset($n[0])) { fwrite(STDERR, "no coverage metrics found in clover\n"); exit(1); }
           $m = $n[0];
           $s = (int) $m["statements"];
           $c = (int) $m["coveredstatements"];

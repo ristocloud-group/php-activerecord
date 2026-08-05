@@ -1,7 +1,7 @@
 # Examples
 
 Runnable demonstrations of php-activerecord features. The examples below use
-**SQLite** and create their own database on the fly, so each runs with no setup:
+**SQLite** and create their own database on the fly, so each runs with no database server to configure:
 
 ```sh
 php examples/validations/validations.php
