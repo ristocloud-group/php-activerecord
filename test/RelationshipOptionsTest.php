@@ -63,4 +63,40 @@ class RelationshipOptionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->expectException(RelationshipException::class);
         RelationshipOptions::from_array(['']);
     }
+
+    public function test_empty_string_foreign_key_throws()
+    {
+        $this->expectException(RelationshipException::class);
+        RelationshipOptions::from_array(['books', 'foreign_key' => '']);
+    }
+
+    public function test_non_string_foreign_key_element_throws()
+    {
+        $this->expectException(RelationshipException::class);
+        RelationshipOptions::from_array(['books', 'foreign_key' => ['author_id', null]]);
+    }
+
+    public function test_non_string_primary_key_throws()
+    {
+        $this->expectException(RelationshipException::class);
+        RelationshipOptions::from_array(['books', 'primary_key' => 123]);
+    }
+
+    public function test_non_string_class_throws()
+    {
+        $this->expectException(RelationshipException::class);
+        RelationshipOptions::from_array(['books', 'class' => 123]);
+    }
+
+    public function test_empty_class_name_throws()
+    {
+        $this->expectException(RelationshipException::class);
+        RelationshipOptions::from_array(['books', 'class_name' => '']);
+    }
+
+    public function test_non_string_through_throws()
+    {
+        $this->expectException(RelationshipException::class);
+        RelationshipOptions::from_array(['books', 'through' => 5]);
+    }
 }
