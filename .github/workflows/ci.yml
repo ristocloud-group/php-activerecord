@@ -16,10 +16,15 @@ jobs:
       fail-fast: false
       matrix:
         php-version: ['8.3', '8.4', '8.5']
+        db:
+          - { name: baseline, mysql: 'mysql:9.7', mariadb: 'mariadb:11.4', postgres: 'postgres:18' }
+          - { name: min,      mysql: 'mysql:8.4', mariadb: 'mariadb:10.11', postgres: 'postgres:15' }
+          - { name: lts,      mysql: 'mysql:8.4', mariadb: 'mariadb:11.8', postgres: 'postgres:16' }
+          - { name: rolling,  mysql: 'mysql:9.7', mariadb: 'mariadb:12.3', postgres: 'postgres:17' }
 
     services:
       mysql:
-        image: mysql:9.7
+        image: ${{ matrix.db.mysql }}
         env:
           MYSQL_USER: phpar
           MYSQL_PASSWORD: secret
@@ -30,7 +35,7 @@ jobs:
           --health-cmd="mysqladmin ping -psecret"
           --health-interval=5s --health-timeout=5s --health-retries=10
       mariadb:
-        image: mariadb:11.4
+        image: ${{ matrix.db.mariadb }}
         env:
           MARIADB_USER: phpar
           MARIADB_PASSWORD: secret
@@ -41,7 +46,7 @@ jobs:
           --health-cmd="healthcheck.sh --connect --innodb_initialized"
           --health-interval=5s --health-timeout=5s --health-retries=10
       postgres:
-        image: postgres:18
+        image: ${{ matrix.db.postgres }}
         env:
           POSTGRES_DB: phpar_test
           POSTGRES_USER: phpar
@@ -85,11 +90,11 @@ jobs:
         run: composer update --no-interaction --prefer-dist
 
       - name: Static analysis
-        if: matrix.php-version == '8.3'
+        if: matrix.php-version == '8.3' && matrix.db.name == 'baseline'
         run: composer run analyse
 
       - name: Coding style
-        if: matrix.php-version == '8.3'
+        if: matrix.php-version == '8.3' && matrix.db.name == 'baseline'
         run: composer run cs
 
       - name: Tests
@@ -99,7 +104,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-php${{ matrix.php-version }}
+          name: coverage-php${{ matrix.php-version }}-${{ matrix.db.name }}
           path: coverage.xml
 
   redis-compat:
