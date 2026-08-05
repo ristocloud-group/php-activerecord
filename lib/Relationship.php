@@ -177,6 +177,12 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
         $conditions = SQLBuilder::create_conditions_from_underscored_string($conn, $query_key, $values) ?? [];
 
+        // Accept the hash form (GH #13): normalize it to the positional shape
+        // before merging so the branch below (and add_condition) can consume it.
+        if (isset($options['conditions'])) {
+            $options['conditions'] = $this->to_positional_conditions($conn, $options['conditions']);
+        }
+
         if (isset($options['conditions']) && strlen($options['conditions'][0]) > 1) {
             Utils::add_condition($options['conditions'], $conditions);
         } else {
@@ -353,6 +359,34 @@ abstract class AbstractRelationship implements InterfaceRelationship
     }
 
     /**
+     * Normalizes a declared `conditions` option into the positional
+     * [<sql fragment>, ...bind values] form the relationship condition-merging
+     * paths expect.
+     *
+     * Finders accept conditions in two shapes: a positional SQL fragment
+     * (`['name IN(?)', $binds]`) and a hash (`['name' => $value_or_list]`).
+     * The relationship merge path ({@see Utils::add_condition}) only understands
+     * the positional shape, so the hash form used to be dropped silently (GH #13).
+     * We convert a hash through {@see Expressions} — the very machinery finders
+     * use — so both shapes reach parity: a scalar value becomes `col = ?`, a
+     * list becomes `col IN(?, ...)`, and a null value becomes `col IS ?`.
+     * A positional/fragment condition is returned unchanged.
+     *
+     * @param array<int|string, mixed> $conditions
+     * @return array<int|string, mixed>
+     */
+    protected function to_positional_conditions(Connection $conn, array $conditions)
+    {
+        if (is_hash($conditions)) {
+            require_once 'Expressions.php';
+            $expressions = new Expressions($conn, $conditions);
+            return array_merge([$expressions->to_s()], array_flatten($expressions->values()));
+        }
+
+        return $conditions;
+    }
+
+    /**
      * @param list<string> $condition_keys
      * @param list<string> $value_keys
      * @return array<int, mixed>|null
@@ -374,9 +408,13 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
         $conditions = SQLBuilder::create_conditions_from_underscored_string($model_conn, $condition_string, $condition_values) ?? [];
 
-        # DO NOT CHANGE THE NEXT TWO LINES. add_condition operates on a reference and will screw options array up
+        # add_condition() mutates its first argument by reference, so we must merge
+        # into a *local* copy — never $this->options['conditions'] directly, or the
+        # declared options get corrupted across loads. to_positional_conditions()
+        # also folds the hash form down to positional (GH #13) and returns a fresh
+        # array for it, so the decoupling holds for both shapes.
         if (isset($this->options['conditions'])) {
-            $options_conditions = $this->options['conditions'];
+            $options_conditions = $this->to_positional_conditions($model_conn, $this->options['conditions']);
         } else {
             $options_conditions = [];
         }
