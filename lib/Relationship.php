@@ -171,7 +171,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         $values = [$values];
-        $conditions = SQLBuilder::create_conditions_from_underscored_string($table->conn, $query_key, $values);
+        $conn = $table->conn;
+        if (null === $conn) {
+            throw new DatabaseException('No database connection established for ' . $table->class->getName());
+        }
+        $conditions = SQLBuilder::create_conditions_from_underscored_string($conn, $query_key, $values) ?? [];
 
         if (isset($options['conditions']) && strlen($options['conditions'][0]) > 1) {
             Utils::add_condition($options['conditions'], $conditions);
@@ -190,7 +194,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
             $this->set_keys($this->get_table()->class->getName(), true);
 
-            $through_relationship = $table->get_relationship($options['through']);
+            $through_relationship = $table->get_relationship($options['through'], true);
+            if (null === $through_relationship) {
+                throw new RelationshipException("Relationship named {$options['through']} has not been declared for class: {$table->class->getName()}");
+            }
             $through_table = $through_relationship->get_table();
 
             $options['joins'] = $this->construct_inner_join_sql($through_table, true);
@@ -360,7 +367,12 @@ abstract class AbstractRelationship implements InterfaceRelationship
             return null;
         }
 
-        $conditions = SQLBuilder::create_conditions_from_underscored_string(Table::load(get_class($model))->conn, $condition_string, $condition_values);
+        $model_table = Table::load(get_class($model));
+        $model_conn = $model_table->conn;
+        if (null === $model_conn) {
+            throw new DatabaseException('No database connection established for ' . $model_table->class->getName());
+        }
+        $conditions = SQLBuilder::create_conditions_from_underscored_string($model_conn, $condition_string, $condition_values) ?? [];
 
         # DO NOT CHANGE THE NEXT TWO LINES. add_condition operates on a reference and will screw options array up
         if (isset($this->options['conditions'])) {
@@ -398,6 +410,12 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if ($this instanceof HasMany) {
             $this->set_keys($from_table->class->getName());
 
+            // set_keys() always assigns $this->primary_key (either from options or
+            // from Table::load()->pk); this is only null before the first call.
+            if (null === $this->primary_key) {
+                throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
+            }
+
             if ($using_through) {
                 $foreign_key = $this->primary_key[0];
                 $join_primary_key = $this->foreign_key[0];
@@ -411,7 +429,12 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         if (!is_null($alias)) {
-            $aliased_join_table_name = $alias = $this->get_table()->conn->quote_name($alias);
+            $alias_table = $this->get_table();
+            $alias_conn = $alias_table->conn;
+            if (null === $alias_conn) {
+                throw new DatabaseException('No database connection established for ' . $alias_table->class->getName());
+            }
+            $aliased_join_table_name = $alias = $alias_conn->quote_name($alias);
             $alias .= ' ';
         } else {
             $aliased_join_table_name = $join_table_name;
@@ -580,8 +603,7 @@ class HasMany extends AbstractRelationship
 
                 $this->set_keys($this->get_table()->class->getName(), true);
 
-                $relation = $model::table()->get_relationship($this->through);
-                $through_table = $relation->get_table();
+                $through_table = $through_relationship->get_table();
                 $this->options['joins'] = $this->construct_inner_join_sql($through_table, true);
 
                 // reset keys
@@ -590,6 +612,12 @@ class HasMany extends AbstractRelationship
             }
 
             $this->initialized = true;
+        }
+
+        // set_keys() above always assigns $this->primary_key; this is only null before
+        // the first call.
+        if (null === $this->primary_key) {
+            throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
         }
 
         if (!($conditions = $this->create_conditions_from_keys($model, $this->foreign_key, $this->primary_key))) {
