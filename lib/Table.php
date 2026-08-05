@@ -20,7 +20,7 @@ class Table
     /** @var array<string, self> */
     private static array $cache = [];
 
-    /** @var \ReflectionClass<object>|null */
+    /** @var \ReflectionClass<object> */
     public $class;
     /** @var Connection|null */
     public $conn;
@@ -147,8 +147,23 @@ class Table
         static::clear_cache();
 
         // Clear reference to PDO conn so that PHP will garbage collect and trigger PDO to close DB conn
-        $this->conn->close();
+        $this->conn?->close();
         $this->conn = null;
+    }
+
+    /**
+     * Returns the established connection, asserting one exists.
+     *
+     * The connection is set at construction and only null after drop_connection()
+     * (teardown); any query path requires a live connection.
+     */
+    private function connection(): Connection
+    {
+        if (null === $this->conn) {
+            throw new DatabaseException('No database connection established for ' . $this->class->getName() . '; call reestablish_connection() first.');
+        }
+
+        return $this->conn;
     }
 
     /**
@@ -200,7 +215,7 @@ class Table
     public function options_to_sql($options)
     {
         $table = array_key_exists('from', $options) ? $options['from'] : $this->get_fully_qualified_table_name();
-        $sql = new SQLBuilder($this->conn, $table);
+        $sql = new SQLBuilder($this->connection(), $table);
 
         if (array_key_exists('joins', $options)) {
             $sql->joins($this->create_joins($options['joins']));
@@ -280,7 +295,7 @@ class Table
 
         $collect_attrs_for_includes = is_null($includes) ? false : true;
         $list = $attrs = [];
-        $sth = $this->conn->query($sql, $this->process_data($values));
+        $sth = $this->connection()->query($sql, $this->process_data($values));
 
         while (($row = $sth->fetch())) {
             /** @var Model $model */
@@ -352,10 +367,10 @@ class Table
      */
     public function get_fully_qualified_table_name($quote_name = true)
     {
-        $table = $quote_name ? $this->conn->quote_name($this->table) : $this->table;
+        $table = $quote_name ? $this->connection()->quote_name($this->table) : $this->table;
 
         if ($this->db_name) {
-            $table = $this->conn->quote_name($this->db_name) . ".$table";
+            $table = $this->connection()->quote_name($this->db_name) . ".$table";
         }
 
         return $table;
@@ -404,11 +419,11 @@ class Table
     {
         $data = $this->process_data($data);
 
-        $sql = new SQLBuilder($this->conn, $this->get_fully_qualified_table_name());
+        $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
         $sql->insert($data, $pk, $sequence_name);
 
         $values = array_values($data);
-        return $this->conn->query(($this->last_sql = $sql->to_s()), $values);
+        return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
     }
 
     /**
@@ -472,7 +487,7 @@ class Table
         }
         unset($row);
 
-        $max = $this->conn::$MAX_BIND_PARAMS;
+        $max = $this->connection()::$MAX_BIND_PARAMS;
         $column_count = count($columns);
 
         if ($column_count === 0) {
@@ -489,16 +504,16 @@ class Table
         $chunk_size = max(1, intdiv($max, $column_count));
         $chunks = array_chunk($values, $chunk_size);
 
-        $use_transaction = count($chunks) > 1 && !$this->conn->inTransaction();
+        $use_transaction = count($chunks) > 1 && !$this->connection()->inTransaction();
         if ($use_transaction) {
-            $this->conn->transaction();
+            $this->connection()->transaction();
         }
 
         $affected = 0;
 
         try {
             foreach ($chunks as $chunk) {
-                $sql = new SQLBuilder($this->conn, $this->get_fully_qualified_table_name());
+                $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
                 $sql->upsert($columns, count($chunk), $unique_by, $update);
 
                 $bind = [];
@@ -508,16 +523,16 @@ class Table
                     }
                 }
 
-                $sth = $this->conn->query(($this->last_sql = $sql->to_s()), $bind);
+                $sth = $this->connection()->query(($this->last_sql = $sql->to_s()), $bind);
                 $affected += $sth->rowCount();
             }
 
             if ($use_transaction) {
-                $this->conn->commit();
+                $this->connection()->commit();
             }
         } catch (\Throwable $e) {
             if ($use_transaction) {
-                $this->conn->rollback();
+                $this->connection()->rollback();
             }
             throw $e;
         }
@@ -534,11 +549,11 @@ class Table
     {
         $data = $this->process_data($data);
 
-        $sql = new SQLBuilder($this->conn, $this->get_fully_qualified_table_name());
+        $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
         $sql->update($data)->where($where);
 
         $values = $sql->bind_values();
-        return $this->conn->query(($this->last_sql = $sql->to_s()), $values);
+        return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
     }
 
     /**
@@ -549,11 +564,11 @@ class Table
     {
         $data = $this->process_data($data);
 
-        $sql = new SQLBuilder($this->conn, $this->get_fully_qualified_table_name());
+        $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
         $sql->delete($data);
 
         $values = $sql->bind_values();
-        return $this->conn->query(($this->last_sql = $sql->to_s()), $values);
+        return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
     }
 
     /**
@@ -577,7 +592,7 @@ class Table
         $quote_name = !($this->conn instanceof PgsqlAdapter);
 
         $table_name = $this->get_fully_qualified_table_name($quote_name);
-        $conn = $this->conn;
+        $conn = $this->connection();
         $this->columns = Cache::get("get_meta_data-$table_name", function () use ($conn, $table_name) {
             return $conn->columns($table_name);
         });
@@ -618,9 +633,9 @@ class Table
         foreach ($hash as $name => &$value) {
             if ($value instanceof \DateTime) {
                 if (isset($this->columns[$name]) && $this->columns[$name]->type == Column::DATE) {
-                    $value = $this->conn->date_to_string($value);
+                    $value = $this->connection()->date_to_string($value);
                 } else {
-                    $value = $this->conn->datetime_to_string($value);
+                    $value = $this->connection()->datetime_to_string($value);
                 }
             }
         }
@@ -664,12 +679,12 @@ class Table
 
     private function set_sequence_name(): void
     {
-        if (!$this->conn->supports_sequences()) {
+        if (!$this->connection()->supports_sequences()) {
             return;
         }
 
         if (!($this->sequence = $this->class->getStaticPropertyValue('sequence'))) {
-            $this->sequence = $this->conn->get_sequence_name($this->table, $this->pk[0]);
+            $this->sequence = $this->connection()->get_sequence_name($this->table, $this->pk[0]);
         }
     }
 
