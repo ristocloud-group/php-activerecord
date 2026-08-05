@@ -750,7 +750,14 @@ class Model
      */
     public static function connection()
     {
-        return static::table()->conn;
+        $table = static::table();
+        $conn = $table->conn;
+
+        if (null === $conn) {
+            throw new DatabaseException('No database connection established for ' . static::class . '; call reestablish_connection() first.');
+        }
+
+        return $conn;
     }
 
     /**
@@ -879,7 +886,7 @@ class Model
         {
             $column = $table->get_column_by_inflected_name($pk);
 
-            if ($column->auto_increment || $use_sequence) {
+            if (null !== $column && ($column->auto_increment || $use_sequence)) {
                 $this->attributes[$pk] = static::connection()->insert_id($table->sequence);
             }
         }
@@ -1396,20 +1403,26 @@ class Model
             $method = 'find_by' . substr($method, 17);
         }
 
+        // Passed by reference into SQLBuilder's $map parameters below; a local copy is used
+        // (rather than static::$alias_attribute directly) since PHPStan otherwise treats the
+        // by-ref binding as capable of writing array<string,string>|null back onto the static
+        // property, even though neither method actually assigns through it.
+        $alias_attribute_map = static::$alias_attribute;
+
         if (substr($method, 0, 7) === 'find_by') {
             $attributes = substr($method, 8);
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, static::$alias_attribute);
+            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $alias_attribute_map);
 
             if (!($ret = static::find('first', $options)) && $create) {
-                return static::create(SQLBuilder::create_hash_from_underscored_string($attributes, $args, static::$alias_attribute));
+                return static::create(SQLBuilder::create_hash_from_underscored_string($attributes, $args, $alias_attribute_map));
             }
 
             return $ret;
         } elseif (substr($method, 0, 11) === 'find_all_by') {
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 12), $args, static::$alias_attribute);
+            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 12), $args, $alias_attribute_map);
             return static::find('all', $options);
         } elseif (substr($method, 0, 8) === 'count_by') {
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 9), $args, static::$alias_attribute);
+            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 9), $args, $alias_attribute_map);
             return static::count($options);
         }
 
@@ -1694,6 +1707,8 @@ class Model
      */
     public static function query($sql, $values = null)
     {
+        $values ??= [];
+
         return static::connection()->query($sql, $values);
     }
 

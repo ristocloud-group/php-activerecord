@@ -58,9 +58,13 @@ class Table
     public $sequence;
 
     /**
-     * A instance of CallBack for this model/table
+     * A instance of CallBack for this model/table.
+     *
+     * Always assigned at the end of the constructor; there is no teardown path
+     * that resets it to null (unlike $conn).
+     *
      * @static
-     * @var CallBack|null
+     * @var CallBack
      */
     public $callback;
 
