@@ -194,25 +194,36 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         if (!empty($options['through'])) {
-            // save old keys as we will be reseting them below for inner join convenience
-            $pk = $this->primary_key;
-            $fk = $this->foreign_key;
-
-            $this->set_keys($this->get_table()->class->getName(), true);
-
             $through_relationship = $table->get_relationship($options['through'], true);
             if (null === $through_relationship) {
                 throw new RelationshipException("Relationship named {$options['through']} has not been declared for class: {$table->class->getName()}");
             }
             $through_table = $through_relationship->get_table();
+            $source = $this->resolve_source_relationship($through_relationship);
 
-            $options['joins'] = $this->construct_inner_join_sql($through_table, true);
+            if ($source instanceof HasMany) {
+                // Reverse-FK chain (issue #22): join the middle table and expose
+                // its owner FK (e.g. books.author_id) aliased onto every target
+                // row so the matching loop below can partition per owner. The
+                // owner FK stays as $query_key (already the owner FK here).
+                $options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
+                $target_name = $this->get_table()->get_fully_qualified_table_name();
+                $middle_name = $through_table->get_fully_qualified_table_name();
+                $options['select'] = "$target_name.*, $middle_name.$query_key AS $query_key";
+            } else {
+                // Historical join-table / belongs_to shape — unchanged.
+                $pk = $this->primary_key;
+                $fk = $this->foreign_key;
 
-            $query_key = null;
+                $this->set_keys($this->get_table()->class->getName(), true);
+                $options['joins'] = $this->construct_inner_join_sql($through_table, true);
 
-            // reset keys
-            $this->primary_key = $pk;
-            $this->foreign_key = $fk;
+                $query_key = null;
+
+                // reset keys
+                $this->primary_key = $pk;
+                $this->foreign_key = $fk;
+            }
         }
 
         $options = $this->unset_non_finder_options($options);

@@ -446,6 +446,24 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals(1, $review->book_id);
     }
 
+    public function test_gh22_eager_has_many_through_chain()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_many = [['books'], ['book_reviews', 'through' => 'books', 'order' => 'book_reviews.id asc']];
+
+        $authors = Author::find('all', ['include' => ['book_reviews'], 'order' => 'author_id asc']);
+
+        $by_id = [];
+        foreach ($authors as $a) {
+            $by_id[$a->author_id] = $a;
+        }
+
+        // author 1 -> reviews via book 1 ; author 2 -> review via book 2 ; authors 3,4 -> none
+        $this->assert_equals([1, 2], array_map(fn($r) => $r->id, $by_id[1]->book_reviews));
+        $this->assert_equals([3], array_map(fn($r) => $r->id, $by_id[2]->book_reviews));
+        $this->assert_equals(0, count($by_id[3]->book_reviews ?? []));
+    }
+
     public function test_has_many_through_with_invalid_class_name()
     {
         $this->expectException(ReflectionException::class);
