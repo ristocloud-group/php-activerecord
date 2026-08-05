@@ -15,4 +15,5 @@ require __DIR__ . '/lib/Reflections.php';
 require __DIR__ . '/lib/Inflector.php';
 require __DIR__ . '/lib/CallBack.php';
 require __DIR__ . '/lib/Exceptions.php';
+require __DIR__ . '/lib/RelationshipOptions.php';
 require __DIR__ . '/lib/Cache.php';
