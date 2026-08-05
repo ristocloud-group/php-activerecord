@@ -1,0 +1,27 @@
+<?php
+
+namespace ActiveRecord;
+
+/**
+ * @phpstan-type Relationship array{
+ *     0: string, class_name?: string, class?: string,
+ *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
+ *     conditions?: mixed, select?: string, readonly?: bool,
+ *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
+ *     through?: string, source?: string
+ * }
+ */
+class Model
+{
+    /** @var array<int, Relationship|string>|string|null */
+    public static $has_many;
+
+    /** @var array<int, Relationship|string>|string|null */
+    public static $has_one;
+
+    /** @var array<int, Relationship|string>|string|null */
+    public static $belongs_to;
+
+    /** @var array<int, Relationship|string>|string|null */
+    public static $has_and_belongs_to_many;
+}

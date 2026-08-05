@@ -11,7 +11,6 @@
 class Payment extends ActiveRecord\Model
 {
     // payment belongs to a person
-    /** @var array<int, array<int|string, mixed>> */
     public static $belongs_to = [
         ['person'],
         ['order']];

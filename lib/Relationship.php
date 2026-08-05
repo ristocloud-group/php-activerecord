@@ -46,6 +46,13 @@ interface InterfaceRelationship
  *           {@see AbstractRelationship::query_and_attach_related_models_eagerly()} when
  *           $options['through'] is set, which is only a valid option for HasMany/HasOne —
  *           so it is never called on a BelongsTo/HasAndBelongsToMany instance.
+ * @phpstan-type Relationship array{
+ *     0: string, class_name?: string, class?: string,
+ *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
+ *     conditions?: mixed, select?: string, readonly?: bool,
+ *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
+ *     through?: string, source?: string
+ * }
  */
 abstract class AbstractRelationship implements InterfaceRelationship
 {
