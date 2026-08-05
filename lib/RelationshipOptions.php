@@ -16,6 +16,10 @@ namespace ActiveRecord;
  * `$class_name` is the *raw declared* class (from the `class` or `class_name` key) before any
  * namespace resolution — {@see AbstractRelationship::set_class_name()} still performs that.
  *
+ * This DTO carries only the declaration fields the library actually validates and consumes; the
+ * full relationship-option vocabulary is documented by the `@phpstan-type Relationship` alias in
+ * {@see Relationship} and by `stubs/relationship-properties.stub`.
+ *
  * @package ActiveRecord
  */
 final class RelationshipOptions
@@ -29,15 +33,6 @@ final class RelationshipOptions
         public readonly ?string $class_name = null,
         public readonly array $foreign_key = [],
         public readonly array $primary_key = [],
-        public readonly mixed $conditions = null,
-        public readonly ?string $select = null,
-        public readonly ?bool $readonly = null,
-        public readonly ?string $namespace = null,
-        public readonly ?string $order = null,
-        public readonly ?string $group = null,
-        public readonly ?string $having = null,
-        public readonly ?int $limit = null,
-        public readonly ?int $offset = null,
         public readonly ?string $through = null,
         public readonly ?string $source = null,
     ) {}
@@ -67,44 +62,9 @@ final class RelationshipOptions
             class_name: $class,
             foreign_key: self::to_string_list($definition['foreign_key'] ?? null, $name, 'foreign_key'),
             primary_key: self::to_string_list($definition['primary_key'] ?? null, $name, 'primary_key'),
-            conditions: $definition['conditions'] ?? null,
-            select: self::as_string($definition['select'] ?? null),
-            readonly: self::as_bool($definition['readonly'] ?? null),
-            namespace: self::as_string($definition['namespace'] ?? null),
-            order: self::as_string($definition['order'] ?? null),
-            group: self::as_string($definition['group'] ?? null),
-            having: self::as_string($definition['having'] ?? null),
-            limit: self::as_int($definition['limit'] ?? null),
-            offset: self::as_int($definition['offset'] ?? null),
             through: self::require_string_or_null($definition['through'] ?? null, $name, 'through'),
             source: self::require_string_or_null($definition['source'] ?? null, $name, 'source'),
         );
-    }
-
-    /**
-     * Lenient coercion for pass-through finder metadata (select/order/group/having/namespace):
-     * these are never consumed as typed control-flow values, only forwarded to the SQL finder,
-     * so a type mismatch degrades to null rather than throwing.
-     */
-    private static function as_string(mixed $value): ?string
-    {
-        return is_string($value) ? $value : null;
-    }
-
-    /**
-     * Lenient coercion for pass-through finder metadata (limit/offset) — see {@see as_string}.
-     */
-    private static function as_int(mixed $value): ?int
-    {
-        return is_int($value) ? $value : null;
-    }
-
-    /**
-     * Lenient coercion for pass-through finder metadata (readonly) — see {@see as_string}.
-     */
-    private static function as_bool(mixed $value): ?bool
-    {
-        return is_bool($value) ? $value : null;
     }
 
     /**
