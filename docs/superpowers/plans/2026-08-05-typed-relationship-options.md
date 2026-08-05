@@ -629,9 +629,22 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Amendment (2026-08-05 maintainer ruling, applied in Task 3 fix round 1)
+
+Task 3's read-swap made the DTO's silent coercion of malformed input observable. The maintainer
+ruled for **explicit validation** instead of silent coercion. `RelationshipOptions::from_array()`
+therefore **throws `RelationshipException`** on present-but-malformed values (non-string, or
+empty string; for the key fields, a non-empty-string list) for the five *consumed* fields —
+`class`/`class_name`, `foreign_key`, `primary_key`, `through`, `source`. Pass-through finder
+metadata (`select`, `order`, `group`, `having`, `namespace`, `limit`, `offset`, `readonly`) stays
+lenient. This only turns already-failing malformed inputs into clear errors; the full suite went
+946 → 952 (6 new throw-tests) with no pre-existing failures. See spec §4.4 and commit `4e25aa1`.
+The Task 1/2 code blocks above show the *originally planned* coercing form; the shipped `from_array`
+is the stricter form described here.
+
 ## Out of scope (require separate maintainer approval — do NOT implement here)
 
-- Strict validation: rejecting unknown option keys, or invalid option/type combinations (e.g. `through` on `belongs_to`). This is a *tightening* of input handling = breaking.
+- **Further** strict validation: rejecting *unknown* option keys, or invalid option/type *combinations* (e.g. `through` on `belongs_to`). Still a breaking tightening. (Present-but-malformed-value checks on the five consumed fields were pulled into scope by the ruling above.)
 - Native property typing on `Model` (e.g. `public static array $has_many`) — fatals existing untyped consumer declarations.
 - Replacing the array API with attributes/DTO-on-model.
 

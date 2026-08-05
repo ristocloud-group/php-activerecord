@@ -144,21 +144,31 @@ test suite green at each step.
   *inner keys* stays partial (array-shape support is IDE-dependent) — full key autocomplete
   is not achievable without leaving plain arrays, which was explicitly out of scope.
 
-### 4.4 Validation policy (goal 3) — clarify, do not tighten
+### 4.4 Validation policy (goal 3)
 
-`CLAUDE.md` classifies *tightening input handling* as a breaking change. Therefore the DTO
-factory, in this spec's scope, throws **only** for inputs that already fail today:
+`CLAUDE.md` classifies *tightening input handling* as a breaking change, so the DTO factory's
+validation was originally scoped to only clarify existing failures. During implementation the
+maintainer **explicitly authorized** a bounded tightening (ruling of 2026-08-05, recorded in
+the SDD ledger); the policy is therefore:
 
-- **Missing name** (`$options[0]` unset) → today produces a confusing undefined-key error;
-  becomes a clear `RelationshipException` ("relationship definition is missing its name").
+- **Missing name** (`$options[0]` unset/empty/non-string) → clear `RelationshipException`
+  (was a confusing undefined-key error).
+- **Present-but-malformed values on the five *consumed* fields** — `class`/`class_name`,
+  `foreign_key`, `primary_key`, `through`, `source` — throw a clear `RelationshipException`
+  when the value is not a non-empty string (or, for the key fields, a list of non-empty
+  strings). These inputs already failed today (SQL error on an empty/`null` key column, or a
+  `TypeError` in `set_class_name()` on a non-string); the swap in §4.2 made the DTO's earlier
+  silent coercion observable, and the maintainer chose an explicit error over silent coercion.
+  **No previously-*valid* declaration is affected** — the full suite stayed green (946 → 952
+  with the new tests), confirming no fixture relied on the old lenient behavior.
 
-Everything else that "works" today keeps working unchanged — in particular **unknown keys
-are still tolerated** (silently ignored, matching current `array_intersect_key` behavior).
+Still tolerated / still lenient (unchanged):
 
-Stricter validation — rejecting unknown keys, or rejecting invalid option/type combinations
-(e.g. `through`/`source` on `belongs_to`) — is **explicitly out of scope for this spec** and
-listed as a follow-up for the maintainer to approve (§7), optionally behind an opt-in flag
-or preceded by a deprecation notice.
+- **Unknown keys** remain silently ignored (matching current `array_intersect_key` behavior).
+- **Pass-through finder metadata** (`select`, `order`, `group`, `having`, `namespace`,
+  `limit`, `offset`, `readonly`) is *not* consumed as a typed control-flow value, so it stays
+  lenient (coerced to absent on type mismatch) — tightening it would reject currently-valid
+  inputs such as `'limit' => '10'`.
 
 ## 5. Backward compatibility
 
@@ -166,11 +176,11 @@ The implementation steps in §8 are all non-breaking, verified against the const
 
 - Public constructor signature preserved (`array` still accepted).
 - No native property types added; base declarations are untyped + PHPDoc only.
-- No previously-accepted input is rejected (validation only clarifies existing failures).
+- No previously-*valid* input is rejected. The bounded tightening in §4.4 (clear errors on
+  present-but-malformed values for the five consumed fields) was **explicitly approved by the
+  maintainer** during implementation, per `CLAUDE.md`'s hard gate; it only turns already-failing
+  malformed inputs into clear errors (suite stayed green).
 - New file added to the `ActiveRecord.php` manifest.
-
-The one genuinely-breaking item (strict validation) is quarantined in §7 and gated on
-explicit maintainer approval, per `CLAUDE.md`.
 
 ## 6. Performance
 
@@ -190,8 +200,10 @@ The per-query hot-path read is ~2× *faster* as a typed property than an array l
 
 ## 7. Out of scope / follow-ups (require maintainer approval)
 
-- **Strict validation** (reject unknown keys; reject invalid option/type combinations),
-  possibly opt-in or behind a deprecation-warning phase.
+- **Further strict validation** still deferred: rejecting *unknown* keys, and rejecting
+  invalid option/type *combinations* (e.g. `through`/`source` on `belongs_to`). (The
+  present-but-malformed-value checks on the five consumed fields were pulled into scope by the
+  maintainer's 2026-08-05 ruling — see §4.4.)
 - **Native property typing** / any 2.0-style standardization of consumer model declarations.
 - Replacing the array API with attributes/DTO-on-model (explicitly excluded by the user).
 
