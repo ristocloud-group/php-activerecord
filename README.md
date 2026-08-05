@@ -1,6 +1,7 @@
 # PHP ActiveRecord #
 
 [![CI](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml/badge.svg)](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/ristocloud-group/php-activerecord/badges/coverage.svg)](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml)
 
 > **This is a fork maintained by Ristocloud Group S.r.l.**
 >
@@ -41,7 +42,7 @@ Of course, there are some differences which will be obvious to the user if they 
 - **PostgreSQL**
 - **SQLite**
 
-These are policy minimums; `composer.json` carries no database-version constraint. Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 9.7, MariaDB 11.4, PostgreSQL 18 and SQLite. The Oracle (`oci`) adapter was removed in v1.8.0.
+These are policy minimums; `composer.json` carries no database-version constraint. Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 8.4 & 9.7, MariaDB 10.11, 11.4, 11.8 & 12.3, PostgreSQL 15, 16, 17 & 18, and SQLite 3. The Oracle (`oci`) adapter was removed in v1.8.0.
 
 ## Features ##
 
@@ -180,94 +181,29 @@ across clock-skewed hosts can expire entries early or late.
 | **File** | none | Yes (since this fork) | On disk until expiry/flush | `namespace` prefix; `flush()` deletes files | Lock-free; atomic writes, lazy GC, local-FS assumption | Single host, no extra services |
 | **Redis / Valkey** | `predis/predis` package | Yes (server-side) | In-memory (optionally persisted by the server) | `namespace`-scoped `SCAN`/`DEL`, else `FLUSHDB` | Atomic server-side TTL | Shared/networked cache, HA |
 
-## Basic CRUD ##
+## Examples ##
 
-### Retrieve ###
-These are your basic methods to find and retrieve records from your database.
-See the *Finders* section for more details.
+Rather than inline snippets, every major feature is shown as a **runnable,
+self-contained example** under [`examples/`](examples/). Each creates its own
+SQLite database and runs with no setup:
 
-```php
-$post = Post::find(1);
-echo $post->title; # 'My first blog post!!'
-echo $post->author_id; # 5
-
-# also the same since it is the first record in the db
-$post = Post::first();
-
-# finding using dynamic finders
-$post = Post::find_by_name('The Decider');
-$post = Post::find_by_name_and_id('The Bridge Builder',100);
-$post = Post::find_by_name_or_id('The Bridge Builder',100);
-
-# finding using a conditions array
-$posts = Post::find('all', ['conditions' => ['name=? or id > ?', 'The Bridge Builder', 100]]);
+```sh
+php examples/simple/simple.php
 ```
 
-### Create ###
-Here we create a new post by instantiating a new object and then invoking the save() method.
+| Example | Demonstrates |
+|---|---|
+| [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete) and convention overrides (`$table_name`, `$primary_key`) |
+| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `find_by_sql`, static scopes |
+| [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
+| [`relationships/`](examples/relationships/) | `belongs_to`, `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders |
+| [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |
+| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible`, `$delegate`, dirty tracking |
+| [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |
+| [`upsert/`](examples/upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and managed timestamps |
+| [`orders/`](examples/orders/) | A fuller app combining validations, a callback, and relationships |
 
-```php
-$post = new Post();
-$post->title = 'My first blog post!!';
-$post->author_id = 5;
-$post->save();
-# INSERT INTO `posts` (title,author_id) VALUES('My first blog post!!', 5)
-```
-
-### Update ###
-To update you would just need to find a record first and then change one of its attributes.
-It keeps an array of attributes that are "dirty" (that have been modified) and so our
-sql will only update the fields modified.
-
-```php
-$post = Post::find(1);
-echo $post->title; # 'My first blog post!!'
-$post->title = 'Some real title';
-$post->save();
-# UPDATE `posts` SET title='Some real title' WHERE id=1
-
-$post->title = 'New real title';
-$post->author_id = 1;
-$post->save();
-# UPDATE `posts` SET title='New real title', author_id=1 WHERE id=1
-```
-
-### Delete ###
-Deleting a record will not *destroy* the object. This means that it will call sql to delete
-the record in your database but you can still use the object if you need to.
-
-```php
-$post = Post::find(1);
-$post->delete();
-# DELETE FROM `posts` WHERE id=1
-echo $post->title; # 'New real title'
-```
-
-### Upsert ###
-`Model::upsert()` inserts or updates many rows in one atomic, bulk operation
-(modeled on Laravel Eloquent). It bypasses validations, callbacks and
-dirty-tracking. The second argument names the column(s) that identify a record;
-the optional third argument lists the columns to overwrite on conflict (all
-inserted columns except `created_at` when omitted). `created_at`/`updated_at`
-are managed automatically when those columns exist; if the table has
-`updated_at`, it is appended to the update list automatically whenever an
-update happens, even if you didn't list it in the third argument.
-
-```php
-Flight::upsert([
-    ['departure' => 'Oakland', 'destination' => 'San Diego', 'price' => 99],
-    ['departure' => 'Chicago', 'destination' => 'New York', 'price' => 150],
-], unique_by: ['departure', 'destination'], update: ['price']);
-# The `flights` table has an `updated_at` column, so it is appended to the
-# update list automatically even though only `price` was requested:
-# MySQL/MariaDB: INSERT ... VALUES (...),(...) ON DUPLICATE KEY UPDATE `price` = VALUES(`price`), `updated_at` = VALUES(`updated_at`)
-# Postgres:      INSERT ... VALUES (...),(...) ON CONFLICT ("departure", "destination") DO UPDATE SET "price" = EXCLUDED."price", "updated_at" = EXCLUDED."updated_at"
-# SQLite uses the same ON CONFLICT ... EXCLUDED form as Postgres, with identifiers quoted in backticks.
-```
-
-On MySQL/MariaDB the `unique_by` columns are ignored and the table's PRIMARY/UNIQUE
-indexes are used. Large batches are chunked automatically and run inside a
-transaction. A full runnable example lives in [`examples/upsert/`](examples/upsert/).
+See [`examples/README.md`](examples/README.md) for the full index.
 
 ## Contributing ##
 

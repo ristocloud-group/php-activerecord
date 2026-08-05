@@ -1,6 +1,6 @@
-create table simple_book(
-  book_id int not null primary key auto_increment,
-  name varchar(50)
+CREATE TABLE simple_book (
+  book_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT
 );
 
-insert into simple_book (name) values ('simple w/ options!');
+INSERT INTO simple_book (name) VALUES ('simple w/ options!');

@@ -3,7 +3,11 @@ includes:
 
 parameters:
     level: 8
+    phpVersion:
+        min: 80300
+        max: 80599
     paths:
         - lib
+        - examples
     bootstrapFiles:
         - ActiveRecord.php

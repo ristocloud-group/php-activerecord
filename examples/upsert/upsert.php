@@ -1,10 +1,20 @@
 <?php
 
+require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Flight.php';
 
-ActiveRecord\Config::initialize(function ($cfg) {
-    $cfg->set_connections(['development' => 'mysql://test:test@127.0.0.1/upsert_test']);
+// Create a throwaway SQLite database and load the schema, so this runs with no
+// database server to configure.
+$db = __DIR__ . '/upsert.db';
+@unlink($db);
+$pdo = new PDO('sqlite:' . $db);
+$pdo->exec((string) file_get_contents(__DIR__ . '/upsert.sql'));
+$pdo = null;
+
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
+    $cfg->set_connections(['development' => 'sqlite://unix(' . $db . ')']);
+    $cfg->set_logger(new Psr\Log\NullLogger());
 });
 
 // 1. Bulk insert-or-update. On conflict (departure, destination) only `price`
@@ -19,7 +29,7 @@ echo "upsert #1 affected: $affected\n";
 Flight::upsert([
     ['departure' => 'Oakland', 'destination' => 'San Diego', 'price' => 79],
 ], unique_by: ['departure', 'destination'], update: ['price']);
-echo "Oakland->San Diego price is now: " . Flight::find_by_departure('Oakland')->price . "\n";
+echo "Oakland->San Diego price is now: " . Flight::find_by_departure('Oakland')?->price . "\n";
 
 // 2. Omit `update` -> every provided column except `created_at` is overwritten on conflict.
 Flight::upsert([
@@ -32,11 +42,11 @@ Flight::upsert([['id' => 1, 'departure' => 'Oakland', 'destination' => 'San Dieg
 // 4. Timestamps are managed automatically when the columns exist: created_at is
 //    set once on insert; updated_at is refreshed on every update.
 $f = Flight::find_by_departure('Oakland');
-echo "created_at={$f->created_at->format('c')} updated_at={$f->updated_at->format('c')}\n";
+echo "created_at={$f?->created_at?->format('c')} updated_at={$f?->updated_at?->format('c')}\n";
 
 // 5. Passing update: [] performs a plain INSERT (it errors on duplicate keys).
 Flight::upsert([['departure' => 'Boston', 'destination' => 'Miami', 'price' => 120]], ['departure', 'destination'], []);
 
 // Note: very large arrays are chunked automatically to stay under the database's
 // bind-parameter limit — the whole operation runs inside a single transaction.
-// The MySQL/MariaDB affected-row count reports 1 per insert and 2 per update.
+// On MySQL/MariaDB the affected-row count reports 1 per insert and 2 per update.
