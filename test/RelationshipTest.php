@@ -774,4 +774,9 @@ class RelationshipTest extends DatabaseTest
 
         Author::find(999999, ['include' => ['books']]);
     }
+
+    public function test_gh22_book_reviews_fixture_loads()
+    {
+        $this->assert_equals(3, count(BookReview::all()));
+    }
 };
