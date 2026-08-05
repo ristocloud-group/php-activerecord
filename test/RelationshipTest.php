@@ -464,6 +464,26 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals(0, count($by_id[3]->book_reviews ?? []));
     }
 
+    public function test_gh22_eager_has_one_through_chain_is_last_wins()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_one = [['book_review', 'through' => 'books', 'order' => 'book_reviews.id asc']];
+
+        $authors = Author::find('all', ['include' => ['book_review'], 'order' => 'author_id asc']);
+
+        $by_id = [];
+        foreach ($authors as $a) {
+            $by_id[$a->author_id] = $a;
+        }
+
+        // Author 1 matches reviews 1 and 2; eager has_one attaches sequentially
+        // and overwrites, so the LAST row in our asc order (id 2) wins. This is
+        // pre-existing has_one eager-load semantics, not a bug introduced here —
+        // a first-wins implementation would have returned id 1.
+        $this->assert_true($by_id[1]->book_review instanceof BookReview);
+        $this->assert_equals(2, $by_id[1]->book_review->id);
+    }
+
     public function test_has_many_through_with_invalid_class_name()
     {
         $this->expectException(ReflectionException::class);
