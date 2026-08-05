@@ -47,7 +47,7 @@ interface InterfaceRelationship
  *           $options['through'] is set, which is only a valid option for HasMany/HasOne —
  *           so it is never called on a BelongsTo/HasAndBelongsToMany instance.
  * @phpstan-type Relationship array{
- *     0: string, class_name?: string, class?: string,
+ *     0: string, class_name?: string, class?: string, namespace?: string,
  *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
  *     conditions?: mixed, select?: string, readonly?: bool,
  *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
