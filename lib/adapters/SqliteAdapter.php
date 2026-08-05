@@ -71,7 +71,7 @@ class SqliteAdapter extends Connection
             ['INT', 'INTEGER']
         ) && $c->pk;
 
-        $column['type'] = preg_replace('/ +/', ' ', $column['type']);
+        $column['type'] = preg_replace('/ +/', ' ', $column['type']) ?? $column['type'];
         $column['type'] = str_replace(['(',')'], ' ', $column['type']);
         $column['type'] = Utils::squeeze(' ', $column['type']);
         $matches = explode(' ', $column['type']);

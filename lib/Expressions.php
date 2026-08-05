@@ -149,11 +149,12 @@ class Expressions
         $ret = "";
         $replace = [];
         $num_values = count($values);
-        $len = strlen($this->expressions);
+        $expressions = $this->expressions ?? '';
+        $len = strlen($expressions);
         $quotes = 0;
 
-        for ($i = 0,$n = strlen($this->expressions),$j = 0; $i < $n; ++$i) {
-            $ch = $this->expressions[$i];
+        for ($i = 0,$n = strlen($expressions),$j = 0; $i < $n; ++$i) {
+            $ch = $expressions[$i];
 
             if ($ch == self::ParameterMarker) {
                 if ($quotes % 2 == 0) {
@@ -161,9 +162,9 @@ class Expressions
                         throw new ExpressionsException("No bound parameter for index $j");
                     }
 
-                    $ch = $this->substitute($values, $substitute, $i, $j++);
+                    $ch = $this->substitute($values, $substitute, $j++);
                 }
-            } elseif ($ch == '\'' && $i > 0 && $this->expressions[$i - 1] != '\\') {
+            } elseif ($ch == '\'' && $i > 0 && $expressions[$i - 1] != '\\') {
                 ++$quotes;
             }
 
@@ -205,12 +206,11 @@ class Expressions
      * @param list<mixed> &$values          the bound values, positionally aligned with the '?' markers
      * @param bool         $substitute       whether to inline the actual (quoted) value(s) instead of
      *                                       returning bind marker(s)
-     * @param int          $pos              index of the current '?' marker within $this->expressions
      * @param int          $parameter_index  index of the value to substitute within $values
      *
-     * @return mixed a substituted SQL fragment (string), or the original character at $pos when not substituting
+     * @return mixed a substituted SQL fragment (string), or the '?' bind marker when not substituting
      */
-    private function substitute(array &$values, bool $substitute, int $pos, int $parameter_index): mixed
+    private function substitute(array &$values, bool $substitute, int $parameter_index): mixed
     {
         $value = $values[$parameter_index];
 
@@ -231,7 +231,7 @@ class Expressions
             return $this->stringify_value($value);
         }
 
-        return $this->expressions[$pos];
+        return self::ParameterMarker;
     }
 
     /**

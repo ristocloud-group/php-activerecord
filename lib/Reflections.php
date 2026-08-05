@@ -59,7 +59,7 @@ class Reflections extends Singleton
      * Get a cached ReflectionClass.
      *
      * @param string $class Optional name of a class
-     * @return ReflectionClass<object>|null
+     * @return ReflectionClass<object>
      * @throws ActiveRecordException if class was not found
      */
     public function get($class = null)

@@ -32,7 +32,13 @@ class ConnectionManager extends Singleton
         $name = $name ? $name : $config->get_default_connection();
 
         if (!isset(self::$connections[$name]) || !self::$connections[$name]->connection) {
-            self::$connections[$name] = Connection::instance($config->get_connection($name));
+            $connection_string = $config->get_connection($name);
+
+            if (null === $connection_string) {
+                throw new DatabaseException("Empty connection string");
+            }
+
+            self::$connections[$name] = Connection::instance($connection_string);
         }
 
         return self::$connections[$name];

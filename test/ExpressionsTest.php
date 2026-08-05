@@ -192,4 +192,45 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $a = new Expressions(null, ['id' => 1, 'name' => ['Tito','Mexican']]);
         $this->assert_equals('id=? AND name IN(?,?)', $a->to_s());
     }
+
+    // --- regression locks for the level-8 refactor of Expressions ---
+
+    // Exercises every branch of substitute() in a single to_s(true): scalar,
+    // array, apostrophe-escaped string, and null. Guards the substitute()
+    // change that now returns the '?' marker directly instead of re-reading
+    // $this->expressions.
+    public function test_substitute_all_value_types_in_one_expression()
+    {
+        $a = new Expressions(null, 'a=? AND b IN(?) AND c=? AND d=?', 5, [1, 'x'], "O'Brien", null);
+        $this->assert_equals("a=5 AND b IN(1,'x') AND c='O''Brien' AND d=NULL", $a->to_s(true));
+    }
+
+    // A '?' inside a quoted literal must not be substituted even in to_s(true);
+    // guards the quote-tracking loop that reads the (local copy of) expressions.
+    public function test_substitute_ignores_marker_inside_quotes()
+    {
+        $a = new Expressions(null, "note='really?' AND id=?", 7);
+        $this->assert_equals("note='really?' AND id=7", $a->to_s(true));
+    }
+
+    // bind() fills positions sequentially and the result feeds substitution;
+    // guards the copy-then-reassign form of bind().
+    public function test_bind_sequential_fill_then_substitute()
+    {
+        $a = new Expressions(null, 'x=? AND y=? AND z=?');
+        $a->bind(1, 10);
+        $a->bind(2, 'hi');
+        $a->bind(3, null);
+        $this->assert_equals([10, 'hi', null], $a->values());
+        $this->assert_equals("x=10 AND y='hi' AND z=NULL", $a->to_s(true));
+    }
+
+    // build_sql_from_hash() across all three branches (scalar =?, array IN(?),
+    // null IS ?) in one hash; the null branch had no prior direct coverage.
+    public function test_hash_with_null_and_array_and_scalar()
+    {
+        $a = new Expressions(null, ['id' => 1, 'name' => ['Tito', 'Mexican'], 'deleted_at' => null]);
+        $this->assert_equals('id=? AND name IN(?,?) AND deleted_at IS ?', $a->to_s());
+        $this->assert_equals([1, ['Tito', 'Mexican'], null], $a->values());
+    }
 }

@@ -278,15 +278,21 @@ class SQLBuilder
             return $order;
         }
 
+        if (null === $order) {
+            // Unreachable: a null $order is empty after the ?? "" coalesce above,
+            // so trim() would be falsy and we would already have returned.
+            return $order;
+        }
+
         $parts = explode(',', $order);
 
         for ($i = 0,$n = count($parts); $i < $n; ++$i) {
             $v = strtolower($parts[$i]);
 
             if (strpos($v, ' asc') !== false) {
-                $parts[$i] = preg_replace('/asc/i', 'DESC', $parts[$i]);
+                $parts[$i] = preg_replace('/asc/i', 'DESC', $parts[$i]) ?? $parts[$i];
             } elseif (strpos($v, ' desc') !== false) {
-                $parts[$i] = preg_replace('/desc/i', 'ASC', $parts[$i]);
+                $parts[$i] = preg_replace('/desc/i', 'ASC', $parts[$i]) ?? $parts[$i];
             } else {
                 $parts[$i] .= ' DESC';
             }
@@ -379,7 +385,7 @@ class SQLBuilder
     private function prepend_table_name_to_fields(array $hash = []): array
     {
         $new = [];
-        $table = $this->connection->quote_name($this->table);
+        $table = $this->connection->quote_name($this->table ?? '');
 
         foreach ($hash as $key => $value) {
             $k = $this->connection->quote_name($key);
@@ -446,6 +452,11 @@ class SQLBuilder
     private function build_insert(): string
     {
         require_once 'Expressions.php';
+
+        if (null === $this->data) {
+            throw new ActiveRecordException('SQLBuilder: insert() must be called before building an INSERT statement');
+        }
+
         $keys = join(',', $this->quoted_key_names());
 
         if ($this->sequence) {
@@ -462,6 +473,11 @@ class SQLBuilder
 
     private function build_upsert(): string
     {
+        if (null === $this->upsert_columns || null === $this->upsert_row_count
+            || null === $this->upsert_unique_by || null === $this->upsert_update) {
+            throw new ActiveRecordException('SQLBuilder: upsert() must be called before building an UPSERT statement');
+        }
+
         $keys = implode(', ', array_map([$this->connection, 'quote_name'], $this->upsert_columns));
 
         $one_row = '(' . implode(', ', array_fill(0, count($this->upsert_columns), '?')) . ')';
@@ -501,7 +517,7 @@ class SQLBuilder
         }
 
         if ($this->limit || $this->offset) {
-            $sql = $this->connection->limit($sql, $this->offset, $this->limit);
+            $sql = $this->connection->limit($sql, $this->offset, $this->limit ?? 0);
         }
 
         return $sql;
@@ -541,7 +557,7 @@ class SQLBuilder
     {
         $keys = [];
 
-        foreach ($this->data as $key => $value) {
+        foreach ($this->data ?? [] as $key => $value) {
             $keys[] = $this->connection->quote_name($key);
         }
 
