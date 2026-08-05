@@ -12,6 +12,7 @@ use PDO;
  * Adapter for SQLite.
  *
  * @package ActiveRecord
+ * @phpstan-import-type ConnectionInfo from Connection
  */
 class SqliteAdapter extends Connection
 {
@@ -24,6 +25,9 @@ class SqliteAdapter extends Connection
      */
     public static $MAX_BIND_PARAMS = 999;
 
+    /**
+     * @param ConnectionInfo $info Parsed connection-url object (see Connection::parse_connection_url())
+     */
     protected function __construct($info)
     {
         if (!file_exists($info->host)) {

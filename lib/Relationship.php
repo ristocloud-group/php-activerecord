@@ -121,7 +121,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $this->attribute_name = strtolower(Inflector::instance()->variablize($this->attribute_name));
 
         if (!$this->foreign_key && isset($this->options['foreign_key'])) {
-            $this->foreign_key = is_array($this->options['foreign_key']) ? $this->options['foreign_key'] : [$this->options['foreign_key']];
+            $this->foreign_key = is_array($this->options['foreign_key']) ? array_values($this->options['foreign_key']) : [$this->options['foreign_key']];
         }
     }
 
@@ -153,7 +153,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * @param Table $table
      * @param list<Model> $models array of model objects
      * @param list<array<string, mixed>> $attributes array of attributes from $models
-     * @param list<mixed> $includes array of eager load directives
+     * @param array<int|string, mixed> $includes array of eager load directives
      * @param list<string> $query_keys -> key(s) to be queried for on included/related table
      * @param list<string> $model_values_keys -> key(s)/value(s) to be used in query from model which is including
      * @return void
@@ -216,6 +216,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $key_to_match = $model->$model_values_key;
 
             foreach ($related_models as $related) {
+                /** @var Model $related */
                 if (empty($query_key) || $related->$query_key == $key_to_match) {
                     $hash = spl_object_hash($related);
 
@@ -246,7 +247,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
     public function build_association(Model $model, $attributes = [])
     {
         $class_name = $this->class_name;
-        return new $class_name($attributes);
+        /** @var Model $associated */
+        $associated = new $class_name($attributes);
+        return $associated;
     }
 
     /**
@@ -366,7 +369,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $options_conditions = [];
         }
 
-        return Utils::add_condition($options_conditions, $conditions);
+        $result = Utils::add_condition($options_conditions, $conditions);
+        /** @var array<int, mixed>|null $result */
+        return $result;
     }
 
     /**
@@ -428,7 +433,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      *
      * @param list<Model> $models The models to load the association for
      * @param list<array<string, mixed>> $attributes The attributes from the related table that were pre-fetched for this relationship
-     * @param list<mixed> $includes The nested includes to eager load on the associated models
+     * @param array<int|string, mixed> $includes The nested includes to eager load on the associated models
      * @param Table $table The Table for the class that owns this relationship
      * @return void
      */
@@ -522,7 +527,7 @@ class HasMany extends AbstractRelationship
         }
 
         if (!$this->primary_key && isset($this->options['primary_key'])) {
-            $this->primary_key = is_array($this->options['primary_key']) ? $this->options['primary_key'] : [$this->options['primary_key']];
+            $this->primary_key = is_array($this->options['primary_key']) ? array_values($this->options['primary_key']) : [$this->options['primary_key']];
         }
 
         if (!$this->class_name) {
@@ -636,7 +641,7 @@ class HasMany extends AbstractRelationship
     /**
      * @param list<Model> $models
      * @param list<array<string, mixed>> $attributes
-     * @param list<mixed> $includes
+     * @param array<int|string, mixed> $includes
      * @return void
      */
     public function load_eagerly($models, $attributes, $includes, Table $table)
@@ -700,7 +705,7 @@ class HasAndBelongsToMany extends AbstractRelationship
     /**
      * @param list<Model> $models
      * @param list<array<string, mixed>> $attributes
-     * @param list<mixed> $includes
+     * @param array<int|string, mixed> $includes
      * @return void
      */
     public function load_eagerly($models, $attributes, $includes, Table $table)

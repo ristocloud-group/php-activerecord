@@ -209,10 +209,10 @@ class Utils
     {
         if (is_array($condition)) {
             if (empty($conditions)) {
-                $conditions = array_flatten($condition);
+                $conditions = array_flatten(array_values($condition));
             } else {
                 $conditions[0] .= " $conjuction " . array_shift($condition);
-                $conditions[] = array_flatten($condition);
+                $conditions[] = array_flatten(array_values($condition));
             }
         } elseif (is_string($condition)) {
             $conditions[0] .= " $conjuction $condition";

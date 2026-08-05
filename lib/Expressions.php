@@ -81,7 +81,10 @@ class Expressions
             throw new ExpressionsException("Invalid parameter index: $parameter_number");
         }
 
-        $this->values[$parameter_number - 1] = $value;
+        $values = $this->values;
+        $values[$parameter_number - 1] = $value;
+        /** @var list<mixed> $values */
+        $this->values = $values;
     }
 
     /**
@@ -182,7 +185,7 @@ class Expressions
 
         foreach ($hash as $name => $value) {
             if ($this->connection) {
-                $name = $this->connection->quote_name($name);
+                $name = $this->connection->quote_name((string) $name);
             }
 
             if (is_array($value)) {

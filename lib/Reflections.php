@@ -33,6 +33,7 @@ class Reflections extends Singleton
         $class = $this->get_class($class);
 
         if (!isset($this->reflections[$class])) {
+            /** @var class-string $class */
             $this->reflections[$class] = new ReflectionClass($class);
         }
 

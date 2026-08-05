@@ -283,6 +283,7 @@ class Table
         $sth = $this->conn->query($sql, $this->process_data($values));
 
         while (($row = $sth->fetch())) {
+            /** @var Model $model */
             $model = new $this->class->name($row, false, true, false);
 
             if ($readonly) {
@@ -372,7 +373,7 @@ class Table
     public function get_relationship($name, $strict = false)
     {
         if ($this->has_relationship($name)) {
-            return $this->relationships[$name];
+            return $this->relationships[(string) $name];
         }
 
         if ($strict) {
@@ -484,7 +485,8 @@ class Table
             );
         }
 
-        $chunk_size = intdiv($max, $column_count);
+        // $column_count is >= 1 (checked above) and <= $max (checked above), so this is always >= 1.
+        $chunk_size = max(1, intdiv($max, $column_count));
         $chunks = array_chunk($values, $chunk_size);
 
         $use_transaction = count($chunks) > 1 && !$this->conn->inTransaction();
@@ -603,9 +605,9 @@ class Table
     }
 
     /**
-     * @template T of array<int|string, mixed>|null
-     * @param T $hash
-     * @return T
+     * @template TKey of int|string
+     * @param array<TKey, mixed>|null $hash
+     * @return ($hash is null ? null : array<TKey, mixed>)
      */
     private function &process_data(?array $hash): ?array
     {
@@ -616,21 +618,21 @@ class Table
         foreach ($hash as $name => &$value) {
             if ($value instanceof \DateTime) {
                 if (isset($this->columns[$name]) && $this->columns[$name]->type == Column::DATE) {
-                    $hash[$name] = $this->conn->date_to_string($value);
+                    $value = $this->conn->date_to_string($value);
                 } else {
-                    $hash[$name] = $this->conn->datetime_to_string($value);
+                    $value = $this->conn->datetime_to_string($value);
                 }
-            } else {
-                $hash[$name] = $value;
             }
         }
+        unset($value);
+
         return $hash;
     }
 
     private function set_primary_key(): void
     {
         if (($pk = $this->class->getStaticPropertyValue('pk', null)) || ($pk = $this->class->getStaticPropertyValue('primary_key', null))) {
-            $this->pk = is_array($pk) ? $pk : [$pk];
+            $this->pk = is_array($pk) ? array_values($pk) : [$pk];
         } else {
             $this->pk = [];
 

@@ -14,7 +14,7 @@ abstract class Inflector
     /**
      * Get an instance of the {@link Inflector} class.
      *
-     * @return object
+     * @return StandardInflector
      */
     public static function instance()
     {

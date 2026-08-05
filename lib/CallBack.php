@@ -87,7 +87,7 @@ class CallBack
     /**
      * Container for reflection class of given model
      *
-     * @var object
+     * @var \ReflectionClass<object>
      */
     private $klass;
 

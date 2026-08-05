@@ -54,6 +54,12 @@ abstract class Singleton
     final protected function get_called_class()
     {
         $backtrace = debug_backtrace();
-        return get_class($backtrace[2]['object']);
+        $object = $backtrace[2]['object'] ?? null;
+
+        if (!is_object($object)) {
+            throw new ActiveRecordException('Singleton::get_called_class() must be invoked from an instance method call context');
+        }
+
+        return get_class($object);
     }
 }

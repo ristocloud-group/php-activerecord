@@ -46,11 +46,18 @@ class Cache
     public static function initialize($url, $options = [])
     {
         if ($url) {
-            $url = parse_url($url);
-            $file = ucwords(Inflector::instance()->camelize($url['scheme']));
+            $parsed_url = parse_url($url);
+
+            if (!isset($parsed_url['scheme'])) {
+                throw new CacheException("Cache URL must specify a scheme (e.g. memcache://... or file://...): $url");
+            }
+
+            $file = ucwords(Inflector::instance()->camelize($parsed_url['scheme']));
             $class = "ActiveRecord\\$file";
             require_once __DIR__ . "/cache/$file.php";
-            static::$adapter = new $class($url, $options);
+            /** @var File|Memcache|Redis $adapter */
+            $adapter = new $class($parsed_url, $options);
+            static::$adapter = $adapter;
         } else {
             static::$adapter = null;
         }

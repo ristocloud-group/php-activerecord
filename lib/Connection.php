@@ -17,6 +17,7 @@ use Psr\Log\LoggerInterface;
  * The base class for database connection adapters.
  *
  * @package ActiveRecord
+ * @phpstan-type ConnectionInfo \stdClass&object{protocol: string, host: string, db: string|null, user: string|null, pass: string|null, port?: int, charset?: string}
  * @method Column create_column(array<string, mixed> $column) Builds a {@see Column} from one raw row of
  *         driver-specific column-metadata (as returned by query_column_info()). Implemented
  *         by every concrete adapter (Mysql/Pgsql/Sqlite); some accept $column by reference
@@ -171,7 +172,7 @@ abstract class Connection
      * </code>
      *
      * @param string $connection_url A connection URL
-     * @return object the parsed URL as an object.
+     * @return ConnectionInfo the parsed URL as an object.
      */
     public static function parse_connection_url($connection_url)
     {
@@ -182,7 +183,7 @@ abstract class Connection
         }
 
         $info = new \stdClass();
-        $info->protocol = $url['scheme'];
+        $info->protocol = $url['scheme'] ?? '';
         $info->host = $url['host'];
         $info->db = isset($url['path']) ? substr($url['path'], 1) : null;
         $info->user = $url['user'] ?? null;
@@ -236,13 +237,14 @@ abstract class Connection
             }
         }
 
+        /** @var ConnectionInfo $info */
         return $info;
     }
 
     /**
      * Class Connection is a singleton. Access it via instance().
      *
-     * @param object $info Parsed connection-url object (see parse_connection_url())
+     * @param ConnectionInfo $info Parsed connection-url object (see parse_connection_url())
      * @return Connection
      */
     protected function __construct($info)

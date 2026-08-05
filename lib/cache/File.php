@@ -36,7 +36,8 @@ class File
      */
     public function flush()
     {
-        array_map("unlink", glob($this->get_cache_path_for_key("*")));
+        $files = glob($this->get_cache_path_for_key("*"));
+        array_map("unlink", false === $files ? [] : $files);
     }
 
     /**
