@@ -140,4 +140,64 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $x = '1';
         $this->assert_equals([['1']], ActiveRecord\wrap_strings_in_arrays($x));
     }
+
+    public function test_extract_options()
+    {
+        // the trailing element is an options hash -> returned as-is
+        $this->assert_equals(['limit' => 1], AR\Utils::extract_options(['foo', ['limit' => 1]]));
+        // no trailing array -> empty options
+        $this->assert_equals([], AR\Utils::extract_options(['foo', 'bar']));
+        $this->assert_equals([], AR\Utils::extract_options([]));
+    }
+
+    public function test_add_condition()
+    {
+        // seeding an empty condition set with an array condition
+        $conditions = [];
+        AR\Utils::add_condition($conditions, ['name = ?', 'Bill']);
+        $this->assert_equals(['name = ?', 'Bill'], $conditions);
+
+        // appending a string condition ANDs onto the SQL fragment (index 0)
+        $conditions = ['name = ?', 'Bill'];
+        AR\Utils::add_condition($conditions, 'age > 30');
+        $this->assert_equals(['name = ? AND age > 30', 'Bill'], $conditions);
+
+        // a custom conjunction is honored
+        $conditions = ['a = 1'];
+        AR\Utils::add_condition($conditions, 'b = 2', 'OR');
+        $this->assert_equals(['a = 1 OR b = 2'], $conditions);
+    }
+
+    public function test_is_a_range()
+    {
+        $this->assert_true(AR\Utils::is_a('range', [1, 5]));
+        $this->assert_false(AR\Utils::is_a('range', [5, 1]));
+        $this->assert_false(AR\Utils::is_a('range', 'not-an-array'));
+        // unknown type falls through to false
+        $this->assert_false(AR\Utils::is_a('bogus', [1, 5]));
+    }
+
+    public function test_is_blank()
+    {
+        $this->assert_true(AR\Utils::is_blank(null));
+        $this->assert_true(AR\Utils::is_blank(''));
+        $this->assert_false(AR\Utils::is_blank('x'));
+        // "0" is a real value, not blank
+        $this->assert_false(AR\Utils::is_blank('0'));
+    }
+
+    public function test_pluralize_if()
+    {
+        $this->assert_equals('dog', AR\Utils::pluralize_if(1, 'dog'));
+        $this->assert_equals('dogs', AR\Utils::pluralize_if(2, 'dog'));
+        $this->assert_equals('dogs', AR\Utils::pluralize_if(0, 'dog'));
+    }
+
+    public function test_squeeze()
+    {
+        $this->assert_equals('a b', AR\Utils::squeeze(' ', 'a   b'));
+        $this->assert_equals('abbb', AR\Utils::squeeze('a', 'aaabbb'));
+        // nothing to collapse -> unchanged
+        $this->assert_equals('abc', AR\Utils::squeeze(' ', 'abc'));
+    }
 };

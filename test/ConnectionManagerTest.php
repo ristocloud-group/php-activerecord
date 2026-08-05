@@ -66,4 +66,32 @@ class ConnectionManagerTest extends DatabaseTest
         $this->assert_false(property_exists($old_connection, 'conn'));
         $this->assert_not_null($table->conn);
     }
+
+    public function test_drop_connection_forces_a_fresh_object_on_next_get()
+    {
+        $a = ConnectionManager::get_connection('mysql');
+        ConnectionManager::drop_connection('mysql');
+        $b = ConnectionManager::get_connection('mysql');
+
+        // dropping unsets the cached Connection, so the manager rebuilds it
+        $this->assert_not_same($a, $b);
+        $this->assert_not_null($b->connection);
+    }
+
+    public function test_drop_connection_with_unknown_name_is_a_noop()
+    {
+        $a = ConnectionManager::get_connection('mysql');
+        ConnectionManager::drop_connection('never_registered');
+
+        // an unknown name must not disturb existing connections
+        $this->assert_same($a, ConnectionManager::get_connection('mysql'));
+    }
+
+    public function test_get_connection_throws_on_unconfigured_name()
+    {
+        $this->expectException(ActiveRecord\DatabaseException::class);
+        $this->expectExceptionMessage('Empty connection string');
+
+        ConnectionManager::get_connection('this_connection_is_not_configured');
+    }
 }
