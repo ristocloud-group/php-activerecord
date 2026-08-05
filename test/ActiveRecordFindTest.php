@@ -230,6 +230,24 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_false(Author::exists(['conditions' => 'author_id=999999']));
     }
 
+    public function test_exists_emits_exists_not_count()
+    {
+        Author::exists(1);
+        $this->assert_sql_has('EXISTS', $this->conn->last_query);
+        $this->assert_sql_doesnt_has('COUNT', $this->conn->last_query);
+    }
+
+    public function test_exists_no_args_checks_table_not_empty()
+    {
+        $this->assert_true(Author::exists());
+    }
+
+    public function test_exists_true_when_many_rows_match()
+    {
+        // several authors share a non-null parent_author_id; existence is still true
+        $this->assert_true(Author::exists(['conditions' => 'parent_author_id IS NOT NULL']));
+    }
+
     public function test_find_by_call_static()
     {
         $this->assert_equals('Tito', Author::find_by_name('Tito')->name);
