@@ -133,10 +133,23 @@ test suite green at each step.
   /** @var array<int, Relationship|string>|null */
   public static $has_many;
   ```
-  This is proven backward compatible: an untyped base property coexists with all three
-  existing consumer shapes (`['books']`, `[['author']]`, `public static $has_one;`) with no
-  fatal, and `null` defaults are still skipped by `set_associations()`. Native typing is
-  **not** added (that is the rejected break of §2).
+  This is backward compatible for the way consumer models actually declare these arrays:
+  an untyped base property coexists with all three existing consumer shapes (`['books']`,
+  `[['author']]`, `public static $has_one;`) with no fatal, and `null` defaults are still
+  skipped by `set_associations()`. Native typing is **not** added (that is the rejected
+  break of §2).
+
+  **One-directional caveat (maintainer-acknowledged, 2026-08-05).** PHP property-type
+  compatibility cuts both ways: just as a *typed* base fatals an *untyped* child (the §2
+  rejection), an *untyped* base fatals a child that declares the property with a *native*
+  type — e.g. a consumer writing `public static array $has_many = [...]` would now fatal
+  with *"Type of … must be omitted to match the parent definition"*. This is a genuine (if
+  narrow) new constraint. It was accepted because it is **consistent with the pre-existing
+  contract**: `Model` already declares `$alias_attribute`, `$attr_accessible`,
+  `$attr_protected`, and `$delegate` untyped, so "do not natively-type a `Model` static
+  config array" is an established rule this change merely extends to four more properties.
+  No in-repo model (test, example, or library) natively-types these, so the practical blast
+  radius is nil.
 - A **stub file** shipped with the library (referenced from `composer.json`) so consumer
   projects' PHPStan learns the property shapes. Honest limitation: the library's own
   level-8 pass gains little from the stub (it reads via reflection → `mixed`); the real
