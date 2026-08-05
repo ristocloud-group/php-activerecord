@@ -205,3 +205,64 @@ contract.
 - Optimizing `count()` (it must count).
 - Any new public API surface (the adapter method and the Model helper are
   internal plumbing).
+
+## Benchmark results
+
+Measured on MySQL 8 (the `mysql` service container), via a scratch script
+(`test/scratch_exists_bench.php`, not committed — deleted after this run) that
+created `bench_rows(id INT PRIMARY KEY AUTO_INCREMENT, flag INT, INDEX(flag))`,
+inserted 100,000 rows all with `flag = 1`, and compared:
+
+```sql
+SELECT COUNT(*) FROM bench_rows WHERE flag = 1
+SELECT EXISTS(SELECT 1 FROM bench_rows WHERE flag = 1)
+```
+
+**EXPLAIN — `FORMAT=TRADITIONAL` (flat `rows` column):**
+
+```
+COUNT(*):
+  select_type=SIMPLE  rows=50000  extra=Using index
+
+EXISTS(...):
+  select_type=PRIMARY   rows=NULL   extra=No tables used
+  select_type=SUBQUERY  rows=50000  extra=Using index
+```
+
+The flat `rows` column reports the same raw index-lookup cardinality estimate
+(50000) for the subquery's access path in both cases — MySQL 8's traditional
+EXPLAIN output doesn't surface the `LIMIT` short-circuit as a distinct `rows`
+value here, since it's the same `ref` access on the `flag` index either way.
+
+**EXPLAIN — default `FORMAT=TREE` (shows the optimizer's short-circuit):**
+
+```
+COUNT(*):
+-> Aggregate: count(0)  (cost=16535 rows=1)
+    -> Covering index lookup on bench_rows using flag (flag = 1)  (cost=5014 rows=50000)
+
+EXISTS(...):
+-> Rows fetched before execution  (cost=0..0 rows=1)
+-> Select #2 (subquery in projection; run only once)
+    -> Limit: 1 row(s)  (cost=5014 rows=1)
+        -> Covering index lookup on bench_rows using flag (flag = 1)  (cost=5014 rows=50000)
+```
+
+This is the decisive plan-level evidence: `EXISTS` wraps the identical
+covering-index lookup in a **`Limit: 1 row(s)`** node (`rows=1`), while
+`COUNT(*)` feeds the same lookup straight into an `Aggregate` with no limit —
+it must enumerate every one of the ~50000 estimated matching rows to produce
+the count.
+
+**Timing (1000 iterations each, same connection, same warmed table):**
+
+| Query                              | Avg latency |
+|-------------------------------------|-------------|
+| `SELECT COUNT(*) ... WHERE flag = 1` | 5.5618 ms   |
+| `SELECT EXISTS(SELECT 1 ... WHERE flag = 1)` | 0.2217 ms |
+
+**Interpretation:** `EXISTS` stops at the first matching row (the query plan's
+explicit `Limit: 1 row(s)` node), while `COUNT(*)` enumerates the full matching
+set before returning a number that `exists()` was only going to compare `> 0`.
+On this 100k-row, all-matching dataset, `EXISTS` was **~25x faster**
+(0.22 ms vs 5.56 ms average), confirming the design's premise empirically.
