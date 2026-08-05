@@ -122,6 +122,16 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals('pass', AR\Utils::singularize('passes'));
     }
 
+    public function test_is_odd_returns_bool()
+    {
+        // is_odd() is a boolean predicate: it must return a real bool,
+        // so strict comparisons (=== true / === false) behave as the name promises.
+        $this->assert_same(true, AR\Utils::is_odd(3));
+        $this->assert_same(false, AR\Utils::is_odd(4));
+        $this->assert_same(true, AR\Utils::is_odd(-1));
+        $this->assert_same(false, AR\Utils::is_odd(0));
+    }
+
     public function test_wrap_strings_in_arrays()
     {
         $x = ['1',['2']];
