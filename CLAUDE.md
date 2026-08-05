@@ -1,84 +1,129 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code in this repo. **These instructions override defaults.**
+This file is deliberately lean: it holds the *non-obvious* policy, priorities,
+and gotchas. Anything mechanical — exact commands, the CI matrix, per-class
+internals, supported versions — **read fresh from the source named inline**
+(`composer.json`, `.github/workflows/ci.yml`, `README.md`, `compose.yaml`, the
+`lib/*.php` files); don't rely on a summary that can go stale.
 
 ## What this is
 
-A fork (`zamzar/php-activerecord`, forked from `jpfuentes2/php-activerecord`) of a legacy ActiveRecord-pattern ORM. It is a **library**, not an application. We vendor it into our monolith and maintain it.
+A fork of `jpfuentes2/php-activerecord` (via `zamzar/php-activerecord`) — a
+legacy ActiveRecord-pattern ORM. It is a **library, not an application**: we
+vendor it into our monolith and maintain it. Goals: **fix bugs** and **raise
+test coverage to 90%**. (Runs on PHP 8.3–8.5 — see `composer.json`.)
 
-Project goals for this fork:
-- Fix bugs.
-- ~~Upgrade the codebase to run on PHP 8.5~~ — **done**: `composer.json` requires `^8.3`, and CI runs the full suite on 8.3, 8.4, and 8.5.
-- Raise test coverage to **90%**.
+## Adapter priorities (judgment — not derivable from the code)
 
-Adapter support / priorities:
-- **MySQL** — the primary production target. When a design choice or bug fix trades off between adapters, MySQL wins.
-- **MariaDB** — supported and tested. It reuses `MysqlAdapter` (its connection string uses the `mysql://` protocol, same as MySQL); `MariadbAdapterTest` extends `MysqlAdapterTest` and runs the same battery.
-- **Postgres** and **SQLite** — supported and tested (Postgres in CI, SQLite used heavily in tests). Keep them working; don't break them.
-- **Oracle (`oci`)** — **removed in v1.8.0.** The adapter was incomplete and never used. A residual `oci://` connection string now throws a clear `DatabaseException` from `Connection::load_adapter_class()`. Do not reintroduce it.
-- Supported minimums (policy, not enforced by `composer.json`): MySQL 8+ and MariaDB 10.11+.
+- **MySQL is the primary production target: when a design choice or bug fix
+  trades off between adapters, MySQL wins.** Put MySQL-specific behavior in
+  `MysqlAdapter`.
+- **MariaDB** reuses `MysqlAdapter` (same `mysql://` protocol). **Postgres** and
+  **SQLite** are supported and tested — keep them working, don't break them.
+- **Oracle (`oci`) was removed in v1.8.0** (incomplete, never used); an `oci://`
+  URL now throws a clear `DatabaseException` from
+  `Connection::load_adapter_class()`. Do not reintroduce it.
+- Supported minimums (policy, *not* enforced by `composer.json`): **MySQL 8+,
+  MariaDB 10.11+**. The exact tested versions live in `README.md` /
+  `.github/workflows/ci.yml`.
 
-## Commands
+## Working in the repo
 
-Everything runs inside Docker (the `tests` service has PHP + all PDO extensions + memcached). The MySQL/MariaDB/Postgres/memcached containers must be up because most tests hit a real database.
+Everything runs in Docker; the DB / memcached / redis containers must be up
+(`docker compose up -d`). Run tools through the `tests` service:
 
 ```sh
-docker compose up -d                                    # boot mysql, mariadb, postgres, memcached, tests
-docker compose exec tests composer run test             # full suite (this is the CI gate)
-docker compose exec tests vendor/bin/phpunit --filter CacheTest        # one test class
-docker compose exec tests vendor/bin/phpunit test/InflectorTest.php    # one file
-docker compose exec tests vendor/bin/phpunit --filter test_name        # one method
-docker compose exec tests composer run analyse                         # PHPStan (level 8) static analysis (lib + examples)
-docker compose exec tests composer run cs        # PHP-CS-Fixer dry-run (CI style gate)
-docker compose exec tests composer run cs-fix    # apply the coding style
+docker compose exec tests composer run test      # full suite — the CI gate
+docker compose exec tests composer run analyse   # PHPStan (level 8)
+docker compose exec tests composer run cs-fix    # apply coding style
 ```
 
-`composer run test` = `phpunit --fail-on-risky --fail-on-warning --fail-on-skipped --testdox` (see `composer.json` for the full flag set, including JUnit output). **Skipped tests fail the build** — a test that skips because a dependency (e.g. memcached, a DB) is unavailable is a red build, not a pass. Design work so nothing skips in the Docker environment.
+The `test` / `analyse` / `cs` / `cs-fix` scripts (and their exact flags) are
+defined in `composer.json` — read them there. To run one test:
+`… vendor/bin/phpunit --filter <Class|test_name>` or `… test/SomeTest.php`.
+Gotchas that aren't obvious from the tooling:
 
-Coverage isn't wired into `phpunit.xml` as an always-on report, but the `tests` image ships pcov and CI collects coverage on every matrix job. To measure it locally:
-```sh
-docker compose exec tests vendor/bin/phpunit --coverage-text --coverage-html storage/coverage
-```
+- **Skipped tests fail the build** (`--fail-on-skipped`). A test that skips
+  because a dependency (a DB, memcached) is unavailable is a *red* build, not a
+  pass — design so nothing skips in the Docker environment.
+- **The PHPStan baseline (`phpstan-baseline.neon`) is frozen: new code must not
+  add suppressions to it.** Achieve green by fixing the code.
+- CI (`.github/workflows/ci.yml`) runs the suite across a PHP × DB-version
+  matrix. To test another PHP locally, rebuild with
+  `docker compose build --build-arg PHP_VERSION=8.4`.
 
-Testing against another PHP version — rebuild the image with the build arg, then run:
-```sh
-docker compose build --build-arg PHP_VERSION=8.4 && docker compose up -d
-```
-CI (`.github/workflows/ci.yml`, GitHub Actions) runs a matrix per push: PHP 8.3, 8.4, 8.5, each crossed with a DB-version set (MySQL 8.4/9.7, MariaDB 10.11/11.4/11.8/12.3, Postgres 15/16/17/18) as service containers, plus memcached and redis (SQLite needs no service). The baseline 8.3 cell also runs `composer run analyse` (PHPStan level 8 over `lib` and `examples`, analysing against the 8.3–8.5 `phpVersion` range, with a frozen baseline in `phpstan-baseline.neon` — new code must not add suppressions to it). `compose.yaml`'s `tests` service defaults its build arg `PHP_VERSION` to `8.3`.
+## Architecture (the map; read the files for specifics)
 
-## Architecture
+Entry point `ActiveRecord.php` (repo root) is a **manual `require` manifest** of
+every `lib/*.php` — **there is no PSR-4 autoloader for the library itself**, so
+a new file under `lib/` must be added to `ActiveRecord.php` by hand. Everything
+lives in the `ActiveRecord\` namespace, roughly one class per file.
 
-Entry point is `ActiveRecord.php` at the repo root (Composer autoloads it via `autoload.files`). It is a manual `require` manifest of every `lib/*.php` file — **there is no PSR-4 class autoloader for the library itself**, so a new file under `lib/` must be added to `ActiveRecord.php` by hand. Everything lives in the `ActiveRecord\` namespace.
+The core flow: a user's **`Model`** subclass — configured via `static` arrays
+(`$has_many`, `$belongs_to`, `$validates_*`, `$before_save`/`$after_create`
+callbacks, `$attr_accessible`, `$alias_attribute`, …), with dynamic finders and
+attribute access via `__call`/`__callStatic`/`__get`/`__set` — delegates to its
+**`Table`** (one per class, statically cached; turns finder options
+`conditions`/`order`/`limit`/`include`/… into SQL). **Schema is introspected
+from the live database at runtime and cached — models never declare columns.**
+`Table` runs through **`Connection`** + a `lib/adapters/*Adapter.php` (a thin PDO
+wrapper; adapters supply quoting, `LIMIT` syntax, and introspection queries).
+Relationships and eager-loading live in `lib/Relationship.php` — **`has_many …
+through` is a historical bug hotspot** (see `RELEASES.md` and open issues).
+The remaining pieces are self-describing — read the file: `SQLBuilder`,
+`Validations` (+`Errors`), `CallBack`, `Serialization`, `Cache`
+(`lib/cache/*`), `Config`, `ConnectionManager`, `Inflector`, `Reflections`,
+`Expressions`, `Column`, `DateTime`, `Utils`, `Singleton`.
 
-The object model, and how a `Model` subclass turns into SQL:
+## Conventions that matter when changing code
 
-- **`Model`** (`lib/Model.php`, ~1300 lines — the core) is the base class users extend. Instances wrap a single row. It holds no schema knowledge itself; it delegates to its `Table`. Configuration is expressed as `static` arrays on the subclass: `$has_many`, `$belongs_to`, `$has_one`, `$has_many` `through`, `$validates_*`, `$before_save`/`$after_create`/... callbacks, `$attr_accessible`/`$attr_protected`, `$alias_attribute`, etc. Dynamic finders (`find_by_name_and_id(...)`) and attribute magic are implemented through `__call`/`__callStatic`/`__get`/`__set`.
-- **`Table`** (`lib/Table.php`) — one instance per model class, cached statically (`Table::load($class)` / `Table::clear_cache()`). Owns the `Connection`, the primary key, the column metadata, the callback object, and relationship definitions. This is where finder options (`conditions`, `order`, `limit`, `include`, ...) get assembled into queries. Schema is **introspected from the live database at runtime and cached** — models never declare columns.
-- **`Connection`** (`lib/Connection.php`) + `lib/adapters/*Adapter.php` — a thin PDO wrapper. `Connection::instance($url)` parses a `protocol://user:pass@host/db` URL (`parse_connection_url`) and instantiates `ucwords($protocol).'Adapter'` (`load_adapter_class`). Adapters (`MysqlAdapter`, `PgsqlAdapter`, `SqliteAdapter`) supply the DB-specific bits: quoting, `LIMIT` syntax, and schema-introspection queries (`columns()`, `tables()`). Put MySQL-specific behavior in `MysqlAdapter`.
-- **`ConnectionManager`** (`lib/ConnectionManager.php`) — singleton registry of open connections keyed by name.
-- **`Config`** (`lib/Config.php`) — singleton holding the named connection strings, the default connection, logger, and cache. Configured via `Config::initialize(fn($cfg) => ...)`.
-- **`SQLBuilder`** (`lib/SQLBuilder.php`) — programmatic SELECT/INSERT/UPDATE/DELETE builder used by `Table`.
-- **`Relationship`** (`lib/Relationship.php`) — `HasMany`/`HasOne`/`BelongsTo`/`HasAndBelongsToMany` classes implementing loading + eager-loading (`include`). `has_many ... through` chains live here and have historically been a bug hotspot (see RELEASES.md).
-- **`Validations`** (`lib/Validations.php`) + `Errors` — Rails-style validation macros, run on save.
-- **`CallBack`** (`lib/CallBack.php`) — resolves and fires lifecycle hooks around save/create/update/delete/find.
-- **`Serialization`** (`lib/Serialization.php`) — `to_json`/`to_xml`/`to_array`.
-- **`Cache`** (`lib/Cache.php`, `lib/cache/{Memcache,File}.php`) — optional caching of introspected schema. `File` is our fork's addition for hosts without memcached.
-- Supporting singletons/utilities: `Reflections`, `Inflector` (pluralize/camelize — drives table-name and dynamic-finder conventions), `Expressions`, `Column`, `DateTime`, `Utils`, `Singleton`.
-
-### Conventions that matter when changing code
-
-- **Backward compatibility is a hard gate — STOP and ask before breaking it.** This is a library vendored into other applications, so a change that could break existing consumers must never be made unilaterally: explicitly ask the maintainer whether to proceed, describing the break and who it affects, and wait for a yes. This covers (non-exhaustively) renaming/removing/changing the signature of any public method, static config array (`$has_many`, `$validates_*`, callbacks, …), option key, or property; changing a method's return type, thrown-exception type, or observable behavior/defaults; altering a connection-string or `Config` format; tightening validation or input handling; and raising the PHP floor or a dependency constraint. When unsure whether something is breaking, treat it as breaking and ask. (Contrast with the intentionally-scoped breaks already shipped — e.g. removing the OCI adapter, the file-cache `expire` default — which were explicit, documented decisions.)
-- **snake_case public API.** Methods and options are snake_case (`find_by_pk`, `set_default_connection`, `save`, `is_dirty`) — this mirrors Rails and is the library's contract. Do not rename to camelCase. snake_case is a *naming* rule, not a licence to write dated PHP: it is fully compatible with the modern-PHP requirement below.
-- **Modern PHP (>= 8.3) in the code you write.** The library requires `^8.3`, so new code and any code you author must use modern PHP idioms: short array syntax `[]` (never `array()`), type declarations (parameters, return types, typed properties, typed class constants), null coalescing (`??`) / nullsafe (`?->`), `list()`-destructuring as `[$a, $b] = …`, first-class enums/readonly/match where they fit, etc. Applies equally to README/docs examples — show modern PHP, not PHP 5.x-era code.
-- **Coding style is PER-CS 3.0 (4-space indentation) plus the non-risky PHP 8.3 migration set.** Enforced by `friendsofphp/php-cs-fixer` via `.php-cs-fixer.dist.php` (rulesets `@PER-CS3x0` + `@PHP8x3Migration`, `setRiskyAllowed(false)`), and checked by a blocking CI step (`composer run cs`) on the 8.3 job. Run `composer run cs-fix` to apply it. This is formatting/syntactic modernization only — it doesn't relax the snake_case public API rule above or the modern-PHP rule below, and it doesn't licence refactoring files you aren't otherwise changing (YAGNI); when editing a legacy hot path, prefer minimal, behavior-preserving edits.
+- **Backward compatibility is a hard gate — STOP and ask before breaking it.**
+  This is a library vendored into other applications, so a change that could
+  break existing consumers must never be made unilaterally: explicitly ask the
+  maintainer whether to proceed, describing the break and who it affects, and
+  wait for a yes. This covers (non-exhaustively) renaming/removing/changing the
+  signature of any public method, static config array (`$has_many`,
+  `$validates_*`, callbacks, …), option key, or property; changing a method's
+  return type, thrown-exception type, or observable behavior/defaults; altering
+  a connection-string or `Config` format; tightening validation or input
+  handling; and raising the PHP floor or a dependency constraint. When unsure
+  whether something is breaking, treat it as breaking and ask. (Contrast with
+  the intentionally-scoped breaks already shipped — e.g. removing the OCI
+  adapter, the file-cache `expire` default — which were explicit, documented
+  decisions.)
+- **snake_case public API.** Methods and options are snake_case (`find_by_pk`,
+  `set_default_connection`, `save`, `is_dirty`) — this mirrors Rails and is the
+  library's contract. Do not rename to camelCase. It is a *naming* rule only,
+  fully compatible with the modern-PHP requirement below.
+- **Modern PHP (≥ 8.3) in the code you write.** Use modern idioms: short arrays
+  `[]` (never `array()`), type declarations (params, returns, typed properties
+  and class constants), `??` / `?->`, `[$a, $b] = …` destructuring,
+  enums/readonly/match where they fit. Applies to README/docs examples too.
+- **Coding style: PER-CS 3.0 (4-space indent) + the non-risky PHP 8.3 migration
+  set**, enforced by php-cs-fixer via `.php-cs-fixer.dist.php` and gated by
+  `composer run cs`; run `composer run cs-fix` to apply. It's formatting only —
+  it doesn't relax the rules above, and **it doesn't licence refactoring files
+  you aren't otherwise changing (YAGNI)**; in a legacy hot path, prefer minimal,
+  behavior-preserving edits.
 
 ## Tests
 
-`phpunit.xml` bootstraps `test/helpers/config.php`, which registers connections from env vars (`PHPAR_MYSQL`, `PHPAR_MARIADB`, `PHPAR_PGSQL`, `PHPAR_SQLITE`, `PHPAR_MEMCACHED` — set in `compose.yaml`, and mirrored for CI in `.github/workflows/ci.yml`) and sets `mysql` as the default connection.
+`phpunit.xml` bootstraps `test/helpers/config.php`, which registers connections
+from `PHPAR_*` env vars (set in `compose.yaml`, mirrored in CI) and defaults the
+connection to `mysql`. Conventions:
 
-- **Test base class:** tests extend `DatabaseTest` (→ `SnakeCase_PHPUnit_Framework_TestCase`), which lets tests be written with `set_up()`/`tear_down()` and snake_case assertions (`assert_equals`, `assert_has_keys`, ...). The base's `__call` camelizes unknown snake_case calls onto real PHPUnit methods. So a new test method is `public function test_something()` and setup is `set_up()`, not `setUp()`.
-- **DB state:** `DatabaseTest::set_up()` clears the `Table` cache, then `DatabaseLoader` drops+recreates tables **once per protocol** from `test/sql/<protocol>.sql` and reloads fixture rows from `test/fixtures/<table>/` on every test. Schema changes for tests go in `test/sql/*.sql` (one file per adapter); row data goes in `test/fixtures/`.
-- **Test models** live in `test/models/` and are loaded by a bespoke autoloader (`test/helpers/model_autoloader.php`), *not* Composer — a new fixture model is a class in `test/models/Foo.php` matching its class name.
-- **Adapter-specific tests** (`MysqlAdapterTest`, `MariadbAdapterTest`, `PgsqlAdapterTest`, `SqliteAdapterTest`) extend a shared `AdapterTest` and run the same battery against each backend by overriding the connection name.
-
-When raising coverage, prefer exercising `Model`/`Table`/`Relationship`/`Validations` behavior through model fixtures over unit-testing private helpers; that is the grain of the existing suite.
+- Tests extend **`DatabaseTest`** (→ `SnakeCase_PHPUnit_Framework_TestCase`):
+  write `public function test_something()`, `set_up()`/`tear_down()`, and
+  snake_case assertions (`assert_equals`, `assert_has_keys`, …) — a `__call`
+  camelizes them onto real PHPUnit methods.
+- `DatabaseTest::set_up()` drops+recreates tables per protocol from
+  `test/sql/<protocol>.sql` and reloads fixtures from `test/fixtures/<table>/`
+  every test. Test **schema** → `test/sql/*.sql` (one per adapter); **row data**
+  → `test/fixtures/`.
+- Test models live in `test/models/Foo.php`, loaded by a bespoke autoloader
+  (`test/helpers/model_autoloader.php`), *not* Composer. Adapter-specific tests
+  (`MysqlAdapterTest`, `MariadbAdapterTest`, …) extend `AdapterTest`.
+- When raising coverage, prefer exercising `Model`/`Table`/`Relationship`/
+  `Validations` through model fixtures over unit-testing private helpers — that
+  is the grain of the existing suite.
