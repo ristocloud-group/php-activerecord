@@ -1,10 +1,20 @@
 <?php
 
+require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Flight.php';
 
-ActiveRecord\Config::initialize(function ($cfg) {
-    $cfg->set_connections(['development' => 'mysql://test:test@127.0.0.1/upsert_test']);
+// Create a throwaway SQLite database and load the schema, so this runs with no
+// database server to configure.
+$db = __DIR__ . '/upsert.db';
+@unlink($db);
+$pdo = new PDO('sqlite:' . $db);
+$pdo->exec((string) file_get_contents(__DIR__ . '/upsert.sql'));
+$pdo = null;
+
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
+    $cfg->set_connections(['development' => 'sqlite://unix(' . $db . ')']);
+    $cfg->set_logger(new Psr\Log\NullLogger());
 });
 
 // 1. Bulk insert-or-update. On conflict (departure, destination) only `price`
@@ -39,4 +49,4 @@ Flight::upsert([['departure' => 'Boston', 'destination' => 'Miami', 'price' => 1
 
 // Note: very large arrays are chunked automatically to stay under the database's
 // bind-parameter limit — the whole operation runs inside a single transaction.
-// The MySQL/MariaDB affected-row count reports 1 per insert and 2 per update.
+// On MySQL/MariaDB the affected-row count reports 1 per insert and 2 per update.

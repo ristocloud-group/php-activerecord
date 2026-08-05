@@ -1,13 +1,22 @@
 <?php
 
+require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
+require_once __DIR__ . '/models/Person.php';
+require_once __DIR__ . '/models/Order.php';
+require_once __DIR__ . '/models/Payment.php';
 
-// initialize ActiveRecord
-ActiveRecord\Config::initialize(function ($cfg) {
-    $cfg->set_connections(['development' => 'mysql://test:test@127.0.0.1/orders_test']);
+// Create a throwaway SQLite database and load the schema, so this runs with no
+// database server to configure.
+$db = __DIR__ . '/orders.db';
+@unlink($db);
+$pdo = new PDO('sqlite:' . $db);
+$pdo->exec((string) file_get_contents(__DIR__ . '/orders.sql'));
+$pdo = null;
 
-    // you can change the default connection with the below
-    //$cfg->set_default_connection('production');
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
+    $cfg->set_connections(['development' => 'sqlite://unix(' . $db . ')']);
+    $cfg->set_logger(new Psr\Log\NullLogger());
 });
 
 // create some people

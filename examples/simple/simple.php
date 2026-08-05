@@ -1,15 +1,30 @@
 <?php
 
+require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 
-// assumes a table named "books" with a pk named "id"
-// see simple.sql
+// The simplest possible model: an empty subclass. The table name ("books")
+// and every column are introspected from the live database at runtime — the
+// model declares no schema. See simple.sql.
+/**
+ * @property int    $id
+ * @property string $name
+ * @property string $author
+ */
 class Book extends ActiveRecord\Model {}
 
-// initialize ActiveRecord
-// change the connection settings to whatever is appropriate for your mysql server
-ActiveRecord\Config::initialize(function ($cfg) {
-    $cfg->set_connections(['development' => 'mysql://test:test@127.0.0.1/test']);
+// Create a throwaway SQLite database and load the schema, so this runs with no
+// database server to configure.
+$db = __DIR__ . '/simple.db';
+@unlink($db);
+$pdo = new PDO('sqlite:' . $db);
+$pdo->exec((string) file_get_contents(__DIR__ . '/simple.sql'));
+$pdo = null;
+
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
+    $cfg->set_connections(['development' => 'sqlite://unix(' . $db . ')']);
+    $cfg->set_logger(new Psr\Log\NullLogger());
 });
 
+// Fetch the first row and dump its attributes.
 print_r(Book::first()->attributes());
