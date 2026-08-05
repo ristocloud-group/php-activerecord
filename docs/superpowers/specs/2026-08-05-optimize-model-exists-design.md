@@ -254,6 +254,19 @@ covering-index lookup in a **`Limit: 1 row(s)`** node (`rows=1`), while
 it must enumerate every one of the ~50000 estimated matching rows to produce
 the count.
 
+> **Note on the `rows=50000` figure vs. the 100,000-row dataset:** every
+> captured `rows` estimate above reads `50000`, not `100000`, even though
+> 100% of rows have `flag = 1`. This is InnoDB's persistent-cardinality
+> statistics (`innodb_stats_persistent`), sampled mid-load — before all
+> 100k rows existed — and never refreshed with `ANALYZE TABLE` before the
+> `EXPLAIN`s ran; it's a stale optimizer *estimate*, not a re-measured
+> count, and it's identical for both queries only because they share the
+> same `ref` access path on the `flag` index. It is **not** the evidence
+> this benchmark relies on. The decisive evidence is (a) the `Limit: 1
+> row(s)` plan node that appears only in the `EXISTS` tree-format plan,
+> and (b) the measured wall-clock timings below — both of which are
+> independent of this stale cardinality sample.
+
 **Timing (1000 iterations each, same connection, same warmed table):**
 
 | Query                              | Avg latency |
