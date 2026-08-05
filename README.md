@@ -1,6 +1,7 @@
 # PHP ActiveRecord #
 
 [![CI](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml/badge.svg)](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/ristocloud-group/php-activerecord/badges/coverage.svg)](https://github.com/ristocloud-group/php-activerecord/actions/workflows/ci.yml)
 
 > **This is a fork maintained by Ristocloud Group S.r.l.**
 >
@@ -41,7 +42,7 @@ Of course, there are some differences which will be obvious to the user if they 
 - **PostgreSQL**
 - **SQLite**
 
-These are policy minimums; `composer.json` carries no database-version constraint. Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 9.7, MariaDB 11.4, PostgreSQL 18 and SQLite. The Oracle (`oci`) adapter was removed in v1.8.0.
+These are policy minimums; `composer.json` carries no database-version constraint. Continuous integration runs the full test suite across PHP 8.3, 8.4 and 8.5 against MySQL 8.4 & 9.7, MariaDB 10.11, 11.4, 11.8 & 12.3, PostgreSQL 15, 16, 17 & 18, and SQLite 3. The Oracle (`oci`) adapter was removed in v1.8.0.
 
 ## Features ##
 

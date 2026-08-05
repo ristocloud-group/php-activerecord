@@ -28,7 +28,7 @@ docker compose exec tests composer run test             # full suite (this is th
 docker compose exec tests vendor/bin/phpunit --filter CacheTest        # one test class
 docker compose exec tests vendor/bin/phpunit test/InflectorTest.php    # one file
 docker compose exec tests vendor/bin/phpunit --filter test_name        # one method
-docker compose exec tests composer run analyse                         # PHPStan (level 5) static analysis
+docker compose exec tests composer run analyse                         # PHPStan (level 8) static analysis (lib + examples)
 docker compose exec tests composer run cs        # PHP-CS-Fixer dry-run (CI style gate)
 docker compose exec tests composer run cs-fix    # apply the coding style
 ```
@@ -44,7 +44,7 @@ Testing against another PHP version — rebuild the image with the build arg, th
 ```sh
 docker compose build --build-arg PHP_VERSION=8.4 && docker compose up -d
 ```
-CI (`.github/workflows/ci.yml`, GitHub Actions) runs a matrix per push: PHP 8.3, 8.4, 8.5, each with MySQL, MariaDB, Postgres, and memcached as service containers (SQLite needs no service). The 8.3 job also runs `composer run analyse` (PHPStan, level 5, with a frozen baseline in `phpstan-baseline.neon` — new code must not add suppressions to it). `compose.yaml`'s `tests` service defaults its build arg `PHP_VERSION` to `8.3`.
+CI (`.github/workflows/ci.yml`, GitHub Actions) runs a matrix per push: PHP 8.3, 8.4, 8.5, each crossed with a DB-version set (MySQL 8.4/9.7, MariaDB 10.11/11.4/11.8/12.3, Postgres 15/16/17/18) as service containers, plus memcached and redis (SQLite needs no service). The baseline 8.3 cell also runs `composer run analyse` (PHPStan level 8 over `lib` and `examples`, analysing against the 8.3–8.5 `phpVersion` range, with a frozen baseline in `phpstan-baseline.neon` — new code must not add suppressions to it). `compose.yaml`'s `tests` service defaults its build arg `PHP_VERSION` to `8.3`.
 
 ## Architecture
 
