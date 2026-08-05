@@ -118,16 +118,14 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $this->options['conditions'] = [$this->options['conditions']];
         }
 
-        if (isset($this->options['class'])) {
-            $this->set_class_name($this->options['class']);
-        } elseif (isset($this->options['class_name'])) {
-            $this->set_class_name($this->options['class_name']);
+        if (null !== $this->def->class_name) {
+            $this->set_class_name($this->def->class_name);
         }
 
         $this->attribute_name = strtolower(Inflector::instance()->variablize($this->attribute_name));
 
-        if (!$this->foreign_key && isset($this->options['foreign_key'])) {
-            $this->foreign_key = is_array($this->options['foreign_key']) ? array_values($this->options['foreign_key']) : [$this->options['foreign_key']];
+        if (!$this->foreign_key && $this->def->foreign_key) {
+            $this->foreign_key = $this->def->foreign_key;
         }
     }
 
@@ -653,16 +651,16 @@ class HasMany extends AbstractRelationship
     {
         parent::__construct($options);
 
-        if (isset($this->options['through'])) {
-            $this->through = $this->options['through'];
+        if (null !== $this->def->through) {
+            $this->through = $this->def->through;
 
-            if (isset($this->options['source'])) {
-                $this->set_class_name($this->options['source']);
+            if (null !== $this->def->source) {
+                $this->set_class_name($this->def->source);
             }
         }
 
-        if (!$this->primary_key && isset($this->options['primary_key'])) {
-            $this->primary_key = is_array($this->options['primary_key']) ? array_values($this->options['primary_key']) : [$this->options['primary_key']];
+        if (!$this->primary_key && $this->def->primary_key) {
+            $this->primary_key = $this->def->primary_key;
         }
 
         if (!$this->class_name) {
