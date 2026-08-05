@@ -37,7 +37,11 @@ class Table
 
     /**
      * Name of the table.
-     * @var string|null
+     *
+     * Always assigned by set_table_name() during construction; there is no
+     * teardown path that resets it to null (unlike $conn).
+     *
+     * @var string
      */
     public $table;
 
@@ -185,7 +189,10 @@ class Table
 
             if (stripos($value, 'JOIN ') === false) {
                 if (array_key_exists($value, $this->relationships)) {
-                    $rel = $this->get_relationship($value);
+                    $rel = $this->get_relationship($value, true);
+                    if (null === $rel) {
+                        throw new RelationshipException("Relationship named $value has not been declared for class: {$this->class->getName()}");
+                    }
 
                     // if there is more than 1 join for a given table we need to alias the table names
                     if (array_key_exists($rel->class_name, $existing_tables)) {
@@ -295,7 +302,8 @@ class Table
 
         $collect_attrs_for_includes = is_null($includes) ? false : true;
         $list = $attrs = [];
-        $sth = $this->connection()->query($sql, $this->process_data($values));
+        $bind_values = $this->process_data($values) ?? [];
+        $sth = $this->connection()->query($sql, $bind_values);
 
         while (($row = $sth->fetch())) {
             /** @var Model $model */
@@ -343,6 +351,9 @@ class Table
             }
 
             $rel = $this->get_relationship($name, true);
+            if (null === $rel) {
+                throw new RelationshipException("Relationship named $name has not been declared for class: {$this->class->getName()}");
+            }
             $rel->load_eagerly($models, $attrs, $nested_includes, $this);
         }
     }
