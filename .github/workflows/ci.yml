@@ -150,3 +150,60 @@ jobs:
 
       - name: Redis adapter tests
         run: vendor/bin/phpunit --filter RedisCacheTest --fail-on-risky --fail-on-warning --fail-on-skipped --fail-on-deprecation
+
+  coverage-badge:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download baseline coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-php8.3-baseline
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - name: Generate coverage badge SVG
+        run: |
+          php -r '
+          $x = simplexml_load_file("coverage.xml");
+          $n = $x->xpath("//project/metrics");
+          $m = $n[0];
+          $s = (int) $m["statements"];
+          $c = (int) $m["coveredstatements"];
+          $pct = $s > 0 ? (int) round($c / $s * 100) : 0;
+          $color = $pct >= 90 ? "#4c1" : ($pct >= 80 ? "#97ca00" : ($pct >= 50 ? "#dfb317" : "#e05d44"));
+          $label = "coverage"; $value = $pct . "%";
+          $lw = 6 * strlen($label) + 10; $vw = 7 * strlen($value) + 10; $w = $lw + $vw;
+          $svg = sprintf(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"20\" role=\"img\" aria-label=\"%s: %s\">".
+            "<rect rx=\"3\" width=\"%d\" height=\"20\" fill=\"#555\"/>".
+            "<rect rx=\"3\" x=\"%d\" width=\"%d\" height=\"20\" fill=\"%s\"/>".
+            "<g fill=\"#fff\" text-anchor=\"middle\" font-family=\"Verdana,Geneva,sans-serif\" font-size=\"11\">".
+            "<text x=\"%d\" y=\"14\">%s</text><text x=\"%d\" y=\"14\">%s</text></g></svg>",
+            $w, $label, $value, $w, $lw, $vw, $color, (int) ($lw / 2), $label, (int) ($lw + $vw / 2), $value
+          );
+          @mkdir("out");
+          file_put_contents("out/coverage.svg", $svg);
+          fwrite(STDERR, "coverage={$pct}%\n");
+          '
+
+      - name: Publish to orphan badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd out
+          git init -q
+          git checkout -q -b badges
+          git add coverage.svg
+          git -c user.name="github-actions[bot]" \
+              -c user.email="github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "chore: update coverage badge [skip ci]"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
