@@ -55,8 +55,13 @@ class Validations
 
     private Errors $record;
 
-    /** @var ReflectionClass<object>|null */
-    private $klass;
+    /**
+     * Always assigned in the constructor from Reflections::get(), which throws
+     * rather than returning null on a miss; never reset afterward.
+     *
+     * @var ReflectionClass<object>
+     */
+    private ReflectionClass $klass;
 
     /** @var list<string> */
     private static $VALIDATION_FUNCTIONS = [
@@ -926,7 +931,7 @@ class Errors implements IteratorAggregate
      */
     public function size()
     {
-        if ($this->is_empty()) {
+        if (empty($this->errors)) {
             return 0;
         }
 
