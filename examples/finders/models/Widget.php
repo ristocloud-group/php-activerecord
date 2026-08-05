@@ -17,6 +17,9 @@ class Widget extends ActiveRecord\Model
     /** @return array<int, Widget> */
     public static function cheap(): array
     {
-        return static::all(['conditions' => ['price < ?', 10.0], 'order' => 'price asc']);
+        /** @var array<int, Widget> $widgets */
+        $widgets = static::all(['conditions' => ['price < ?', 10.0], 'order' => 'price asc']);
+
+        return $widgets;
     }
 }

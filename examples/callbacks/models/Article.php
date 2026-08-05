@@ -9,10 +9,15 @@
  */
 class Article extends ActiveRecord\Model
 {
+    /** @var array<int, string> */
     public static $before_validation = ['make_slug'];
+    /** @var array<int, string> */
     public static $before_save = ['count_words'];
+    /** @var array<int, string> */
     public static $after_create = ['log_created'];
+    /** @var array<int, string> */
     public static $before_update = ['log_updating'];
+    /** @var array<int, string> */
     public static $before_destroy = ['log_destroying'];
 
     public function make_slug(): void

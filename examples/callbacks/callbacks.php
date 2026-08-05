@@ -21,6 +21,7 @@ function out(string $s): void
 }
 
 out('create (fires before_validation -> before_save -> after_create):');
+/** @var Article $a */
 $a = Article::create(['title' => 'Hello World', 'body' => 'one two three']);
 out("  slug='{$a->slug}' word_count={$a->word_count}");
 

@@ -10,26 +10,32 @@
  */
 class User extends ActiveRecord\Model
 {
+    /** @var array<int, array<int|string, mixed>> */
     public static $validates_presence_of = [
         ['name'], ['email'],
     ];
 
+    /** @var array<int, array<int|string, mixed>> */
     public static $validates_length_of = [
         ['name', 'within' => [2, 50]],
     ];
 
+    /** @var array<int, array<int|string, mixed>> */
     public static $validates_uniqueness_of = [
         ['email'],
     ];
 
+    /** @var array<int, array<int|string, mixed>> */
     public static $validates_format_of = [
         ['email', 'with' => '/\A[^@\s]+@[^@\s]+\.[^@\s]+\z/'],
     ];
 
+    /** @var array<int, array<int|string, mixed>> */
     public static $validates_numericality_of = [
         ['age', 'greater_than' => 0, 'less_than' => 150, 'allow_null' => true],
     ];
 
+    /** @var array<int, array<int|string, mixed>> */
     public static $validates_inclusion_of = [
         ['role', 'in' => ['admin', 'member', 'guest']],
     ];

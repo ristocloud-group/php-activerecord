@@ -7,5 +7,6 @@
  */
 class Category extends ActiveRecord\Model
 {
+    /** @var array<int, array<int|string, mixed>> */
     public static $has_many = [['products']];
 }

@@ -8,6 +8,7 @@
  */
 class Tag extends ActiveRecord\Model
 {
+    /** @var array<int, array<int|string, mixed>> */
     public static $has_many = [
         ['taggings'],                          // intermediate assoc for `through`
         ['posts', 'through' => 'taggings'],

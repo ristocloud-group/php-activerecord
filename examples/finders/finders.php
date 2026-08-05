@@ -20,10 +20,11 @@ function out(string $s): void
     echo $s . "\n";
 }
 
-// Dynamic finders (they return a model or null -> use nullsafe access).
-out('find_by_name: ' . (Widget::find_by_name('Alpha')?->name ?? '(none)'));
+// Dynamic finders (they return a model or null -> "??" already guards against
+// null on its left side, so plain "->" is enough, no "?->" needed).
+out('find_by_name: ' . (Widget::find_by_name('Alpha')->name ?? '(none)'));
 out('find_all_by_category(gizmos): ' . count(Widget::find_all_by_category('gizmos')));
-out('find_by_category_and_in_stock: ' . (Widget::find_by_category_and_in_stock('gadgets', 1)?->name ?? '(none)'));
+out('find_by_category_and_in_stock: ' . (Widget::find_by_category_and_in_stock('gadgets', 1)->name ?? '(none)'));
 
 // Option set: conditions / order / limit / offset / select.
 $page = Widget::all([

@@ -19,7 +19,7 @@ echo "upsert #1 affected: $affected\n";
 Flight::upsert([
     ['departure' => 'Oakland', 'destination' => 'San Diego', 'price' => 79],
 ], unique_by: ['departure', 'destination'], update: ['price']);
-echo "Oakland->San Diego price is now: " . Flight::find_by_departure('Oakland')->price . "\n";
+echo "Oakland->San Diego price is now: " . Flight::find_by_departure('Oakland')?->price . "\n";
 
 // 2. Omit `update` -> every provided column except `created_at` is overwritten on conflict.
 Flight::upsert([
@@ -32,7 +32,7 @@ Flight::upsert([['id' => 1, 'departure' => 'Oakland', 'destination' => 'San Dieg
 // 4. Timestamps are managed automatically when the columns exist: created_at is
 //    set once on insert; updated_at is refreshed on every update.
 $f = Flight::find_by_departure('Oakland');
-echo "created_at={$f->created_at->format('c')} updated_at={$f->updated_at->format('c')}\n";
+echo "created_at={$f?->created_at?->format('c')} updated_at={$f?->updated_at?->format('c')}\n";
 
 // 5. Passing update: [] performs a plain INSERT (it errors on duplicate keys).
 Flight::upsert([['departure' => 'Boston', 'destination' => 'Miami', 'price' => 120]], ['departure', 'destination'], []);

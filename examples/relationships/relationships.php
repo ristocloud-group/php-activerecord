@@ -24,6 +24,7 @@ function out(string $s): void
 
 // Seed: an author with a profile (has_one), two posts (has_many),
 // comments on a post, and tags via a join table (has_many through).
+/** @var Author $ada */
 $ada = Author::create(['name' => 'Ada']);
 $ada->create_profile(['bio' => 'Mathematician']);                 // has_one builder
 $p1 = $ada->create_posts(['title' => 'On Engines']);             // has_many builder
@@ -48,9 +49,11 @@ $comment_total = array_sum(array_map(fn(Post $post): int => count($post->comment
 out('author comment count (via posts): ' . $comment_total);
 
 // has_many :through many-to-many (post <-> tags via taggings)
-out('first post tags: ' . implode(', ', ActiveRecord\collect($p1->tags, 'name')));
+$p1_tags = $p1->tags;
+out('first post tags: ' . implode(', ', ActiveRecord\collect($p1_tags, 'name')));
 
 // Eager loading with include (avoids N+1); iterate the loaded graph.
+/** @var array<int, Author> $authors */
 $authors = Author::all(['include' => ['posts', 'profile']]);
 foreach ($authors as $author) {
     out($author->name . ' has ' . count($author->posts) . ' posts');

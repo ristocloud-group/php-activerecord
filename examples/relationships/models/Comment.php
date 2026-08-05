@@ -8,5 +8,6 @@
  */
 class Comment extends ActiveRecord\Model
 {
+    /** @var array<int, array<int|string, mixed>> */
     public static $belongs_to = [['post']];
 }

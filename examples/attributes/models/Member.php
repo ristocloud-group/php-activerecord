@@ -12,9 +12,11 @@
  * @property string  $email_address  alias of email
  * @property-read Company $company
  * @property-read string  $country    delegated from company
+ * @property-write string $password   custom setter -> stored as password_hash
  */
 class Member extends ActiveRecord\Model
 {
+    /** @var array<int, array<int|string, mixed>> */
     public static $belongs_to = [['company']];
 
     // Mass-assignment whitelist: only these are set from an array; is_admin is ignored.
