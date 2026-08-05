@@ -236,11 +236,11 @@ class Utils
 
     /**
      * @param int|float $number
-     * @return int
+     * @return bool
      */
     public static function is_odd($number)
     {
-        return $number & 1;
+        return ($number & 1) === 1;
     }
 
     /**
