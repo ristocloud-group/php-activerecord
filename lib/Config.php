@@ -142,7 +142,7 @@ class Config extends Singleton
     /**
      * Returns the default connection string or null if there is none.
      *
-     * @return string
+     * @return string|null
      */
     public function get_default_connection_string()
     {

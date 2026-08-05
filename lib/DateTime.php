@@ -134,7 +134,8 @@ class DateTime extends \DateTime
     private function flag_dirty(): void
     {
         if ($this->model) {
-            $this->model->flag_dirty($this->attribute_name);
+            // $attribute_name is always set alongside $model by attribute_of().
+            $this->model->flag_dirty($this->attribute_name ?? '');
         }
     }
 

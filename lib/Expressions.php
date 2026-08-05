@@ -149,11 +149,12 @@ class Expressions
         $ret = "";
         $replace = [];
         $num_values = count($values);
-        $len = strlen($this->expressions);
+        $expressions = $this->expressions ?? '';
+        $len = strlen($expressions);
         $quotes = 0;
 
-        for ($i = 0,$n = strlen($this->expressions),$j = 0; $i < $n; ++$i) {
-            $ch = $this->expressions[$i];
+        for ($i = 0,$n = strlen($expressions),$j = 0; $i < $n; ++$i) {
+            $ch = $expressions[$i];
 
             if ($ch == self::ParameterMarker) {
                 if ($quotes % 2 == 0) {
@@ -163,7 +164,7 @@ class Expressions
 
                     $ch = $this->substitute($values, $substitute, $i, $j++);
                 }
-            } elseif ($ch == '\'' && $i > 0 && $this->expressions[$i - 1] != '\\') {
+            } elseif ($ch == '\'' && $i > 0 && $expressions[$i - 1] != '\\') {
                 ++$quotes;
             }
 
@@ -231,7 +232,7 @@ class Expressions
             return $this->stringify_value($value);
         }
 
-        return $this->expressions[$pos];
+        return ($this->expressions ?? '')[$pos];
     }
 
     /**
