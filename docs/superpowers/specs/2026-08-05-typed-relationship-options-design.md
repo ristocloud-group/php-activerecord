@@ -1,10 +1,46 @@
-# Design: Typed relationship definitions (`RelationshipOptions` DTO + static-analysis layer)
+# Design: Typed relationship definitions (validation + static-analysis layer)
 
 **Date:** 2026-08-05
-**Status:** Draft (pending user review → implementation plan)
+**Status:** Implemented on PR #24. **The shipped architecture differs from the DTO design in
+§4/§8 below — see "Final implementation" first.**
 **Scope:** Give the `$has_many` / `$has_one` / `$belongs_to` / `$has_and_belongs_to_many`
-model-configuration arrays a typed internal representation, clear runtime validation, and
-static-analysis/IDE support — **without breaking any existing consumer model or public API.**
+model-configuration arrays clear runtime validation and static-analysis/IDE support. One
+**maintainer-authorized breaking change** shipped (unknown option keys now throw — see
+Final implementation); everything else preserves existing consumer models and the public API.
+
+## Final implementation (what shipped in PR #24 — supersedes §4 and §8)
+
+The design below explored a `RelationshipOptions` **value object** as the linchpin. It was
+built, then progressively simplified and ultimately **removed** (maintainer rulings of
+2026-08-05/06). What actually shipped:
+
+- **No DTO class.** Relationship declarations are validated **inline in the constructors**
+  (`AbstractRelationship`, `HasMany`, `HasAndBelongsToMany`) via two reusable free functions
+  in `lib/Utils.php`:
+  - `relationship_option_string(mixed $v, string $rel, string $opt): ?string` — must be a
+    non-empty string when present, else `RelationshipException`.
+  - `relationship_option_key_list(mixed $v, string $rel, string $opt): list<string>` — a
+    non-empty string or list of non-empty strings; absent / `null` / `[]` → `[]`.
+  These cover the five consumed fields (`class`/`class_name`, `foreign_key`, `primary_key`,
+  `through`, `source`) plus the positional name at `[0]`.
+- **Unknown option keys now throw** (the breaking change). `merge_association_options()`
+  rejects any key not in the relationship's `$valid_association_options` (positional integer
+  keys excepted) with a clear `RelationshipException`. This **reverses the library's
+  previously-tested "silently ignore unknown options" contract** and was explicitly
+  authorized by the maintainer. The documenting test was rewritten
+  (`test_belongs_to_with_an_invalid_option` → `test_belongs_to_with_an_unknown_option_throws`).
+- **Static-analysis / IDE layer unchanged** (§4.3): the `@phpstan-type Relationship` alias,
+  the untyped-PHPDoc base `Model` properties, and the shipped stub remain — *they*, not the
+  DTO, deliver the analysis/IDE goals. The alias is the human-readable companion to the now
+  runtime-authoritative `$valid_association_options`.
+- **Validation helpers are unit-tested directly** (`test/UtilsTest.php`) **and** via the
+  constructors (`test/RelationshipOptionsWiringTest.php`).
+
+Why the DTO was dropped: it was built, read only within the constructor, then discarded — it
+persisted no state used after construction (the real state lives in `$this->class_name` /
+`foreign_key` / `through` / `primary_key`). Inline validation via shared helpers delivers the
+same guarantees with less machinery, matching the legacy constructor's existing inline style.
+Verified green on the full CI matrix (PHP 8.3–8.5 × mysql/mariadb/postgres, + PHPStan level 8).
 
 ## 1. Goal
 
@@ -72,6 +108,10 @@ Read directly from the constructors and `$valid_association_options`:
 - **BelongsTo:** `primary_key` (plus the common set).
 
 ## 4. Design
+
+> **Superseded — see "Final implementation" at the top.** §4 and §8 describe the original
+> `RelationshipOptions` value-object approach; the DTO was ultimately removed in favor of
+> inline validation via `lib/Utils.php` helpers. Kept below for design-decision history.
 
 ### 4.1 The linchpin: `RelationshipOptions` (new `lib/RelationshipOptions.php`)
 
@@ -175,13 +215,17 @@ the SDD ledger); the policy is therefore:
   **No previously-*valid* declaration is affected** — the full suite stayed green (946 → 952
   with the new tests), confirming no fixture relied on the old lenient behavior.
 
-Still tolerated / still lenient (unchanged):
+Then, in a later ruling (2026-08-06), the maintainer went further:
 
-- **Unknown keys** remain silently ignored (matching current `array_intersect_key` behavior).
-- **Pass-through finder metadata** (`select`, `order`, `group`, `having`, `namespace`,
-  `limit`, `offset`, `readonly`) is *not* consumed as a typed control-flow value, so it stays
-  lenient (coerced to absent on type mismatch) — tightening it would reject currently-valid
-  inputs such as `'limit' => '10'`.
+- **Unknown option keys now throw** `RelationshipException` (was: silently ignored). Enforced
+  in `merge_association_options()`, excluding the positional integer key(s). This is the one
+  **breaking change** in the change set — see "Final implementation".
+
+Still lenient:
+
+- **Pass-through finder metadata values** (`select`, `order`, `group`, `having`, `limit`,
+  `offset`, `readonly`) are not *type*-validated — only their *keys* must be known. Their
+  values still flow to the finder untouched, so e.g. `'limit' => '10'` is accepted as before.
 
 ## 5. Backward compatibility
 
@@ -213,10 +257,10 @@ The per-query hot-path read is ~2× *faster* as a typed property than an array l
 
 ## 7. Out of scope / follow-ups (require maintainer approval)
 
-- **Further strict validation** still deferred: rejecting *unknown* keys, and rejecting
-  invalid option/type *combinations* (e.g. `through`/`source` on `belongs_to`). (The
-  present-but-malformed-value checks on the five consumed fields were pulled into scope by the
-  maintainer's 2026-08-05 ruling — see §4.4.)
+- **Rejecting invalid option/type *combinations*** (e.g. `through`/`source` on `belongs_to`)
+  is still deferred. (Present-but-malformed *values* on the five consumed fields, and
+  *unknown option keys*, were both pulled into scope by maintainer rulings — see §4.4 and
+  "Final implementation".)
 - **Native property typing** / any 2.0-style standardization of consumer model declarations.
 - Replacing the array API with attributes/DTO-on-model (explicitly excluded by the user).
 

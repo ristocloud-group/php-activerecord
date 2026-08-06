@@ -629,6 +629,34 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Final state (supersedes the tasks below) — shipped on PR #24
+
+The task plan below builds a `RelationshipOptions` value object (Tasks 1–4). During execution
+that DTO was built, trimmed, reduced to a constructor-local, and finally **removed** in favor
+of a leaner approach (maintainer rulings 2026-08-05/06). What actually shipped:
+
+1. **DTO deleted** (`lib/RelationshipOptions.php` + its unit test + the `ActiveRecord.php`
+   require removed).
+2. **Inline validation** in the relationship constructors via two reusable, unit-tested free
+   functions in `lib/Utils.php`: `relationship_option_string()` and
+   `relationship_option_key_list()` — enforcing non-empty-string / string-list on the five
+   consumed fields (`class`/`class_name`, `foreign_key`, `primary_key`, `through`, `source`)
+   plus the positional name at `[0]`.
+3. **Unknown option keys rejected**: `merge_association_options()` now throws
+   `RelationshipException` on any key not in `$valid_association_options` (positional integer
+   keys excepted). **Breaking change** (reverses the tested "silently ignore unknown options"
+   contract), maintainer-authorized; `test_belongs_to_with_an_invalid_option` was rewritten to
+   `test_belongs_to_with_an_unknown_option_throws`.
+4. **Static-analysis/IDE layer unchanged** (Task 4): `@phpstan-type Relationship` alias +
+   untyped-PHPDoc base `Model` properties + shipped stub remain — they deliver the analysis/IDE
+   goals independently of the (now-removed) DTO.
+5. **Tests at both levels**: helper-level (`test/UtilsTest.php`) and constructor-level
+   (`test/RelationshipOptionsWiringTest.php`). Green on the full CI matrix (PHP 8.3–8.5 ×
+   mysql/mariadb/postgres) + PHPStan level 8.
+
+Key commits: `7e07ad2`…`686ed9b` (DTO era), then `7e9794c` (DTO removed → inline validation +
+reject-unknown). The task-by-task detail below is retained for history.
+
 ## Amendment (2026-08-05 maintainer ruling, applied in Task 3 fix round 1)
 
 Task 3's read-swap made the DTO's silent coercion of malformed input observable. The maintainer
