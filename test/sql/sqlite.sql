@@ -20,6 +20,12 @@ CREATE TABLE books(
 	special NUMERIC(10,2) DEFAULT 0
 );
 
+CREATE TABLE book_reviews(
+	id INTEGER NOT NULL PRIMARY KEY,
+	book_id INT,
+	rating INT
+);
+
 CREATE TABLE venues (
   Id INTEGER NOT NULL PRIMARY KEY,
   name varchar(50),

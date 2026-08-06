@@ -21,6 +21,12 @@ CREATE TABLE books(
 	special NUMERIC(10,2) DEFAULT 0
 );
 
+CREATE TABLE book_reviews(
+	id INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+	book_id INT,
+	rating INT
+);
+
 CREATE TABLE venues (
 	Id int NOT NULL AUTO_INCREMENT PRIMARY KEY,
 	name varchar(50),

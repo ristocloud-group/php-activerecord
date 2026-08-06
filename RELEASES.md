@@ -8,6 +8,11 @@
 * Adds PHPStan (level 5) and coverage generation
 * Adds a Redis cache adapter (via `predis/predis`) for the schema cache, verified against Redis 6/7/8 and Valkey 7/8/9
 * The file cache now honors the `expire` option (writes are atomic; entries expire lazily). **Behavior change:** with the default `expire` of 30s, file entries no longer persist indefinitely — pass `expire => 0` for the previous behavior
+* Fixed `has_many … 'through'` (and the inherited `has_one … 'through'`) for the
+  has_many→has_many chain, where the intermediate model `has_many` the target
+  (reverse FK) — e.g. `Author has_many book_reviews, through: books`. Both lazy
+  access and eager `include` are supported. The existing join-table / `belongs_to`
+  `through` shape is unchanged. (#22)
 
 ## v1.8.0 (27 July 2026)
 * Removes the incomplete, untested OCI/Oracle adapter

@@ -24,6 +24,13 @@ class RelationshipTest extends DatabaseTest
         Employee::$has_one = [['position']];
         Host::$has_many = [['events', 'order' => 'id asc']];
 
+        Author::$has_many = [['books']];
+        Author::$has_one = [
+            ['awesome_person', 'foreign_key' => 'author_id', 'primary_key' => 'author_id'],
+            ['parent_author', 'class_name' => 'Author', 'foreign_key' => 'parent_author_id']];
+        Book::$has_many = [];
+        Book::$belongs_to = [['author']];
+
         foreach ($this->relationship_names as $name) {
             if (preg_match("/$name/", $this->name(), $match)) {
                 $this->relationship_name = $match[0];
@@ -414,6 +421,69 @@ class RelationshipTest extends DatabaseTest
         $this->assert_true(count($venue->hostess) > 0);
     }
 
+    public function test_gh22_has_many_through_has_many_chain()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_many = [['books'], ['book_reviews', 'through' => 'books']];
+
+        $reviews = Author::find(1)->book_reviews;
+
+        $this->assert_equals(2, count($reviews));
+        $ids = [$reviews[0]->id, $reviews[1]->id];
+        sort($ids);
+        $this->assert_equals([1, 2], $ids);
+        $this->assert_true($reviews[0] instanceof BookReview);
+    }
+
+    public function test_gh22_has_one_through_has_many_chain()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_one = [['book_review', 'through' => 'books']];
+
+        $review = Author::find(1)->book_review;
+
+        $this->assert_true($review instanceof BookReview);
+        $this->assert_equals(1, $review->book_id);
+    }
+
+    public function test_gh22_eager_has_many_through_chain()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_many = [['books'], ['book_reviews', 'through' => 'books', 'order' => 'book_reviews.id asc']];
+
+        $authors = Author::find('all', ['include' => ['book_reviews'], 'order' => 'author_id asc']);
+
+        $by_id = [];
+        foreach ($authors as $a) {
+            $by_id[$a->author_id] = $a;
+        }
+
+        // author 1 -> reviews via book 1 ; author 2 -> review via book 2 ; authors 3,4 -> none
+        $this->assert_equals([1, 2], array_map(fn($r) => $r->id, $by_id[1]->book_reviews));
+        $this->assert_equals([3], array_map(fn($r) => $r->id, $by_id[2]->book_reviews));
+        $this->assert_equals(0, count($by_id[3]->book_reviews ?? []));
+    }
+
+    public function test_gh22_eager_has_one_through_chain_is_last_wins()
+    {
+        Book::$has_many = [['book_reviews']];
+        Author::$has_one = [['book_review', 'through' => 'books', 'order' => 'book_reviews.id asc']];
+
+        $authors = Author::find('all', ['include' => ['book_review'], 'order' => 'author_id asc']);
+
+        $by_id = [];
+        foreach ($authors as $a) {
+            $by_id[$a->author_id] = $a;
+        }
+
+        // Author 1 matches reviews 1 and 2; eager has_one attaches sequentially
+        // and overwrites, so the LAST row in our asc order (id 2) wins. This is
+        // pre-existing has_one eager-load semantics, not a bug introduced here —
+        // a first-wins implementation would have returned id 1.
+        $this->assert_true($by_id[1]->book_review instanceof BookReview);
+        $this->assert_equals(2, $by_id[1]->book_review->id);
+    }
+
     public function test_has_many_through_with_invalid_class_name()
     {
         $this->expectException(ReflectionException::class);
@@ -773,5 +843,10 @@ class RelationshipTest extends DatabaseTest
         $this->expectException(ActiveRecord\RecordNotFound::class);
 
         Author::find(999999, ['include' => ['books']]);
+    }
+
+    public function test_gh22_book_reviews_fixture_loads()
+    {
+        $this->assert_equals(3, count(BookReview::all()));
     }
 };
