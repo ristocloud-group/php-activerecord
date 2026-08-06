@@ -26,9 +26,11 @@ class ConnectionManagerTest extends DatabaseTest
 
     public function test_gh_91_get_connection_with_null_connection_is_always_default()
     {
-        $conn_one = ConnectionManager::get_connection('mysql');
+        $default = Config::instance()->get_default_connection();
+
+        $conn_one = ConnectionManager::get_connection($default);
         $conn_two = ConnectionManager::get_connection();
-        $conn_three = ConnectionManager::get_connection('mysql');
+        $conn_three = ConnectionManager::get_connection($default);
         $conn_four = ConnectionManager::get_connection();
 
         $this->assert_same($conn_one, $conn_three);

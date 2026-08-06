@@ -50,15 +50,7 @@ ActiveRecord\Config::initialize(function (Config $cfg) {
         'pgsql'   => getenv('PHPAR_PGSQL') ?: 'pgsql://test:test@127.0.0.1/test',
         'sqlite'  => getenv('PHPAR_SQLITE') ?: 'sqlite://test.db']);
 
-    $cfg->set_default_connection('mysql');
-
-    for ($i = 0; $i < count($GLOBALS['argv']); ++$i) {
-        if ($GLOBALS['argv'][$i] == '--adapter') {
-            $cfg->set_default_connection($GLOBALS['argv'][$i + 1]);
-        } elseif ($GLOBALS['argv'][$i] == '--slow-tests') {
-            $GLOBALS['slow_tests'] = true;
-        }
-    }
+    $cfg->set_default_connection(getenv('PHPAR_CONNECTION') ?: 'mysql');
 
     $logger = new Logger('tests');
     $logger->pushHandler(new StreamHandler(dirname(__FILE__) . '/../log/query.log', Level::Debug));

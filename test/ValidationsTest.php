@@ -154,7 +154,9 @@ class ValidationsTest extends DatabaseTest
         $valuestore = ValuestoreValidations::create(['key' => 'GA_KEY', 'value' => 'UA-1234567-2']);
 
         $this->assert_equals(["Key must be unique"], $valuestore->errors->full_messages());
-        $this->assert_equals(1, ValuestoreValidations::count(['conditions' => "`key`='GA_KEY'"]));
+
+        $quoted_key = ValuestoreValidations::connection()->quote_name('key');
+        $this->assert_equals(1, ValuestoreValidations::count(['conditions' => "{$quoted_key}='GA_KEY'"]));
     }
 
     public function test_get_validation_rules()

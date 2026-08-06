@@ -397,7 +397,7 @@ class ActiveRecordWriteTest extends DatabaseTest
 
     public function test_update_all_with_conditions_as_string()
     {
-        $num_affected = Author::update_all(['set' => 'parent_author_id = 2', 'conditions' => 'name = "Tito"']);
+        $num_affected = Author::update_all(['set' => 'parent_author_id = 2', 'conditions' => "name = 'Tito'"]);
         $this->assert_equals(1, $num_affected);
     }
 
