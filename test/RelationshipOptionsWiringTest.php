@@ -23,4 +23,10 @@ class RelationshipOptionsWiringTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->expectException(RelationshipException::class);
         new BelongsTo(['class_name' => 'Author']); // no index 0
     }
+
+    public function test_unknown_option_key_throws_relationship_exception()
+    {
+        $this->expectException(RelationshipException::class);
+        new HasMany(['books', 'bogus_option' => 1]);
+    }
 }

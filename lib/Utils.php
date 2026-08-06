@@ -163,6 +163,49 @@ function collect(&$enumerable, $name_or_closure): array
 }
 
 /**
+ * A relationship option that must be a non-empty string when present.
+ *
+ * @throws RelationshipException when present but not a non-empty string
+ */
+function relationship_option_string(mixed $value, string $relationship, string $option): ?string
+{
+    if (null === $value) {
+        return null;
+    }
+    if (!is_string($value) || '' === $value) {
+        throw new RelationshipException("Relationship '{$relationship}': '{$option}' must be a non-empty string.");
+    }
+
+    return $value;
+}
+
+/**
+ * A relationship key option: a non-empty string or a list of non-empty strings.
+ * Absent / null / [] yield [].
+ *
+ * @return list<string>
+ *
+ * @throws RelationshipException when a present element is not a non-empty string
+ */
+function relationship_option_key_list(mixed $value, string $relationship, string $option): array
+{
+    if (null === $value || [] === $value) {
+        return [];
+    }
+
+    $items = is_array($value) ? array_values($value) : [$value];
+    $out = [];
+    foreach ($items as $item) {
+        if (!is_string($item) || '' === $item) {
+            throw new RelationshipException("Relationship '{$relationship}': '{$option}' must be a non-empty string or a list of non-empty strings.");
+        }
+        $out[] = $item;
+    }
+
+    return $out;
+}
+
+/**
  * Wrap string definitions (if any) into arrays.
  *
  * @param array<int|string, mixed>|string $strings

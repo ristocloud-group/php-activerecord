@@ -200,4 +200,39 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         // nothing to collapse -> unchanged
         $this->assert_equals('abc', AR\Utils::squeeze(' ', 'abc'));
     }
+
+    public function test_relationship_option_string()
+    {
+        $this->assert_null(AR\relationship_option_string(null, 'books', 'through'));
+        $this->assert_equals('orders', AR\relationship_option_string('orders', 'books', 'through'));
+
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        AR\relationship_option_string('', 'books', 'through');
+    }
+
+    public function test_relationship_option_string_throws_on_non_string()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        AR\relationship_option_string(123, 'books', 'through');
+    }
+
+    public function test_relationship_option_key_list()
+    {
+        $this->assert_equals(['author_id'], AR\relationship_option_key_list('author_id', 'books', 'foreign_key'));
+        $this->assert_equals(['a', 'b'], AR\relationship_option_key_list([3 => 'a', 7 => 'b'], 'books', 'foreign_key'));
+        $this->assert_equals([], AR\relationship_option_key_list(null, 'books', 'foreign_key'));
+        $this->assert_equals([], AR\relationship_option_key_list([], 'books', 'foreign_key'));
+    }
+
+    public function test_relationship_option_key_list_throws_on_empty_string()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        AR\relationship_option_key_list('', 'books', 'foreign_key');
+    }
+
+    public function test_relationship_option_key_list_throws_on_non_string_element()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        AR\relationship_option_key_list(['a', null], 'books', 'foreign_key');
+    }
 };
