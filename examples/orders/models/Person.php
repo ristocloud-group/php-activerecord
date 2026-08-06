@@ -14,7 +14,6 @@
 class Person extends ActiveRecord\Model
 {
     // a person can have many orders and payments
-    /** @var array<int, array<int|string, mixed>> */
     public static $has_many = [
         ['orders'],
         ['payments']];

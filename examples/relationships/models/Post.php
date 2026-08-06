@@ -13,10 +13,8 @@
  */
 class Post extends ActiveRecord\Model
 {
-    /** @var array<int, array<int|string, mixed>> */
     public static $belongs_to = [['author']];
 
-    /** @var array<int, array<int|string, mixed>> */
     public static $has_many = [
         ['comments'],
         ['taggings'],                          // the intermediate assoc that `through` walks

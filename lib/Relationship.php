@@ -46,6 +46,13 @@ interface InterfaceRelationship
  *           {@see AbstractRelationship::query_and_attach_related_models_eagerly()} when
  *           $options['through'] is set, which is only a valid option for HasMany/HasOne —
  *           so it is never called on a BelongsTo/HasAndBelongsToMany instance.
+ * @phpstan-type Relationship array{
+ *     0: string, class_name?: string, class?: string, namespace?: string,
+ *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
+ *     conditions?: mixed, select?: string, readonly?: bool,
+ *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
+ *     through?: string, source?: string
+ * }
  */
 abstract class AbstractRelationship implements InterfaceRelationship
 {
@@ -99,6 +106,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     public function __construct($options = [])
     {
+        if (!isset($options[0]) || !is_string($options[0]) || '' === $options[0]) {
+            throw new RelationshipException('Relationship definition is missing its name (expected a non-empty string at index 0).');
+        }
+
         $this->attribute_name = $options[0];
         $this->options = $this->merge_association_options($options);
 
@@ -112,16 +123,19 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $this->options['conditions'] = [$this->options['conditions']];
         }
 
-        if (isset($this->options['class'])) {
-            $this->set_class_name($this->options['class']);
-        } elseif (isset($this->options['class_name'])) {
-            $this->set_class_name($this->options['class_name']);
+        $class = $options['class'] ?? $options['class_name'] ?? null;
+        $class = relationship_option_string($class, (string) $options[0], 'class_name');
+        if (null !== $class) {
+            $this->set_class_name($class);
         }
 
         $this->attribute_name = strtolower(Inflector::instance()->variablize($this->attribute_name));
 
-        if (!$this->foreign_key && isset($this->options['foreign_key'])) {
-            $this->foreign_key = is_array($this->options['foreign_key']) ? array_values($this->options['foreign_key']) : [$this->options['foreign_key']];
+        if (!$this->foreign_key) {
+            $fk = relationship_option_key_list($options['foreign_key'] ?? null, (string) $options[0], 'foreign_key');
+            if ($fk) {
+                $this->foreign_key = $fk;
+            }
         }
     }
 
@@ -313,6 +327,21 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected function merge_association_options($options)
     {
         $available_options = array_merge(self::$valid_association_options, static::$valid_association_options);
+
+        foreach ($options as $key => $ignored) {
+            if (is_int($key)) {
+                continue; // positional relationship name at index 0
+            }
+            if (!in_array($key, $available_options, true)) {
+                throw new RelationshipException(sprintf(
+                    "Unknown option '%s' for relationship '%s'. Valid options: %s.",
+                    $key,
+                    is_string($options[0] ?? null) ? $options[0] : '?',
+                    implode(', ', $available_options)
+                ));
+            }
+        }
+
         $valid_options = array_intersect_key(array_flip($available_options), $options);
 
         foreach ($valid_options as $option => $v) {
@@ -647,16 +676,21 @@ class HasMany extends AbstractRelationship
     {
         parent::__construct($options);
 
-        if (isset($this->options['through'])) {
-            $this->through = $this->options['through'];
+        $through = relationship_option_string($options['through'] ?? null, (string) $options[0], 'through');
+        if (null !== $through) {
+            $this->through = $through;
 
-            if (isset($this->options['source'])) {
-                $this->set_class_name($this->options['source']);
+            $source = relationship_option_string($options['source'] ?? null, (string) $options[0], 'source');
+            if (null !== $source) {
+                $this->set_class_name($source);
             }
         }
 
-        if (!$this->primary_key && isset($this->options['primary_key'])) {
-            $this->primary_key = is_array($this->options['primary_key']) ? array_values($this->options['primary_key']) : [$this->options['primary_key']];
+        if (!$this->primary_key) {
+            $pk = relationship_option_key_list($options['primary_key'] ?? null, (string) $options[0], 'primary_key');
+            if ($pk) {
+                $this->primary_key = $pk;
+            }
         }
 
         if (!$this->class_name) {
@@ -838,6 +872,11 @@ class HasAndBelongsToMany extends AbstractRelationship
      */
     public function __construct($options = [])
     {
+        // Validate the definition (HABTM is otherwise an unimplemented stub).
+        if (!isset($options[0]) || !is_string($options[0]) || '' === $options[0]) {
+            throw new RelationshipException('Relationship definition is missing its name (expected a non-empty string at index 0).');
+        }
+
         /* options =>
          *   join_table - name of the join table if not in lexical order
          *   foreign_key -

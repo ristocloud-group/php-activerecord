@@ -77,6 +77,7 @@ use Closure;
  * @property mixed $id Primary-key attribute, present on virtually every table; resolved
  *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
  *           property since column schema is introspected at runtime.
+ * @phpstan-import-type Relationship from AbstractRelationship
  */
 class Model
 {
@@ -236,6 +237,30 @@ class Model
      * @var list<array<int|string, mixed>>
      */
     public static $delegate = [];
+
+    /**
+     * @var array<int, Relationship|string>|string|null
+     * @phpstan-var array<int, Relationship>|string|null
+     */
+    public static $has_many;
+
+    /**
+     * @var array<int, Relationship|string>|string|null
+     * @phpstan-var array<int, Relationship>|string|null
+     */
+    public static $has_one;
+
+    /**
+     * @var array<int, Relationship|string>|string|null
+     * @phpstan-var array<int, Relationship>|string|null
+     */
+    public static $belongs_to;
+
+    /**
+     * @var array<int, Relationship|string>|string|null
+     * @phpstan-var array<int, Relationship>|string|null
+     */
+    public static $has_and_belongs_to_many;
 
     /**
      * Constructs a model.

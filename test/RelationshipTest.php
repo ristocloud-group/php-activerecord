@@ -277,11 +277,17 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals(3, $author->parent_author->id);
     }
 
-    public function test_belongs_to_with_an_invalid_option()
+    public function test_belongs_to_with_an_unknown_option_throws()
     {
+        // 'joins' is not in BelongsTo's (or the common) $valid_association_options
+        // list; merge_association_options() now rejects unknown option keys instead
+        // of silently dropping them (maintainer-authorized tightening). The throw
+        // fires while Table::set_associations() builds the 'venue' relationship,
+        // which happens as soon as Event's Table is loaded/cached -- here, on the
+        // Event::first() call itself, before the ->venue property is even reached.
         Event::$belongs_to[0]['joins'] = 'venue';
-        $event = Event::first()->venue;
-        $this->assert_sql_doesnt_has('INNER JOIN venues ON(events.venue_id = venues.id)', Event::table()->last_sql);
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        Event::first();
     }
 
     public function test_has_many_with_explicit_class_name()

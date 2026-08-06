@@ -15,12 +15,10 @@ class Author extends ActiveRecord\Model
     // (the through model `belongs_to` both sides, like Tagging below) — not a plain
     // one-to-many chain such as "comments through posts" (Comment belongs_to Post,
     // not the reverse), so that association is intentionally not declared here.
-    /** @var array<int, array<int|string, mixed>> */
     public static $has_many = [
         ['posts'],
     ];
 
-    /** @var array<int, array<int|string, mixed>> */
     public static $has_one = [
         ['profile'],
     ];

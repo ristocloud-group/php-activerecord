@@ -34,5 +34,12 @@
     "analyse": "phpstan analyse --memory-limit=1G",
     "cs": "php-cs-fixer fix --dry-run --diff --using-cache=no",
     "cs-fix": "php-cs-fixer fix"
+  },
+  "extra": {
+    "phpstan": {
+      "includes": [
+        "stubs/relationship-properties.stub"
+      ]
+    }
   }
 }
