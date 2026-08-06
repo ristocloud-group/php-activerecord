@@ -1,7 +1,13 @@
 # Issue #26 — Real cross-adapter test coverage + SQLite eager-load fix
 
 **Date:** 2026-08-06
-**Status:** Approved design — pending implementation.
+**Status:** Approved design — in implementation. **Revised after Task A1:** the
+cross-adapter suite empirically proved Postgres is broken at the ORM level
+today (11 failures + 4 structural skips), so PR A's CI now covers **mysql +
+mariadb** only; **pgsql is deferred** to a follow-up issue. Two low-risk
+PG-surfaced fixes were folded in (Expressions `IS NULL`; adapter-agnostic
+`update_all` count tests). SQLite remains in scope via PR B. See the plan's
+"Revised scope" section for details.
 **Author:** Claude (paired with maintainer)
 **Issue:** #26
 **Branches:** two PRs, both cut from **`master`** (current workspace branch
