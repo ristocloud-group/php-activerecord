@@ -331,13 +331,26 @@ abstract class Connection
         $sth->setFetchMode(PDO::FETCH_ASSOC);
 
         try {
-            if (!$sth->execute($values)) {
+            if (!$this->bind_values($sth, $values)) {
                 throw new DatabaseException($this);
             }
         } catch (PDOException $e) {
             throw new DatabaseException($e);
         }
         return $sth;
+    }
+
+    /**
+     * Bind the positional values and execute the prepared statement.
+     *
+     * Default binding delegates to PDOStatement::execute(), which binds every
+     * value as PDO::PARAM_STR. Adapters may override to bind by type.
+     *
+     * @param array<int, mixed> $values Positional bind values
+     */
+    protected function bind_values(\PDOStatement $sth, array $values): bool
+    {
+        return $sth->execute($values);
     }
 
     /**
