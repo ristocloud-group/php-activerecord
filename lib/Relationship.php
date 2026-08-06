@@ -64,11 +64,6 @@ abstract class AbstractRelationship implements InterfaceRelationship
     public $attribute_name;
 
     /**
-     * Typed, validated view of the declared relationship definition.
-     */
-    protected RelationshipOptions $def;
-
-    /**
      * Class name of the associated model.
      *
      * @var string
@@ -111,7 +106,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     public function __construct($options = [])
     {
-        $this->def = RelationshipOptions::from_array($options);
+        $def = RelationshipOptions::from_array($options);
         $this->attribute_name = $options[0];
         $this->options = $this->merge_association_options($options);
 
@@ -125,14 +120,14 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $this->options['conditions'] = [$this->options['conditions']];
         }
 
-        if (null !== $this->def->class_name) {
-            $this->set_class_name($this->def->class_name);
+        if (null !== $def->class_name) {
+            $this->set_class_name($def->class_name);
         }
 
         $this->attribute_name = strtolower(Inflector::instance()->variablize($this->attribute_name));
 
-        if (!$this->foreign_key && $this->def->foreign_key) {
-            $this->foreign_key = $this->def->foreign_key;
+        if (!$this->foreign_key && $def->foreign_key) {
+            $this->foreign_key = $def->foreign_key;
         }
     }
 
@@ -658,16 +653,18 @@ class HasMany extends AbstractRelationship
     {
         parent::__construct($options);
 
-        if (null !== $this->def->through) {
-            $this->through = $this->def->through;
+        $def = RelationshipOptions::from_array($options);
 
-            if (null !== $this->def->source) {
-                $this->set_class_name($this->def->source);
+        if (null !== $def->through) {
+            $this->through = $def->through;
+
+            if (null !== $def->source) {
+                $this->set_class_name($def->source);
             }
         }
 
-        if (!$this->primary_key && $this->def->primary_key) {
-            $this->primary_key = $this->def->primary_key;
+        if (!$this->primary_key && $def->primary_key) {
+            $this->primary_key = $def->primary_key;
         }
 
         if (!$this->class_name) {
@@ -849,7 +846,8 @@ class HasAndBelongsToMany extends AbstractRelationship
      */
     public function __construct($options = [])
     {
-        $this->def = RelationshipOptions::from_array($options);
+        // Validate the definition (HABTM is otherwise an unimplemented stub).
+        RelationshipOptions::from_array($options);
 
         /* options =>
          *   join_table - name of the join table if not in lexical order
