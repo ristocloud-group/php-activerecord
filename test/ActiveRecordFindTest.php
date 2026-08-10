@@ -82,6 +82,14 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals(0, count($venues));
     }
 
+    // An empty array in hash conditions must yield an empty result set (an
+    // always-false predicate), not the SQL syntax error 'IN()' (issue #36).
+    public function test_find_all_hash_with_empty_array_returns_no_rows()
+    {
+        $venues = Venue::find('all', ['conditions' => ['id' => []]]);
+        $this->assert_equals([], $venues);
+    }
+
     public function test_dynamic_finder_using_alias()
     {
         $this->assert_not_null(Venue::find_by_marquee('Warner Theatre'));

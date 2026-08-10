@@ -255,4 +255,26 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         // the glue argument must not leak into the bind values
         $this->assert_equals([], $expressions->values());
     }
+
+    // build_sql_from_hash() must render an empty array as an always-false literal
+    // predicate (Rails semantics: empty IN list matches nothing) instead of
+    // 'IN(?)', which substitute() expands to the syntax error 'IN()' on
+    // MySQL/MariaDB. Like the IS NULL literal above, nothing is pushed onto the
+    // bind values.
+    public function test_build_sql_from_hash_renders_empty_array_as_always_false()
+    {
+        $expressions = new Expressions(null, ['id' => []]);
+        $this->assert_equals('1=0', $expressions->to_s());
+        $this->assert_equals([], $expressions->values());
+    }
+
+    // The always-false literal must compose with the glue and keep the remaining
+    // '?' markers positionally aligned with the returned bind values.
+    public function test_build_sql_from_hash_empty_array_keeps_positional_alignment()
+    {
+        $expressions = new Expressions(null, ['id' => [], 'name' => 'Tito']);
+        $this->assert_equals('1=0 AND name=?', $expressions->to_s());
+        $this->assert_equals(['Tito'], $expressions->values());
+        $this->assert_equals("1=0 AND name='Tito'", $expressions->to_s(true));
+    }
 }

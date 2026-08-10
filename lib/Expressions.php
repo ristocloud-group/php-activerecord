@@ -191,8 +191,16 @@ class Expressions
             }
 
             if (is_array($value)) {
-                $sql .= "$g$name IN(?)";
-                $values[] = $value;
+                if (0 === count($value)) {
+                    // An empty IN list can match nothing: emit an always-false
+                    // literal (empty 'IN()' is a syntax error on MySQL/MariaDB)
+                    // and, like IS NULL below, push no bind value so positional
+                    // alignment with the remaining '?' markers is preserved.
+                    $sql .= "{$g}1=0";
+                } else {
+                    $sql .= "$g$name IN(?)";
+                    $values[] = $value;
+                }
             } elseif (is_null($value)) {
                 $sql .= "$g$name IS NULL";
             } else {
