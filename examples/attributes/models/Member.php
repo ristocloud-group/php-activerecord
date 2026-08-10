@@ -16,7 +16,6 @@
  */
 class Member extends ActiveRecord\Model
 {
-    /** @var array<int, array<int|string, mixed>> */
     public static $belongs_to = [['company']];
 
     // Mass-assignment whitelist: only these are set from an array; is_admin is ignored.

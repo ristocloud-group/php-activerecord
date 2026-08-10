@@ -46,6 +46,13 @@ interface InterfaceRelationship
  *           {@see AbstractRelationship::query_and_attach_related_models_eagerly()} when
  *           $options['through'] is set, which is only a valid option for HasMany/HasOne —
  *           so it is never called on a BelongsTo/HasAndBelongsToMany instance.
+ * @phpstan-type Relationship array{
+ *     0: string, class_name?: string, class?: string, namespace?: string,
+ *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
+ *     conditions?: mixed, select?: string, readonly?: bool,
+ *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
+ *     through?: string, source?: string
+ * }
  */
 abstract class AbstractRelationship implements InterfaceRelationship
 {
@@ -99,6 +106,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     public function __construct($options = [])
     {
+        if (!isset($options[0]) || !is_string($options[0]) || '' === $options[0]) {
+            throw new RelationshipException('Relationship definition is missing its name (expected a non-empty string at index 0).');
+        }
+
         $this->attribute_name = $options[0];
         $this->options = $this->merge_association_options($options);
 
@@ -112,16 +123,19 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $this->options['conditions'] = [$this->options['conditions']];
         }
 
-        if (isset($this->options['class'])) {
-            $this->set_class_name($this->options['class']);
-        } elseif (isset($this->options['class_name'])) {
-            $this->set_class_name($this->options['class_name']);
+        $class = $options['class'] ?? $options['class_name'] ?? null;
+        $class = relationship_option_string($class, (string) $options[0], 'class_name');
+        if (null !== $class) {
+            $this->set_class_name($class);
         }
 
         $this->attribute_name = strtolower(Inflector::instance()->variablize($this->attribute_name));
 
-        if (!$this->foreign_key && isset($this->options['foreign_key'])) {
-            $this->foreign_key = is_array($this->options['foreign_key']) ? array_values($this->options['foreign_key']) : [$this->options['foreign_key']];
+        if (!$this->foreign_key) {
+            $fk = relationship_option_key_list($options['foreign_key'] ?? null, (string) $options[0], 'foreign_key');
+            if ($fk) {
+                $this->foreign_key = $fk;
+            }
         }
     }
 
@@ -194,25 +208,36 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         if (!empty($options['through'])) {
-            // save old keys as we will be reseting them below for inner join convenience
-            $pk = $this->primary_key;
-            $fk = $this->foreign_key;
-
-            $this->set_keys($this->get_table()->class->getName(), true);
-
             $through_relationship = $table->get_relationship($options['through'], true);
             if (null === $through_relationship) {
                 throw new RelationshipException("Relationship named {$options['through']} has not been declared for class: {$table->class->getName()}");
             }
             $through_table = $through_relationship->get_table();
+            $source = $this->resolve_source_relationship($through_relationship);
 
-            $options['joins'] = $this->construct_inner_join_sql($through_table, true);
+            if ($source instanceof HasMany) {
+                // Reverse-FK chain (issue #22): join the middle table and expose
+                // its owner FK (e.g. books.author_id) aliased onto every target
+                // row so the matching loop below can partition per owner. The
+                // owner FK stays as $query_key (already the owner FK here).
+                $options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
+                $target_name = $this->get_table()->get_fully_qualified_table_name();
+                $middle_name = $through_table->get_fully_qualified_table_name();
+                $options['select'] = "$target_name.*, $middle_name.$query_key AS $query_key";
+            } else {
+                // Historical join-table / belongs_to shape — unchanged.
+                $pk = $this->primary_key;
+                $fk = $this->foreign_key;
 
-            $query_key = null;
+                $this->set_keys($this->get_table()->class->getName(), true);
+                $options['joins'] = $this->construct_inner_join_sql($through_table, true);
 
-            // reset keys
-            $this->primary_key = $pk;
-            $this->foreign_key = $fk;
+                $query_key = null;
+
+                // reset keys
+                $this->primary_key = $pk;
+                $this->foreign_key = $fk;
+            }
         }
 
         $options = $this->unset_non_finder_options($options);
@@ -302,6 +327,21 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected function merge_association_options($options)
     {
         $available_options = array_merge(self::$valid_association_options, static::$valid_association_options);
+
+        foreach ($options as $key => $ignored) {
+            if (is_int($key)) {
+                continue; // positional relationship name at index 0
+            }
+            if (!in_array($key, $available_options, true)) {
+                throw new RelationshipException(sprintf(
+                    "Unknown option '%s' for relationship '%s'. Valid options: %s.",
+                    $key,
+                    is_string($options[0] ?? null) ? $options[0] : '?',
+                    implode(', ', $available_options)
+                ));
+            }
+        }
+
         $valid_options = array_intersect_key(array_flip($available_options), $options);
 
         foreach ($valid_options as $option => $v) {
@@ -482,6 +522,63 @@ abstract class AbstractRelationship implements InterfaceRelationship
     }
 
     /**
+     * Resolves the association on the *through* (middle) model that points at
+     * this relationship's target — the equivalent of Rails' "source".
+     *
+     * The middle model is the target of the `through` relationship. We probe its
+     * declared associations by name, trying (in order): the singular of our
+     * attribute name, that singular re-pluralized, and the attribute name
+     * itself. The first that resolves wins; `null` means none matched (callers
+     * then keep the historical join-table behavior).
+     *
+     * @param AbstractRelationship $through the owner's `through` relationship
+     * @return AbstractRelationship|null
+     */
+    protected function resolve_source_relationship(AbstractRelationship $through): ?AbstractRelationship
+    {
+        $middle_table = $through->get_table();
+        $singular = Utils::singularize($this->attribute_name);
+
+        foreach ([$singular, Utils::pluralize($singular), $this->attribute_name] as $name) {
+            $source = $middle_table->get_relationship($name);
+            if (null !== $source) {
+                return $source;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Builds the INNER JOIN that hops from this relationship's target table to
+     * the `through` (middle) table for the reverse-FK (has_many→has_many) chain:
+     *
+     *     INNER JOIN <middle> ON(<target>.<source_fk> = <middle>.<source_pk>)
+     *
+     * The keys come from the middle model's own `has_many` to the target
+     * ($source). Kept separate from {@see construct_inner_join_sql()} so the
+     * historical join-table path is left untouched (issue #22, Approach B).
+     *
+     * @param Table $middle_table the `through` model's table
+     * @param HasMany $source the middle→target has_many association
+     * @return string
+     */
+    protected function construct_through_reverse_join_sql(Table $middle_table, HasMany $source): string
+    {
+        $source->set_keys($middle_table->class->getName());
+        if (null === $source->primary_key) {
+            throw new RelationshipException("Could not determine source primary key for relationship '{$this->attribute_name}'");
+        }
+
+        $target_name = $this->get_table()->get_fully_qualified_table_name();
+        $middle_name = $middle_table->get_fully_qualified_table_name();
+        $target_fk = $source->foreign_key[0]; // FK on the target table (e.g. book_id)
+        $middle_pk = $source->primary_key[0]; // middle PK (e.g. book_id)
+
+        return "INNER JOIN $middle_name ON($target_name.$target_fk = $middle_name.$middle_pk)";
+    }
+
+    /**
      * This will load the related model data.
      *
      * @param Model $model The model this relationship belongs to
@@ -579,16 +676,21 @@ class HasMany extends AbstractRelationship
     {
         parent::__construct($options);
 
-        if (isset($this->options['through'])) {
-            $this->through = $this->options['through'];
+        $through = relationship_option_string($options['through'] ?? null, (string) $options[0], 'through');
+        if (null !== $through) {
+            $this->through = $through;
 
-            if (isset($this->options['source'])) {
-                $this->set_class_name($this->options['source']);
+            $source = relationship_option_string($options['source'] ?? null, (string) $options[0], 'source');
+            if (null !== $source) {
+                $this->set_class_name($source);
             }
         }
 
-        if (!$this->primary_key && isset($this->options['primary_key'])) {
-            $this->primary_key = is_array($this->options['primary_key']) ? array_values($this->options['primary_key']) : [$this->options['primary_key']];
+        if (!$this->primary_key) {
+            $pk = relationship_option_key_list($options['primary_key'] ?? null, (string) $options[0], 'primary_key');
+            if ($pk) {
+                $this->primary_key = $pk;
+            }
         }
 
         if (!$this->class_name) {
@@ -635,18 +737,39 @@ class HasMany extends AbstractRelationship
                     throw new HasManyThroughAssociationException('has_many through can only use a belongs_to or has_many association');
                 }
 
-                // save old keys as we will be reseting them below for inner join convenience
-                $pk = $this->primary_key;
-                $fk = $this->foreign_key;
+                $source = $this->resolve_source_relationship($through_relationship);
 
-                $this->set_keys($this->get_table()->class->getName(), true);
+                if ($source instanceof HasMany && $through_relationship instanceof HasMany) {
+                    // Reverse-FK chain (issue #22): the middle model has_many the
+                    // target, so hop target.<source_fk> = middle.<source_pk> and
+                    // filter by the through model's own owner FK on the middle
+                    // table. The owner FK column (e.g. books.author_id) is left
+                    // unqualified in the condition: it is unambiguous because the
+                    // target table does not carry it, and qualifying it would be
+                    // mangled by quote_name().
+                    $through_table = $through_relationship->get_table();
+                    $this->options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
 
-                $through_table = $through_relationship->get_table();
-                $this->options['joins'] = $this->construct_inner_join_sql($through_table, true);
+                    $through_relationship->set_keys($model::table()->class->getName());
+                    if (null === $through_relationship->primary_key) {
+                        throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
+                    }
+                    $this->foreign_key = [$through_relationship->foreign_key[0]];
+                    $this->primary_key = $through_relationship->primary_key;
+                } else {
+                    // save old keys as we will be reseting them below for inner join convenience
+                    $pk = $this->primary_key;
+                    $fk = $this->foreign_key;
 
-                // reset keys
-                $this->primary_key = $pk;
-                $this->foreign_key = $fk;
+                    $this->set_keys($this->get_table()->class->getName(), true);
+
+                    $through_table = $through_relationship->get_table();
+                    $this->options['joins'] = $this->construct_inner_join_sql($through_table, true);
+
+                    // reset keys
+                    $this->primary_key = $pk;
+                    $this->foreign_key = $fk;
+                }
             }
 
             $this->initialized = true;
@@ -749,6 +872,11 @@ class HasAndBelongsToMany extends AbstractRelationship
      */
     public function __construct($options = [])
     {
+        // Validate the definition (HABTM is otherwise an unimplemented stub).
+        if (!isset($options[0]) || !is_string($options[0]) || '' === $options[0]) {
+            throw new RelationshipException('Relationship definition is missing its name (expected a non-empty string at index 0).');
+        }
+
         /* options =>
          *   join_table - name of the join table if not in lexical order
          *   foreign_key -

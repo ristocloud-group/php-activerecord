@@ -1,5 +1,6 @@
 SELECT setval('authors_author_id_seq', max(author_id)) FROM authors;
 SELECT setval('books_book_id_seq', max(book_id)) FROM books;
+SELECT setval('book_reviews_id_seq', max(id)) FROM book_reviews;
 SELECT setval('venues_id_seq', max(id)) FROM venues;
 SELECT setval('events_id_seq', max(id)) FROM events;
 SELECT setval('hosts_id_seq', max(id)) FROM hosts;

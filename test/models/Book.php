@@ -2,6 +2,7 @@
 
 class Book extends ActiveRecord\Model
 {
+    public static $has_many = [];
     public static $belongs_to = ['author'];
     public static $has_one = [];
     public static $use_custom_get_name_getter = false;

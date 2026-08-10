@@ -17,13 +17,11 @@
 class Order extends ActiveRecord\Model
 {
     // order belongs to a person
-    /** @var array<int, array<int|string, mixed>> */
     public static $belongs_to = [
         ['person']];
 
     // order can have many payments by many people
     // the conditions is just there as an example as it makes no logical sense
-    /** @var array<int, array<int|string, mixed>> */
     public static $has_many = [
         ['payments'],
         ['people',
