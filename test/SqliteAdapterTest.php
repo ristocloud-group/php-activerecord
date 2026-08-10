@@ -85,4 +85,13 @@ class SqliteAdapterTest extends AdapterTest
     {
         $this->assert_equals(999, $this->conn::$MAX_BIND_PARAMS);
     }
+
+    public function test_named_placeholder_params_bind_by_name()
+    {
+        // regression: the typed-binding override must not break :name params
+        $params = [':id' => 1];
+        $sth = $this->conn->query('SELECT name FROM authors WHERE author_id = :id', $params);
+        $row = $sth->fetch();
+        $this->assert_equals('Tito', $row['name']);
+    }
 }

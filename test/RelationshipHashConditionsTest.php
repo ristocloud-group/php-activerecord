@@ -44,7 +44,7 @@ class AuthorHashHasManyBooks extends ActiveRecord\Model
 
 // belongs_to, a single hash mixing every operator the hash form supports:
 //   list  -> `name` IN(?, ?)      scalar -> `parent_author_id` = ?
-//   null  -> `some_text` IS ?
+//   null  -> `some_text` IS NULL
 // Author 1 (Tito) satisfies all three (name in list, parent_author_id 3,
 // some_text NULL); author 2 (George W. Bush) fails on name.
 class BookComboHashAuthor extends ActiveRecord\Model
@@ -198,7 +198,7 @@ class RelationshipHashConditionsTest extends DatabaseTest
         $sql = Table::load('Author')->last_sql;
         $this->assert_sql_has('name IN(?,?)', $sql);
         $this->assert_sql_has('parent_author_id=?', $sql);
-        $this->assert_sql_has('some_text IS ?', $sql);
+        $this->assert_sql_has('some_text IS NULL', $sql);
         $this->assert_sql_has('author_id IN(?,?)', $sql);
     }
 
@@ -210,7 +210,7 @@ class RelationshipHashConditionsTest extends DatabaseTest
 
         $sql = Table::load('Author')->last_sql;
         $this->assert_sql_has('name IN(?,?)', $sql);
-        $this->assert_sql_has('some_text IS ?', $sql);
+        $this->assert_sql_has('some_text IS NULL', $sql);
     }
 
     public function test_belongs_to_combined_hash_equality_clause_actually_filters()

@@ -183,6 +183,7 @@ class Expressions
     private function build_sql_from_hash(array &$hash, string $glue): array
     {
         $sql = $g = "";
+        $values = [];
 
         foreach ($hash as $name => $value) {
             if ($this->connection) {
@@ -191,15 +192,18 @@ class Expressions
 
             if (is_array($value)) {
                 $sql .= "$g$name IN(?)";
+                $values[] = $value;
             } elseif (is_null($value)) {
-                $sql .= "$g$name IS ?";
+                $sql .= "$g$name IS NULL";
             } else {
                 $sql .= "$g$name=?";
+                $values[] = $value;
             }
 
             $g = $glue;
         }
-        return [$sql,array_values($hash)];
+
+        return [$sql, $values];
     }
 
     /**

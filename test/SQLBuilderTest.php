@@ -74,8 +74,8 @@ class SQLBuilderTest extends DatabaseTest
     public function test_gh134_where_with_hash_and_null()
     {
         $this->sql->where(['id' => 1, 'name' => null]);
-        $this->assert_sql_has("SELECT * FROM authors WHERE id=? AND name IS ?", (string) $this->sql);
-        $this->assert_equals([1, null], $this->sql->get_where_values());
+        $this->assert_sql_has("SELECT * FROM authors WHERE id=? AND name IS NULL", (string) $this->sql);
+        $this->assert_equals([1], $this->sql->get_where_values());
     }
 
     public function test_where_with_null()

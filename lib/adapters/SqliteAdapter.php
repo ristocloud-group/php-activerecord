@@ -37,6 +37,41 @@ class SqliteAdapter extends Connection
         $this->connection = new PDO("sqlite:$info->host", null, null, static::$PDO_OPTIONS);
     }
 
+    /**
+     * Bind positional params by PHP type so numeric predicates work under
+     * SQLite's dynamic typing. The default (PARAM_STR for everything) makes
+     * `length(col) = 14` bind `'14'`; SQLite compares INTEGER vs TEXT across
+     * storage classes and never matches. MySQL/Postgres coerce and are handled
+     * by the base implementation — this override is SQLite-only.
+     *
+     * Only a 0-indexed list of positional (`?`) params is type-bound; a
+     * non-list (named/associative `:name` params) falls back to the base
+     * execute() so PDO binds by key, preserving prior behavior.
+     *
+     * Floats have no dedicated PDO param type; PARAM_STR is correct (SQLite
+     * applies REAL affinity to numeric text in arithmetic contexts).
+     *
+     * @param array<int, mixed> $values Positional bind values
+     */
+    protected function bind_values(\PDOStatement $sth, array $values): bool
+    {
+        if (!array_is_list($values)) {
+            return $sth->execute($values);
+        }
+
+        foreach ($values as $i => $value) {
+            $type = match (true) {
+                is_int($value)  => PDO::PARAM_INT,
+                is_bool($value) => PDO::PARAM_BOOL,
+                null === $value => PDO::PARAM_NULL,
+                default         => PDO::PARAM_STR,
+            };
+            $sth->bindValue($i + 1, $value, $type);
+        }
+
+        return $sth->execute();
+    }
+
     public function limit($sql, $offset, $limit)
     {
         $offset = is_null($offset) ? '' : intval($offset) . ',';

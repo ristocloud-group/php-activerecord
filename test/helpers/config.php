@@ -50,15 +50,7 @@ ActiveRecord\Config::initialize(function (Config $cfg) {
         'pgsql'   => getenv('PHPAR_PGSQL') ?: 'pgsql://test:test@127.0.0.1/test',
         'sqlite'  => getenv('PHPAR_SQLITE') ?: 'sqlite://test.db']);
 
-    $cfg->set_default_connection('mysql');
-
-    for ($i = 0; $i < count($GLOBALS['argv']); ++$i) {
-        if ($GLOBALS['argv'][$i] == '--adapter') {
-            $cfg->set_default_connection($GLOBALS['argv'][$i + 1]);
-        } elseif ($GLOBALS['argv'][$i] == '--slow-tests') {
-            $GLOBALS['slow_tests'] = true;
-        }
-    }
+    $cfg->set_default_connection(getenv('PHPAR_CONNECTION') ?: 'mysql');
 
     $logger = new Logger('tests');
     $logger->pushHandler(new StreamHandler(dirname(__FILE__) . '/../log/query.log', Level::Debug));
@@ -74,5 +66,27 @@ ActiveRecord\Config::initialize(function (Config $cfg) {
 
     $GLOBALS['show_warnings_done'] = true;
 });
+
+// Make the adapter under test explicit in the run output and the query log, so
+// it is visually verifiable which connection — and therefore which adapter
+// class — the behavioral suite is actually exercising (guards against silently
+// running every test on MySQL). Derived from the default connection string
+// without opening a connection, so DB-less unit tests still run offline.
+if (!isset($GLOBALS['adapter_banner_done'])) {
+    $default_connection = Config::instance()->get_default_connection();
+    $connection_string = Config::instance()->get_default_connection_string();
+    $protocol = (string) parse_url($connection_string, PHP_URL_SCHEME);
+    $adapter_class = 'ActiveRecord\\' . ucwords($protocol) . 'Adapter';
+    $banner = sprintf('php-activerecord test suite → connection "%s" (%s → %s)', $default_connection, $protocol, $adapter_class);
+
+    // Credentials are printed in full on purpose — this is the test harness.
+    echo ">>> {$banner}\n";
+    echo ">>>     connection string: {$connection_string}\n";
+    if ($logger = Config::instance()->get_logger()) {
+        $logger->info($banner . ' [' . $connection_string . ']');
+    }
+
+    $GLOBALS['adapter_banner_done'] = true;
+}
 
 error_reporting(E_ALL);

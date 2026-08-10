@@ -375,15 +375,19 @@ class ActiveRecordWriteTest extends DatabaseTest
 
     public function test_update_all_with_set_as_string()
     {
-        $num_affected = Author::update_all(['set' => 'parent_author_id = 2']);
-        $this->assert_equals(2, $num_affected);
-        $this->assert_equals(4, Author::count_by_parent_author_id(2));
+        // parent_author_id 4 (a valid author_id) is unused as a parent, so all
+        // four rows genuinely change — MySQL "changed" and Postgres "matched"
+        // row counts then agree (avoids driver-specific rowCount semantics).
+        $num_affected = Author::update_all(['set' => 'parent_author_id = 4']);
+        $this->assert_equals(4, $num_affected);
+        $this->assert_equals(4, Author::count_by_parent_author_id(4));
     }
 
     public function test_update_all_with_set_as_hash()
     {
-        $num_affected = Author::update_all(['set' => ['parent_author_id' => 2]]);
-        $this->assert_equals(2, $num_affected);
+        $num_affected = Author::update_all(['set' => ['parent_author_id' => 4]]);
+        $this->assert_equals(4, $num_affected);
+        $this->assert_equals(4, Author::count_by_parent_author_id(4));
     }
 
     /**
@@ -397,7 +401,7 @@ class ActiveRecordWriteTest extends DatabaseTest
 
     public function test_update_all_with_conditions_as_string()
     {
-        $num_affected = Author::update_all(['set' => 'parent_author_id = 2', 'conditions' => 'name = "Tito"']);
+        $num_affected = Author::update_all(['set' => 'parent_author_id = 2', 'conditions' => "name = 'Tito'"]);
         $this->assert_equals(1, $num_affected);
     }
 

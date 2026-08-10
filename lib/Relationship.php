@@ -409,7 +409,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * the positional shape, so the hash form used to be dropped silently (GH #13).
      * We convert a hash through {@see Expressions} — the very machinery finders
      * use — so both shapes reach parity: a scalar value becomes `col = ?`, a
-     * list becomes `col IN(?, ...)`, and a null value becomes `col IS ?`.
+     * list becomes `col IN(?, ...)`, and a null value becomes `col IS NULL`.
      * A positional/fragment condition is returned unchanged.
      *
      * @param array<int|string, mixed> $conditions

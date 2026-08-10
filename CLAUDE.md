@@ -39,6 +39,14 @@ docker compose exec tests composer run analyse   # PHPStan (level 8)
 docker compose exec tests composer run cs-fix    # apply coding style
 ```
 
+- **Run the suite against another adapter** by selecting the default connection
+  with `PHPAR_CONNECTION` (`mysql` is the default). The env var must be passed
+  with `-e` so it crosses into the container — a host-shell prefix is NOT
+  forwarded:
+  ```sh
+  docker compose exec -e PHPAR_CONNECTION=sqlite tests composer run test
+  ```
+
 The `test` / `analyse` / `cs` / `cs-fix` scripts (and their exact flags) are
 defined in `composer.json` — read them there. To run one test:
 `… vendor/bin/phpunit --filter <Class|test_name>` or `… test/SomeTest.php`.

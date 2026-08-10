@@ -9,6 +9,7 @@ services:
       - PHPAR_PGSQL=pgsql://phpar:secret@postgres/phpar_test
       - PHPAR_MYSQL=mysql://phpar:secret@mysql/phpar_test
       - PHPAR_MARIADB=mysql://phpar:secret@mariadb/phpar_test
+      - PHPAR_SQLITE=sqlite://test.db
       - PHPAR_MEMCACHED=memcached
       - PHPAR_REDIS=redis://redis:6379
     depends_on:

@@ -226,11 +226,25 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
     }
 
     // build_sql_from_hash() across all three branches (scalar =?, array IN(?),
-    // null IS ?) in one hash; the null branch had no prior direct coverage.
+    // null IS NULL literal) in one hash; the null branch had no prior direct
+    // coverage.
     public function test_hash_with_null_and_array_and_scalar()
     {
         $a = new Expressions(null, ['id' => 1, 'name' => ['Tito', 'Mexican'], 'deleted_at' => null]);
-        $this->assert_equals('id=? AND name IN(?,?) AND deleted_at IS ?', $a->to_s());
-        $this->assert_equals([1, ['Tito', 'Mexican'], null], $a->values());
+        $this->assert_equals('id=? AND name IN(?,?) AND deleted_at IS NULL', $a->to_s());
+        $this->assert_equals([1, ['Tito', 'Mexican']], $a->values());
+    }
+
+    // build_sql_from_hash() must emit a literal 'IS NULL' for a null hash value
+    // (not a bound '?' marker): MySQL's emulated prepares rewrite '?' -> NULL on
+    // the wire so the bug was invisible there, but Postgres real-prepares reject
+    // 'IS $1'. The null must also be excluded from the returned bind values so
+    // positional alignment with any remaining '?' markers is preserved.
+    public function test_build_sql_from_hash_renders_null_as_literal_is_null()
+    {
+        $expressions = new Expressions(null, ['id' => null]);
+        $this->assert_equals('id IS NULL', $expressions->to_s());
+        // null must NOT be a bound value — it is inlined as a literal predicate
+        $this->assert_equals([], $expressions->values());
     }
 }
