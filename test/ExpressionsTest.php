@@ -247,4 +247,12 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         // null must NOT be a bound value — it is inlined as a literal predicate
         $this->assert_equals([], $expressions->values());
     }
+
+    public function test_all_null_hash_with_explicit_glue_has_no_bind_values()
+    {
+        $expressions = new Expressions(null, ['id' => null, 'deleted_at' => null], ' OR ');
+        $this->assert_equals('id IS NULL OR deleted_at IS NULL', $expressions->to_s());
+        // the glue argument must not leak into the bind values
+        $this->assert_equals([], $expressions->values());
+    }
 }

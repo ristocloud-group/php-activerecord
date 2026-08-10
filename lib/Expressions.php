@@ -57,7 +57,7 @@ class Expressions
         }
 
         if ($expressions != '') {
-            if (!$values) {
+            if (is_null($values)) {
                 $values = array_slice(func_get_args(), 2);
             }
 
