@@ -75,10 +75,13 @@ class HasManyThroughTest extends DatabaseTest
    */
     public function test_has_many_through_does_not_require_bidi_relationship_eager_load()
     {
+        // Compare ids (not whole models): eager-loaded through models carry the
+        // middle table's owner FK (here story_id), which the eager query selects
+        // to group related rows per parent (GH #27).
         $first_story = Story::find(1, ['include' => ['readers']]);
-        $this->assertEquals([User::find(1), User::find(3)], $first_story->readers);
+        $this->assertEquals([1, 3], array_map(fn($u) => $u->id, $first_story->readers));
 
         $second_story = Story::find(2, ['include' => ['readers']]);
-        $this->assertEquals([User::find(2)], $second_story->readers);
+        $this->assertEquals([2], array_map(fn($u) => $u->id, $second_story->readers));
     }
 }

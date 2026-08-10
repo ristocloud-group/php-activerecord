@@ -225,14 +225,24 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $middle_name = $through_table->get_fully_qualified_table_name();
                 $options['select'] = "$target_name.*, $middle_name.$query_key AS $query_key";
             } else {
-                // Historical join-table / belongs_to shape — unchanged.
+                // Historical join-table / belongs_to shape.
                 $pk = $this->primary_key;
                 $fk = $this->foreign_key;
 
                 $this->set_keys($this->get_table()->class->getName(), true);
                 $options['joins'] = $this->construct_inner_join_sql($through_table, true);
 
-                $query_key = null;
+                // GH #27: expose the middle table's owner FK (e.g. events.venue_id)
+                // aliased onto every target row — same trick as the reverse-FK
+                // branch above — so the matching loop below can partition the rows
+                // per parent. (This used to null out $query_key, which made the
+                // loop attach every fetched row to every parent.)
+                $target_name = $this->get_table()->get_fully_qualified_table_name();
+                $middle_name = $through_table->get_fully_qualified_table_name();
+                $select = isset($options['select']) && is_string($options['select'])
+                    ? $options['select']
+                    : "$target_name.*";
+                $options['select'] = "$select, $middle_name.$query_key AS $query_key";
 
                 // reset keys
                 $this->primary_key = $pk;
