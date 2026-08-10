@@ -74,13 +74,16 @@ ActiveRecord\Config::initialize(function (Config $cfg) {
 // without opening a connection, so DB-less unit tests still run offline.
 if (!isset($GLOBALS['adapter_banner_done'])) {
     $default_connection = Config::instance()->get_default_connection();
-    $protocol = (string) parse_url(Config::instance()->get_default_connection_string(), PHP_URL_SCHEME);
+    $connection_string = Config::instance()->get_default_connection_string();
+    $protocol = (string) parse_url($connection_string, PHP_URL_SCHEME);
     $adapter_class = 'ActiveRecord\\' . ucwords($protocol) . 'Adapter';
     $banner = sprintf('php-activerecord test suite → connection "%s" (%s → %s)', $default_connection, $protocol, $adapter_class);
 
+    // Credentials are printed in full on purpose — this is the test harness.
     echo ">>> {$banner}\n";
+    echo ">>>     connection string: {$connection_string}\n";
     if ($logger = Config::instance()->get_logger()) {
-        $logger->info($banner);
+        $logger->info($banner . ' [' . $connection_string . ']');
     }
 
     $GLOBALS['adapter_banner_done'] = true;
