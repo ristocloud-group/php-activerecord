@@ -17,6 +17,7 @@ php examples/validations/validations.php
 | [`attributes/`](attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible`, `$delegate`, dirty tracking (`is_dirty`, `dirty_attributes`) |
 | [`serialization/`](serialization/) | `to_json` / `to_xml` / `to_array` with `only` / `except` / `methods` / `include` |
 | [`finders/`](finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` option set, `find_by_sql`, static scopes |
+| [`conditions/`](conditions/) | Condition semantics: `null` renders `IS NULL`, empty arrays return no rows (`1=0` / `IN(NULL)`), arrays containing `null` also match NULL rows, and the user-authored-fragment boundary |
 | [`simple/`](simple/) | The minimal model (`class Book extends Model {}`) and convention overrides (`$table_name`, `$primary_key`) |
 | [`orders/`](orders/) | A fuller app: `$validates_*`, a `before_validation_on_create` callback (applies tax), `belongs_to`/`has_many`, `has_many … through` with `select`/`conditions`, dynamic finders |
 | [`upsert/`](upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and automatically-managed timestamps |

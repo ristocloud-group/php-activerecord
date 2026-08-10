@@ -306,4 +306,92 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $a->bind(1, []);
         $this->assert_equals('a IN(NULL)', $a->to_s());
     }
+
+    // --- arrays containing null in library-built IN conditions (Rails parity) ---
+
+    // A null inside an IN list never matches under SQL three-valued logic, so
+    // the hash builder partitions the list: the non-null values keep the IN(?)
+    // and the null becomes an OR'd IS NULL. Only the non-null values are bound.
+    public function test_hash_array_containing_null_renders_in_or_is_null()
+    {
+        $a = new Expressions(null, ['flag' => [1, null]]);
+        $this->assert_equals('(flag IN(?) OR flag IS NULL)', $a->to_s());
+        $this->assert_equals([[1]], $a->values());
+    }
+
+    public function test_hash_array_of_single_null_renders_is_null()
+    {
+        $a = new Expressions(null, ['flag' => [null]]);
+        $this->assert_equals('flag IS NULL', $a->to_s());
+        $this->assert_equals([], $a->values());
+    }
+
+    // An all-null list collapses to a single IS NULL in one pass — no
+    // recursion, no bind values, and no fallthrough into the empty-array 1=0
+    // branch (the original array was not empty).
+    public function test_hash_array_of_all_nulls_collapses_to_single_is_null()
+    {
+        $a = new Expressions(null, ['flag' => [null, null, null]]);
+        $this->assert_equals('flag IS NULL', $a->to_s());
+        $this->assert_equals([], $a->values());
+    }
+
+    // The OR must be parenthesized so it composes with the glue: without the
+    // wrap, 'a=? AND flag IN(?) OR flag IS NULL' would change the query shape.
+    public function test_hash_array_containing_null_is_parenthesized_against_glue()
+    {
+        $a = new Expressions(null, ['a' => 1, 'flag' => [1, null]]);
+        $this->assert_equals('a=? AND (flag IN(?) OR flag IS NULL)', $a->to_s());
+        $this->assert_equals([1, [1]], $a->values());
+        $this->assert_equals('a=1 AND (flag IN(1) OR flag IS NULL)', $a->to_s(true));
+    }
+
+    // Multiple non-null values keep their multi-marker IN expansion.
+    public function test_hash_array_with_values_and_null_keeps_in_expansion()
+    {
+        $a = new Expressions(null, ['name' => ['Tito', 'Mexican', null]]);
+        $this->assert_equals('(name IN(?,?) OR name IS NULL)', $a->to_s());
+        $this->assert_equals([['Tito', 'Mexican']], $a->values());
+    }
+
+    // Repeated nulls mixed with values collapse into the single IS NULL: the
+    // one-pass partition only remembers *whether* a null was seen, so the
+    // null count adds nothing to the rendered SQL or the bind values.
+    public function test_hash_array_with_value_and_repeated_nulls_collapses_to_single_is_null()
+    {
+        $a = new Expressions(null, ['flag' => [1, null, null]]);
+        $this->assert_equals('(flag IN(?) OR flag IS NULL)', $a->to_s());
+        $this->assert_equals([[1]], $a->values());
+    }
+
+    // ... and the position of the nulls in the array is irrelevant: any
+    // ordering of the same elements renders the exact same SQL and binds.
+    public function test_hash_array_null_positions_are_irrelevant()
+    {
+        $a = new Expressions(null, ['flag' => [1, null, null]]);
+        $b = new Expressions(null, ['flag' => [null, 1, null]]);
+        $this->assert_equals('(flag IN(?) OR flag IS NULL)', $b->to_s());
+        $this->assert_equals([[1]], $b->values());
+        $this->assert_equals($a->to_s(), $b->to_s());
+        $this->assert_equals($a->values(), $b->values());
+    }
+
+    // The empty array stays on the always-false path — only a non-empty array
+    // containing null earns the IS NULL treatment.
+    public function test_hash_empty_array_still_renders_always_false()
+    {
+        $a = new Expressions(null, ['flag' => []]);
+        $this->assert_equals('1=0', $a->to_s());
+        $this->assert_equals([], $a->values());
+    }
+
+    // Boundary: user-authored fragments are NOT rewritten. A null inside an
+    // array bound to a '?' the caller wrote expands positionally as before —
+    // the library only repartitions IN lists it builds itself.
+    public function test_substitute_array_containing_null_in_user_fragment_is_unchanged()
+    {
+        $a = new Expressions(null, 'flag IN(?)', [1, null]);
+        $this->assert_equals('flag IN(?,?)', $a->to_s());
+        $this->assert_equals('flag IN(1,NULL)', $a->to_s(true));
+    }
 }

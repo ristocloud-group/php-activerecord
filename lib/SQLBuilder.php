@@ -330,21 +330,44 @@ class SQLBuilder
                 $conditions[0] .= preg_replace(['/_and_/i','/_or_/i'], [' AND ',' OR '], $parts[$i - 1]);
             }
 
-            if ($j < $num_values) {
-                if (!is_null($values[$j])) {
-                    $bind = is_array($values[$j]) ? ' IN(?)' : '=?';
-                    $conditions[] = $values[$j];
-                } else {
-                    $bind = ' IS NULL';
-                }
-            } else {
-                $bind = ' IS NULL';
-            }
-
             // map to correct name if $map was supplied
             $name = $map && isset($map[$parts[$i]]) ? $map[$parts[$i]] : $parts[$i];
+            $quoted_name = $connection->quote_name($name);
 
-            $conditions[0] .= $connection->quote_name($name) . $bind;
+            if ($j < $num_values && is_array($values[$j]) && count($values[$j]) > 0) {
+                // A null inside an IN list never matches under SQL three-valued
+                // logic, so partition in one pass: keep the non-null values for
+                // IN(?) and turn any null into an OR'd literal IS NULL (Rails
+                // parity), parenthesized so it composes with the AND/OR glue.
+                $has_null = false;
+                $non_null = [];
+
+                foreach ($values[$j] as $element) {
+                    if (is_null($element)) {
+                        $has_null = true;
+                    } else {
+                        $non_null[] = $element;
+                    }
+                }
+
+                if (!$has_null) {
+                    $condition = "$quoted_name IN(?)";
+                    $conditions[] = $values[$j];
+                } elseif ([] === $non_null) {
+                    // all nulls collapse to a single IS NULL, no bind value
+                    $condition = "$quoted_name IS NULL";
+                } else {
+                    $condition = "($quoted_name IN(?) OR $quoted_name IS NULL)";
+                    $conditions[] = $non_null;
+                }
+            } elseif ($j < $num_values && !is_null($values[$j])) {
+                $condition = $quoted_name . (is_array($values[$j]) ? ' IN(?)' : '=?');
+                $conditions[] = $values[$j];
+            } else {
+                $condition = "$quoted_name IS NULL";
+            }
+
+            $conditions[0] .= $condition;
         }
         return $conditions;
     }

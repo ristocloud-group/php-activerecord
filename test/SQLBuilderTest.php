@@ -249,6 +249,47 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_conditions('id=? AND name IS NULL OR z=?', [1,null,''], 'id_and_name_or_z');
     }
 
+    // A null inside an array value must also match NULL rows (Rails parity):
+    // the builder partitions the list into 'col IN(?)' over the non-null
+    // values OR'd with a literal 'col IS NULL', parenthesized so it composes
+    // with surrounding AND/OR glue. Only the non-null values remain bound.
+    public function test_create_conditions_from_underscored_string_with_array_containing_null()
+    {
+        $values = [[1, null]];
+        $cond = $this->cond_from_s('id', $values);
+        $this->assert_sql_has('(id IN(?) OR id IS NULL)', array_shift($cond));
+        $this->assert_equals([[1]], array_values($cond));
+    }
+
+    // An all-null array collapses to a single IS NULL with no bind values —
+    // it must not be treated as an empty IN list.
+    public function test_create_conditions_from_underscored_string_with_all_null_array()
+    {
+        $values = [[null, null]];
+        $cond = $this->cond_from_s('id', $values);
+        $this->assert_sql_has('id IS NULL', array_shift($cond));
+        $this->assert_equals([], array_values($cond));
+    }
+
+    // Null position inside the array is irrelevant for the dynamic-finder
+    // builder too: repeated nulls around the value collapse into the same
+    // single IS NULL with only the non-null value bound.
+    public function test_create_conditions_from_underscored_string_array_null_positions_are_irrelevant()
+    {
+        $values = [[null, 1, null]];
+        $cond = $this->cond_from_s('id', $values);
+        $this->assert_sql_has('(id IN(?) OR id IS NULL)', array_shift($cond));
+        $this->assert_equals([[1]], array_values($cond));
+    }
+
+    public function test_create_conditions_from_underscored_string_array_with_null_composes_with_glue()
+    {
+        $values = [[1, null], 'Tito'];
+        $cond = $this->cond_from_s('id_and_name', $values);
+        $this->assert_sql_has('(id IN(?) OR id IS NULL) AND name=?', array_shift($cond));
+        $this->assert_equals([[1], 'Tito'], array_values($cond));
+    }
+
     public function test_create_conditions_from_underscored_string_invalid()
     {
         $this->assert_equals(null, $this->cond_from_s(''));
