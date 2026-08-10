@@ -255,4 +255,55 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         // the glue argument must not leak into the bind values
         $this->assert_equals([], $expressions->values());
     }
+
+    // build_sql_from_hash() must render an empty array as an always-false literal
+    // predicate (Rails semantics: empty IN list matches nothing) instead of
+    // 'IN(?)', which substitute() expands to the syntax error 'IN()' on
+    // MySQL/MariaDB. Like the IS NULL literal above, nothing is pushed onto the
+    // bind values.
+    public function test_build_sql_from_hash_renders_empty_array_as_always_false()
+    {
+        $expressions = new Expressions(null, ['id' => []]);
+        $this->assert_equals('1=0', $expressions->to_s());
+        $this->assert_equals([], $expressions->values());
+    }
+
+    // The always-false literal must compose with the glue and keep the remaining
+    // '?' markers positionally aligned with the returned bind values.
+    public function test_build_sql_from_hash_empty_array_keeps_positional_alignment()
+    {
+        $expressions = new Expressions(null, ['id' => [], 'name' => 'Tito']);
+        $this->assert_equals('1=0 AND name=?', $expressions->to_s());
+        $this->assert_equals(['Tito'], $expressions->values());
+        $this->assert_equals("1=0 AND name='Tito'", $expressions->to_s(true));
+    }
+
+    // In a user-authored fragment, an empty array bound to a '?' inside IN()
+    // must expand to the literal NULL — 'IN(NULL)' is valid SQL everywhere and
+    // matches nothing — instead of zero placeholders ('IN()', a syntax error on
+    // MySQL/MariaDB). The fragment cannot be rewritten to '1=0' like the hash
+    // path since the library does not parse user SQL.
+    public function test_substitute_empty_array_renders_in_null()
+    {
+        $a = new Expressions(null, 'a IN(?)', []);
+        $this->assert_equals('a IN(NULL)', $a->to_s());
+        $this->assert_equals('a IN(NULL)', $a->to_s(true));
+    }
+
+    // The NULL literal consumes its marker without emitting one, so the
+    // surrounding '?' markers stay positionally aligned with their values.
+    public function test_substitute_empty_array_keeps_positional_alignment()
+    {
+        $a = new Expressions(null, 'id = ? AND a IN(?) AND b = ?', 1, [], 2);
+        $this->assert_equals('id = ? AND a IN(NULL) AND b = ?', $a->to_s());
+        $this->assert_equals('id = 1 AND a IN(NULL) AND b = 2', $a->to_s(true));
+    }
+
+    // bind() feeds the same expansion path as constructor-supplied values.
+    public function test_bind_empty_array_renders_in_null()
+    {
+        $a = new Expressions(null, 'a IN(?)');
+        $a->bind(1, []);
+        $this->assert_equals('a IN(NULL)', $a->to_s());
+    }
 }

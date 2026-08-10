@@ -191,8 +191,16 @@ class Expressions
             }
 
             if (is_array($value)) {
-                $sql .= "$g$name IN(?)";
-                $values[] = $value;
+                if (0 === count($value)) {
+                    // An empty IN list can match nothing: emit an always-false
+                    // literal (empty 'IN()' is a syntax error on MySQL/MariaDB)
+                    // and, like IS NULL below, push no bind value so positional
+                    // alignment with the remaining '?' markers is preserved.
+                    $sql .= "{$g}1=0";
+                } else {
+                    $sql .= "$g$name IN(?)";
+                    $values[] = $value;
+                }
             } elseif (is_null($value)) {
                 $sql .= "$g$name IS NULL";
             } else {
@@ -219,6 +227,16 @@ class Expressions
         $value = $values[$parameter_index];
 
         if (is_array($value)) {
+            if (0 === count($value)) {
+                // An empty array would expand to zero placeholders — 'IN()',
+                // a syntax error on MySQL/MariaDB. Expand to the literal NULL
+                // instead: 'IN(NULL)' is valid SQL everywhere and matches
+                // nothing. No marker is emitted and an empty array flattens
+                // to zero bind values, so positional alignment with the
+                // remaining '?' markers is preserved.
+                return 'NULL';
+            }
+
             if ($substitute) {
                 $ret = '';
 
