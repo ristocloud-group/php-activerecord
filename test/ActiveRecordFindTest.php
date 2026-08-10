@@ -348,6 +348,31 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals('George W. Bush', $x[0]->name);
     }
 
+    // An IN list containing null must also match rows where the column IS NULL
+    // (Rails parity) — plain 'IN(?,?)' with a null bind silently excludes them
+    // under SQL three-valued logic.
+    public function test_find_with_hash_condition_array_containing_null_matches_null_rows()
+    {
+        Author::find(1)->update_attribute('parent_author_id', null);
+
+        $authors = Author::find('all', [
+            'conditions' => ['parent_author_id' => [2, null]],
+            'order' => 'author_id',
+        ]);
+
+        // author 1 has parent_author_id NULL; authors 2 and 4 have it = 2
+        $this->assert_equals([1, 2, 4], array_map(fn($author) => $author->author_id, $authors));
+    }
+
+    public function test_find_all_by_call_static_with_array_containing_null_matches_null_rows()
+    {
+        Author::find(1)->update_attribute('parent_author_id', null);
+
+        $authors = Author::find_all_by_parent_author_id([2, null], ['order' => 'author_id']);
+
+        $this->assert_equals([1, 2, 4], array_map(fn($author) => $author->author_id, $authors));
+    }
+
     public function test_find_all_by_call_static_no_results()
     {
         $x = Author::find_all_by_name('SHARKSSSSSSS');

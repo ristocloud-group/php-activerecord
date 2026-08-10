@@ -198,8 +198,32 @@ class Expressions
                     // alignment with the remaining '?' markers is preserved.
                     $sql .= "{$g}1=0";
                 } else {
-                    $sql .= "$g$name IN(?)";
-                    $values[] = $value;
+                    // A null inside an IN list never matches under SQL
+                    // three-valued logic, so partition in one pass: keep the
+                    // non-null values for IN(?) and turn any null into an OR'd
+                    // literal IS NULL (Rails parity). The OR is parenthesized
+                    // so it composes with the surrounding glue.
+                    $has_null = false;
+                    $non_null = [];
+
+                    foreach ($value as $element) {
+                        if (is_null($element)) {
+                            $has_null = true;
+                        } else {
+                            $non_null[] = $element;
+                        }
+                    }
+
+                    if (!$has_null) {
+                        $sql .= "$g$name IN(?)";
+                        $values[] = $value;
+                    } elseif ([] === $non_null) {
+                        // all nulls collapse to a single IS NULL, no bind value
+                        $sql .= "$g$name IS NULL";
+                    } else {
+                        $sql .= "$g($name IN(?) OR $name IS NULL)";
+                        $values[] = $non_null;
+                    }
                 }
             } elseif (is_null($value)) {
                 $sql .= "$g$name IS NULL";
