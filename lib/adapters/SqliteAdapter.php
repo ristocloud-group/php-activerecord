@@ -44,6 +44,10 @@ class SqliteAdapter extends Connection
      * storage classes and never matches. MySQL/Postgres coerce and are handled
      * by the base implementation — this override is SQLite-only.
      *
+     * Only a 0-indexed list of positional (`?`) params is type-bound; a
+     * non-list (named/associative `:name` params) falls back to the base
+     * execute() so PDO binds by key, preserving prior behavior.
+     *
      * Floats have no dedicated PDO param type; PARAM_STR is correct (SQLite
      * applies REAL affinity to numeric text in arithmetic contexts).
      *
@@ -51,6 +55,10 @@ class SqliteAdapter extends Connection
      */
     protected function bind_values(\PDOStatement $sth, array $values): bool
     {
+        if (!array_is_list($values)) {
+            return $sth->execute($values);
+        }
+
         foreach ($values as $i => $value) {
             $type = match (true) {
                 is_int($value)  => PDO::PARAM_INT,
