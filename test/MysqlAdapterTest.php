@@ -19,6 +19,19 @@ class MysqlAdapterTest extends AdapterTest
         $this->assert_same(null, $author_columns['some_enum']->length);
     }
 
+    public function test_tinyint1_boolean_stays_integer()
+    {
+        // MySQL is the primary adapter: tinyint(1) keeps INTEGER semantics —
+        // it must NOT be remapped to Column::BOOLEAN (GH-30 regression guard).
+        $columns = $this->conn->columns('venues');
+
+        $this->assert_equals('tinyint', $columns['is_available']->raw_type);
+        $this->assert_equals(Column::INTEGER, $columns['is_available']->type);
+        $this->assert_equals(Column::INTEGER, $columns['is_retired']->type);
+        $this->assert_same(1, $columns['is_available']->default);
+        $this->assert_same(0, $columns['is_retired']->default);
+    }
+
     public function test_set_charset()
     {
         $connection_string = ActiveRecord\Config::instance()->get_connection($this->connection_name);

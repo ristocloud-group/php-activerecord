@@ -20,6 +20,7 @@ class Column
     public const DATETIME	= 4;
     public const DATE		= 5;
     public const TIME		= 6;
+    public const BOOLEAN	= 7;
 
     /**
      * Map a type to an column type.
@@ -42,7 +43,12 @@ class Column
         'double'	=> self::DECIMAL,
         'numeric'	=> self::DECIMAL,
         'decimal'	=> self::DECIMAL,
-        'dec'		=> self::DECIMAL];
+        'dec'		=> self::DECIMAL,
+
+        // Postgres `boolean` / SQLite `boolean`/`bool` declarations. MySQL is
+        // unaffected: its BOOLEAN DDL alias introspects as tinyint(1) => INTEGER.
+        'boolean'	=> self::BOOLEAN,
+        'bool'		=> self::BOOLEAN];
 
     /**
      * The true name of this column.
@@ -121,6 +127,25 @@ class Column
             case self::STRING:	return (string) $value;
             case self::INTEGER:	return (int) $value;
             case self::DECIMAL:	return (float) $value;
+            case self::BOOLEAN:
+                // int 0/1, matching MySQL's tinyint(1) semantics (and a valid
+                // bind for a Postgres boolean). Postgres sends textual forms
+                // ('t'/'f', and 'true'/'false' for introspected defaults) —
+                // they need explicit handling: (int)'true' and (int)'false'
+                // are both 0.
+                if (is_string($value)) {
+                    $lower = strtolower(trim($value));
+
+                    if ('t' === $lower || 'true' === $lower) {
+                        return 1;
+                    }
+
+                    if ('f' === $lower || 'false' === $lower) {
+                        return 0;
+                    }
+                }
+
+                return (int) (bool) $value;
             case self::DATETIME:
             case self::DATE:
                 if (!$value) {

@@ -20,6 +20,14 @@
   the column IS NULL — `['flag' => [1, null]]` renders
   `(flag IN(?) OR flag IS NULL)`; previously NULL rows were silently excluded.
   User-authored SQL fragments are not rewritten (#98)
+* **BREAKING (behavior):** boolean columns (Postgres `boolean`, SQLite
+  `boolean`/`bool` declarations) now map to a real `Column::BOOLEAN` type whose
+  values cast to int `0`/`1` — matching MySQL's `tinyint(1)` semantics — instead
+  of falling through to `STRING`. On Postgres this fixes saving `false`
+  (previously cast to `''` and rejected with `SQLSTATE[22P02]`) and the
+  introspected `DEFAULT false` becoming the truthy string `'false'`; on
+  Postgres/SQLite hydrated boolean attributes change from strings/native bools
+  to int `0`/`1`. MySQL/MariaDB behavior is unchanged (#30)
 * **BREAKING (behavior):** eager-loading a `has_many`/`has_one` `'through'`
   relationship with multiple parents now groups related rows per parent exactly
   like lazy loading — previously every parent received the union of ALL related

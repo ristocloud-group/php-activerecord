@@ -42,6 +42,20 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_equals(3, $this->conn->query_column_info("user_newsletters")->rowCount());
     }
 
+    public function test_boolean_column_introspection()
+    {
+        $columns = $this->conn->columns('venues');
+
+        $this->assert_equals('boolean', $columns['is_available']->raw_type);
+        $this->assert_equals(Column::BOOLEAN, $columns['is_available']->type);
+        $this->assert_equals(Column::BOOLEAN, $columns['is_retired']->type);
+
+        // pg_get_expr() yields the textual 'true'/'false' — they must cast to
+        // int 1/0, not survive as (truthy) strings (GH-30)
+        $this->assert_same(1, $columns['is_available']->default);
+        $this->assert_same(0, $columns['is_retired']->default);
+    }
+
     public function test_max_bind_params_default()
     {
         $this->assert_equals(65535, $this->conn::$MAX_BIND_PARAMS);

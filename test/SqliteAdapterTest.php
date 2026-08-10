@@ -1,5 +1,7 @@
 <?php
 
+use ActiveRecord\Column;
+
 require_once __DIR__ . '/../lib/adapters/SqliteAdapter.php';
 
 class SqliteAdapterTest extends AdapterTest
@@ -54,6 +56,20 @@ class SqliteAdapterTest extends AdapterTest
         // defined using int: id INT NOT NULL PRIMARY KEY
         $columns = $this->conn->columns('hosts');
         $this->assert_true($columns['id']->auto_increment);
+    }
+
+    public function test_boolean_column_introspection()
+    {
+        $columns = $this->conn->columns('venues');
+
+        $this->assert_equals('boolean', $columns['is_available']->raw_type);
+        $this->assert_equals(Column::BOOLEAN, $columns['is_available']->type);
+        $this->assert_equals(Column::BOOLEAN, $columns['is_retired']->type);
+
+        // pragma table_info reports the literal default expression text
+        // ('true'/'false') — it must cast to int 1/0 (GH-30)
+        $this->assert_same(1, $columns['is_available']->default);
+        $this->assert_same(0, $columns['is_retired']->default);
     }
 
     public function test_datetime_to_string()

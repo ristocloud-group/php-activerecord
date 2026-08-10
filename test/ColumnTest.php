@@ -61,6 +61,12 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_mapped_type(Column::DECIMAL, 'dec');
     }
 
+    public function test_map_raw_type_booleans()
+    {
+        $this->assert_mapped_type(Column::BOOLEAN, 'boolean');
+        $this->assert_mapped_type(Column::BOOLEAN, 'bool');
+    }
+
     public function test_map_raw_type_strings()
     {
         $this->assert_mapped_type(Column::STRING, 'string');
@@ -92,6 +98,26 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_cast(Column::STRING, 'bubble tea', 'bubble tea');
     }
 
+    public function test_cast_boolean()
+    {
+        // PHP bools and numeric forms
+        $this->assert_cast(Column::BOOLEAN, 1, true);
+        $this->assert_cast(Column::BOOLEAN, 0, false);
+        $this->assert_cast(Column::BOOLEAN, 1, 1);
+        $this->assert_cast(Column::BOOLEAN, 0, 0);
+        $this->assert_cast(Column::BOOLEAN, 1, '1');
+        $this->assert_cast(Column::BOOLEAN, 0, '0');
+
+        // Postgres textual forms (introspected defaults arrive as text;
+        // note (int)'false' and (int)'true' are both 0 in PHP)
+        $this->assert_cast(Column::BOOLEAN, 1, 't');
+        $this->assert_cast(Column::BOOLEAN, 0, 'f');
+        $this->assert_cast(Column::BOOLEAN, 1, 'true');
+        $this->assert_cast(Column::BOOLEAN, 0, 'false');
+        $this->assert_cast(Column::BOOLEAN, 1, 'TRUE');
+        $this->assert_cast(Column::BOOLEAN, 0, 'FALSE');
+    }
+
     public function test_cast_leave_null_alone()
     {
         $types = [
@@ -99,7 +125,8 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
             Column::INTEGER,
             Column::DECIMAL,
             Column::DATETIME,
-            Column::DATE];
+            Column::DATE,
+            Column::BOOLEAN];
 
         foreach ($types as $type) {
             $this->assert_cast($type, null, null);

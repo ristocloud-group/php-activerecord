@@ -424,6 +424,41 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals($datetime, $this->conn->date_to_string(date_create($datetime)));
     }
 
+    public function test_boolean_column_defaults_hydrate_as_integers()
+    {
+        // Same semantics on every adapter (MySQL tinyint(1) is the reference):
+        // DEFAULT true => int 1, DEFAULT false => int 0 — never the truthy
+        // string 'false' (GH-30).
+        $venue = new Venue();
+        $this->assert_same(1, $venue->is_available);
+        $this->assert_same(0, $venue->is_retired);
+    }
+
+    public function test_boolean_attribute_round_trip()
+    {
+        // GH-30: on Postgres, saving false used to bind the empty string and
+        // blow up with SQLSTATE[22P02]; on SQLite values hydrated as strings.
+        $venue = new Venue(['name' => 'Bool Roundtrip']);
+        $venue->is_available = false;
+        $venue->save();
+
+        $found = Venue::find($venue->id);
+        $this->assert_same(0, $found->is_available);
+
+        $found->is_available = true;
+        $found->save();
+        $this->assert_same(1, Venue::find($venue->id)->is_available);
+    }
+
+    public function test_boolean_attribute_null_stays_null()
+    {
+        $venue = new Venue(['name' => 'Bool Null']);
+        $venue->is_available = null;
+        $venue->save();
+
+        $this->assert_same(null, Venue::find($venue->id)->is_available);
+    }
+
     public function test_exists_sql_yields_integer_scalar()
     {
         // at least one author exists -> 1
