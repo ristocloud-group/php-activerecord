@@ -90,6 +90,19 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals([], $venues);
     }
 
+    // [0] is the legacy production workaround for the empty-list case (when []
+    // used to throw) and must keep returning no rows like []; it is not a
+    // sentinel — it goes through the real bound-IN path and would genuinely
+    // match a row with pk 0 if one existed.
+    public function test_find_all_hash_with_array_of_zero_behaves_like_empty_array()
+    {
+        $venues = Venue::find('all', ['conditions' => ['id' => [0]]]);
+        $this->assert_equals([], $venues);
+        // pin the real bound-IN path: a truthiness check misrouting [0] into
+        // the always-false '1=0' shortcut would fail this assertion
+        $this->assert_sql_has('IN(?)', Venue::table()->last_sql);
+    }
+
     public function test_dynamic_finder_using_alias()
     {
         $this->assert_not_null(Venue::find_by_marquee('Warner Theatre'));
