@@ -114,6 +114,33 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals([], $venues);
     }
 
+    // The empty-array condition must annihilate the result even when another
+    // condition genuinely matches a row with a NULL column. No fixture venue
+    // has a NULL column (fgetcsv loads empty CSV fields as ''), so the test
+    // creates the NULL row itself — safe, as set_up() reloads tables per test.
+    public function test_find_all_hash_empty_array_annihilates_matching_null_condition()
+    {
+        Venue::find(1)->update_attribute('name', null);
+        // control: the IS NULL condition matches on its own
+        $this->assert_true(count(Venue::find('all', ['conditions' => ['marquee' => null]])) > 0);
+        // renders 'name IS NULL AND 1=0' — the empty IN annihilates the match
+        $venues = Venue::find('all', ['conditions' => ['marquee' => null, 'id' => []]]);
+        $this->assert_equals([], $venues);
+    }
+
+    // Same guard for the fragment form: 'IN(NULL)' must annihilate a genuinely
+    // matching IS NULL predicate. (Fragments are raw SQL, so the real column
+    // name is used — attribute aliases like marquee are not mapped there.)
+    public function test_find_all_fragment_empty_array_bind_annihilates_matching_condition()
+    {
+        Venue::find(1)->update_attribute('name', null);
+        // control: the IS NULL condition matches on its own
+        $this->assert_true(count(Venue::find('all', ['conditions' => ['name IS NULL']])) > 0);
+        // renders 'name IS NULL AND id IN(NULL)' — matches nothing
+        $venues = Venue::find('all', ['conditions' => ['name IS NULL AND id IN(?)', []]]);
+        $this->assert_equals([], $venues);
+    }
+
     public function test_dynamic_finder_using_alias()
     {
         $this->assert_not_null(Venue::find_by_marquee('Warner Theatre'));
