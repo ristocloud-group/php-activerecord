@@ -490,6 +490,33 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals(2, $by_id[1]->book_review->id);
     }
 
+    public function test_gh27_eager_loading_has_many_through_groups_by_parent()
+    {
+        // Lazy loading is the reference semantics: eager `include` must give
+        // every parent exactly what the lazy association gives it.
+        $expected = [];
+        foreach (Venue::find('all', ['order' => 'id']) as $venue) {
+            $expected[$venue->id] = array_map(fn($h) => $h->id, $venue->hosts);
+        }
+
+        // Sanity-check the fixtures actually exercise the multi-parent case.
+        $this->assert_equals([1], $expected[1]);
+        $this->assert_equals([2, 3], $expected[2]);
+        $this->assert_equals([], $expected[7]);
+
+        foreach (Venue::find('all', ['order' => 'id', 'include' => 'hosts']) as $venue) {
+            $this->assert_equals($expected[$venue->id], array_map(fn($h) => $h->id, $venue->hosts));
+        }
+    }
+
+    public function test_gh27_eager_loading_has_many_through_with_multiple_parents()
+    {
+        $venues = Venue::find([1, 2], ['include' => 'hosts']);
+
+        $this->assert_equals([1], array_map(fn($h) => $h->id, $venues[0]->hosts));
+        $this->assert_equals([2, 3], array_map(fn($h) => $h->id, $venues[1]->hosts));
+    }
+
     public function test_has_many_through_with_invalid_class_name()
     {
         $this->expectException(ReflectionException::class);
