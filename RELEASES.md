@@ -1,5 +1,40 @@
 # Release Notes
 
+## v2.1.0 (TBD)
+* **BREAKING:** relationship declarations are now validated: an unknown option
+  key in `$has_many` / `$has_one` / `$belongs_to` / `$has_and_belongs_to_many`
+  (e.g. `primary_key` on `belongs_to`) throws `RelationshipException` instead
+  of being silently ignored, and malformed definitions (e.g. a missing name)
+  throw too (#24)
+* **BREAKING (behavior):** hash conditions with a `null` value render a literal
+  `IS NULL` instead of binding the null to an `IS ?` marker — identical results
+  on MySQL (emulated prepares already inlined `IS NULL` on the wire), fixes the
+  syntax error under Postgres real prepares (#26 / #93)
+* **BREAKING (behavior):** an empty array in conditions yields an empty result
+  set instead of a `DatabaseException` from invalid `IN()` SQL — the hash form
+  renders `1=0`, an empty array bound in a positional fragment expands to
+  `IN(NULL)`; note a user-written `NOT IN (?)` bound to `[]` therefore also
+  yields 0 rows (#36 / #96)
+* **BREAKING (behavior):** arrays containing `null` in library-built IN
+  conditions (hash conditions and dynamic finders) now also match rows where
+  the column IS NULL — `['flag' => [1, null]]` renders
+  `(flag IN(?) OR flag IS NULL)`; previously NULL rows were silently excluded.
+  User-authored SQL fragments are not rewritten (#98)
+* **BREAKING (behavior):** eager-loading a `has_many`/`has_one` `'through'`
+  relationship with multiple parents now groups related rows per parent exactly
+  like lazy loading — previously every parent received the union of ALL related
+  rows (silently wrong data). Eager-loaded through models now carry the
+  middle-table FK attribute used for grouping (#27 / #97)
+* Fixed a SQLite-only eager-load failure (integer condition values were
+  compared as TEXT and never matched): `SqliteAdapter` now binds parameters by
+  PHP type (#26 / #93)
+* Fixed `Expressions` leaking the glue argument into bind values when
+  constructed from an all-null hash with an explicit glue (#94 / #95)
+* The test suite runs against a selectable connection via `PHPAR_CONNECTION`;
+  CI now covers MySQL, MariaDB and SQLite (Postgres deferred — #92) (#26 / #93)
+* `Model::exists()` now uses `EXISTS` instead of `COUNT(*)` (#23)
+* Adds PHPStan/IDE stubs for the relationship-declaration option shape (#24)
+
 ## v2.0.0 (TBD)
 * **BREAKING:** drops support for PHP < 8.3; the library now requires PHP ^8.3 and runs on 8.5
 * **BREAKING:** upgrades psr/log to ^3.0
