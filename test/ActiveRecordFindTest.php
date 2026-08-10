@@ -103,6 +103,17 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_sql_has('IN(?)', Venue::table()->last_sql);
     }
 
+    // The fragment (non-hash) conditions form with an empty array bind must
+    // also yield zero rows instead of the 'IN()' syntax error: the empty
+    // array expands to the literal NULL ('IN(NULL)' matches nothing). The
+    // 'id = ?' bound to null renders 'id = NULL' — pre-existing fragment
+    // semantics that never match — so the whole query returns no rows.
+    public function test_find_all_fragment_with_empty_array_bind_returns_no_rows()
+    {
+        $venues = Venue::find('all', ['conditions' => ['id = ? AND id IN(?)', null, []]]);
+        $this->assert_equals([], $venues);
+    }
+
     public function test_dynamic_finder_using_alias()
     {
         $this->assert_not_null(Venue::find_by_marquee('Warner Theatre'));

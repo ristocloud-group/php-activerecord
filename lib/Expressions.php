@@ -227,6 +227,16 @@ class Expressions
         $value = $values[$parameter_index];
 
         if (is_array($value)) {
+            if (0 === count($value)) {
+                // An empty array would expand to zero placeholders — 'IN()',
+                // a syntax error on MySQL/MariaDB. Expand to the literal NULL
+                // instead: 'IN(NULL)' is valid SQL everywhere and matches
+                // nothing. No marker is emitted and an empty array flattens
+                // to zero bind values, so positional alignment with the
+                // remaining '?' markers is preserved.
+                return 'NULL';
+            }
+
             if ($substitute) {
                 $ret = '';
 
