@@ -67,4 +67,23 @@ ActiveRecord\Config::initialize(function (Config $cfg) {
     $GLOBALS['show_warnings_done'] = true;
 });
 
+// Make the adapter under test explicit in the run output and the query log, so
+// it is visually verifiable which connection — and therefore which adapter
+// class — the behavioral suite is actually exercising (guards against silently
+// running every test on MySQL). Derived from the default connection string
+// without opening a connection, so DB-less unit tests still run offline.
+if (!isset($GLOBALS['adapter_banner_done'])) {
+    $default_connection = Config::instance()->get_default_connection();
+    $protocol = (string) parse_url(Config::instance()->get_default_connection_string(), PHP_URL_SCHEME);
+    $adapter_class = 'ActiveRecord\\' . ucwords($protocol) . 'Adapter';
+    $banner = sprintf('php-activerecord test suite → connection "%s" (%s → %s)', $default_connection, $protocol, $adapter_class);
+
+    echo ">>> {$banner}\n";
+    if ($logger = Config::instance()->get_logger()) {
+        $logger->info($banner);
+    }
+
+    $GLOBALS['adapter_banner_done'] = true;
+}
+
 error_reporting(E_ALL);
