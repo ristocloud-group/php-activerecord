@@ -271,6 +271,17 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals([], array_values($cond));
     }
 
+    // Null position inside the array is irrelevant for the dynamic-finder
+    // builder too: repeated nulls around the value collapse into the same
+    // single IS NULL with only the non-null value bound.
+    public function test_create_conditions_from_underscored_string_array_null_positions_are_irrelevant()
+    {
+        $values = [[null, 1, null]];
+        $cond = $this->cond_from_s('id', $values);
+        $this->assert_sql_has('(id IN(?) OR id IS NULL)', array_shift($cond));
+        $this->assert_equals([[1]], array_values($cond));
+    }
+
     public function test_create_conditions_from_underscored_string_array_with_null_composes_with_glue()
     {
         $values = [[1, null], 'Tito'];

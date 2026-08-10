@@ -354,6 +354,28 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals([['Tito', 'Mexican']], $a->values());
     }
 
+    // Repeated nulls mixed with values collapse into the single IS NULL: the
+    // one-pass partition only remembers *whether* a null was seen, so the
+    // null count adds nothing to the rendered SQL or the bind values.
+    public function test_hash_array_with_value_and_repeated_nulls_collapses_to_single_is_null()
+    {
+        $a = new Expressions(null, ['flag' => [1, null, null]]);
+        $this->assert_equals('(flag IN(?) OR flag IS NULL)', $a->to_s());
+        $this->assert_equals([[1]], $a->values());
+    }
+
+    // ... and the position of the nulls in the array is irrelevant: any
+    // ordering of the same elements renders the exact same SQL and binds.
+    public function test_hash_array_null_positions_are_irrelevant()
+    {
+        $a = new Expressions(null, ['flag' => [1, null, null]]);
+        $b = new Expressions(null, ['flag' => [null, 1, null]]);
+        $this->assert_equals('(flag IN(?) OR flag IS NULL)', $b->to_s());
+        $this->assert_equals([[1]], $b->values());
+        $this->assert_equals($a->to_s(), $b->to_s());
+        $this->assert_equals($a->values(), $b->values());
+    }
+
     // The empty array stays on the always-false path — only a non-empty array
     // containing null earns the IS NULL treatment.
     public function test_hash_empty_array_still_renders_always_false()
