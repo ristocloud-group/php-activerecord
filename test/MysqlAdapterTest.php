@@ -19,6 +19,36 @@ class MysqlAdapterTest extends AdapterTest
         $this->assert_same(null, $author_columns['some_enum']->length);
     }
 
+    public function test_tinyint1_maps_to_boolean_by_convention()
+    {
+        // Rails-style convention: tinyint(1) — MySQL's own BOOLEAN DDL alias —
+        // is a boolean column; its values and defaults are native PHP bools
+        // (GH-30).
+        $columns = $this->conn->columns('venues');
+
+        $this->assert_equals('tinyint', $columns['is_available']->raw_type);
+        $this->assert_equals(Column::BOOLEAN, $columns['is_available']->type);
+        $this->assert_equals(Column::BOOLEAN, $columns['is_retired']->type);
+        $this->assert_same(true, $columns['is_available']->default);
+        $this->assert_same(false, $columns['is_retired']->default);
+    }
+
+    public function test_wider_tinyint_and_other_int_types_stay_integer()
+    {
+        // Only display width 1 means boolean: tinyint(2+) and every other int
+        // type keep INTEGER semantics (GH-30 regression guard). MySQL 8.0.19+
+        // reports no display width for tinyint(2+) ('tinyint'); MariaDB still
+        // reports 'tinyint(2)' — both must stay INTEGER.
+        $venue_columns = $this->conn->columns('venues');
+        $this->assert_equals('tinyint', $venue_columns['tier']->raw_type);
+        $this->assert_equals(Column::INTEGER, $venue_columns['tier']->type);
+        $this->assert_same(5, $venue_columns['tier']->default);
+
+        $author_columns = $this->conn->columns('authors');
+        $this->assert_equals(Column::INTEGER, $author_columns['author_id']->type);
+        $this->assert_equals(Column::INTEGER, $author_columns['parent_author_id']->type);
+    }
+
     public function test_set_charset()
     {
         $connection_string = ActiveRecord\Config::instance()->get_connection($this->connection_name);

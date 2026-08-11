@@ -424,6 +424,68 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals($datetime, $this->conn->date_to_string(date_create($datetime)));
     }
 
+    public function test_boolean_column_defaults_hydrate_as_native_bools()
+    {
+        // Same semantics on every adapter (pg/sqlite `boolean`, mysql/mariadb
+        // tinyint(1) by convention): DEFAULT true => bool true, DEFAULT false
+        // => bool false — never the truthy string 'false' or int 0/1 (GH-30).
+        $venue = new Venue();
+        $this->assert_same(true, $venue->is_available);
+        $this->assert_same(false, $venue->is_retired);
+    }
+
+    public function test_boolean_attribute_round_trip()
+    {
+        // GH-30: on Postgres, saving false used to bind the empty string and
+        // blow up with SQLSTATE[22P02]; on SQLite values hydrated as strings.
+        $venue = new Venue(['name' => 'Bool Roundtrip']);
+        $venue->is_available = false;
+        $venue->save();
+
+        $found = Venue::find($venue->id);
+        $this->assert_same(false, $found->is_available);
+
+        $found->is_available = true;
+        $found->save();
+        $this->assert_same(true, Venue::find($venue->id)->is_available);
+    }
+
+    public function test_boolean_assignment_shapes_cast_to_bool()
+    {
+        $venue = new Venue();
+
+        $venue->is_available = 't';
+        $this->assert_same(true, $venue->is_available);
+
+        $venue->is_available = 1;
+        $this->assert_same(true, $venue->is_available);
+
+        $venue->is_available = '0';
+        $this->assert_same(false, $venue->is_available);
+    }
+
+    public function test_boolean_in_hash_conditions()
+    {
+        // bools in conditions must be bindable on every adapter (Postgres
+        // rejects PDO's default stringification of false as '')
+        $venue = new Venue(['name' => 'Bool Cond']);
+        $venue->is_available = false;
+        $venue->save();
+
+        $matches = Venue::find('all', ['conditions' => ['name' => 'Bool Cond', 'is_available' => false]]);
+        $this->assert_equals(1, count($matches));
+        $this->assert_same(false, $matches[0]->is_available);
+    }
+
+    public function test_boolean_attribute_null_stays_null()
+    {
+        $venue = new Venue(['name' => 'Bool Null']);
+        $venue->is_available = null;
+        $venue->save();
+
+        $this->assert_same(null, Venue::find($venue->id)->is_available);
+    }
+
     public function test_exists_sql_yields_integer_scalar()
     {
         // at least one author exists -> 1

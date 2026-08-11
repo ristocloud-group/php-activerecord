@@ -33,6 +33,9 @@ CREATE TABLE venues (
   state char(2),
   address varchar(50),
   phone varchar(10) default NULL,
+  is_available boolean DEFAULT true,
+  is_retired boolean DEFAULT false,
+  tier tinyint(2) DEFAULT 5,
   UNIQUE(name,address)
 );
 

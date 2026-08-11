@@ -61,6 +61,12 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_mapped_type(Column::DECIMAL, 'dec');
     }
 
+    public function test_map_raw_type_booleans()
+    {
+        $this->assert_mapped_type(Column::BOOLEAN, 'boolean');
+        $this->assert_mapped_type(Column::BOOLEAN, 'bool');
+    }
+
     public function test_map_raw_type_strings()
     {
         $this->assert_mapped_type(Column::STRING, 'string');
@@ -92,6 +98,33 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_cast(Column::STRING, 'bubble tea', 'bubble tea');
     }
 
+    public function test_cast_boolean()
+    {
+        // PHP bools and numeric forms
+        $this->assert_cast(Column::BOOLEAN, true, true);
+        $this->assert_cast(Column::BOOLEAN, false, false);
+        $this->assert_cast(Column::BOOLEAN, true, 1);
+        $this->assert_cast(Column::BOOLEAN, false, 0);
+        $this->assert_cast(Column::BOOLEAN, true, '1');
+        $this->assert_cast(Column::BOOLEAN, false, '0');
+        $this->assert_cast(Column::BOOLEAN, false, '');
+
+        // Postgres textual forms (introspected defaults arrive as text) —
+        // beware (bool)'f' and (bool)'false' are TRUE in PHP, so these need
+        // explicit, case-insensitive handling
+        $this->assert_cast(Column::BOOLEAN, true, 't');
+        $this->assert_cast(Column::BOOLEAN, false, 'f');
+        $this->assert_cast(Column::BOOLEAN, true, 'true');
+        $this->assert_cast(Column::BOOLEAN, false, 'false');
+        $this->assert_cast(Column::BOOLEAN, true, 'TRUE');
+        $this->assert_cast(Column::BOOLEAN, false, 'FALSE');
+        $this->assert_cast(Column::BOOLEAN, false, ' f ');
+
+        // other truthy values fall back to (bool)
+        $this->assert_cast(Column::BOOLEAN, true, 5);
+        $this->assert_cast(Column::BOOLEAN, true, 'yes');
+    }
+
     public function test_cast_leave_null_alone()
     {
         $types = [
@@ -99,7 +132,8 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
             Column::INTEGER,
             Column::DECIMAL,
             Column::DATETIME,
-            Column::DATE];
+            Column::DATE,
+            Column::BOOLEAN];
 
         foreach ($types as $type) {
             $this->assert_cast($type, null, null);

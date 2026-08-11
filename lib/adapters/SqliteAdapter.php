@@ -51,10 +51,20 @@ class SqliteAdapter extends Connection
      * Floats have no dedicated PDO param type; PARAM_STR is correct (SQLite
      * applies REAL affinity to numeric text in arithmetic contexts).
      *
+     * Bools become ints here too (see Connection::bind_values) so boolean
+     * columns store the same 0/1 integers as the other adapters.
+     *
      * @param array<int, mixed> $values Positional bind values
      */
     protected function bind_values(\PDOStatement $sth, array $values): bool
     {
+        foreach ($values as &$v) {
+            if (is_bool($v)) {
+                $v = (int) $v;
+            }
+        }
+        unset($v);
+
         if (!array_is_list($values)) {
             return $sth->execute($values);
         }
@@ -62,7 +72,6 @@ class SqliteAdapter extends Connection
         foreach ($values as $i => $value) {
             $type = match (true) {
                 is_int($value)  => PDO::PARAM_INT,
-                is_bool($value) => PDO::PARAM_BOOL,
                 null === $value => PDO::PARAM_NULL,
                 default         => PDO::PARAM_STR,
             };

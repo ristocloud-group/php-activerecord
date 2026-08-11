@@ -20,6 +20,7 @@ class Column
     public const DATETIME	= 4;
     public const DATE		= 5;
     public const TIME		= 6;
+    public const BOOLEAN	= 7;
 
     /**
      * Map a type to an column type.
@@ -42,7 +43,13 @@ class Column
         'double'	=> self::DECIMAL,
         'numeric'	=> self::DECIMAL,
         'decimal'	=> self::DECIMAL,
-        'dec'		=> self::DECIMAL];
+        'dec'		=> self::DECIMAL,
+
+        // Postgres `boolean` / SQLite `boolean`/`bool` declarations. MySQL/
+        // MariaDB report tinyint(1) instead — MysqlAdapter maps that display
+        // width to BOOLEAN by convention (Rails parity).
+        'boolean'	=> self::BOOLEAN,
+        'bool'		=> self::BOOLEAN];
 
     /**
      * The true name of this column.
@@ -121,6 +128,21 @@ class Column
             case self::STRING:	return (string) $value;
             case self::INTEGER:	return (int) $value;
             case self::DECIMAL:	return (float) $value;
+            case self::BOOLEAN:
+                // Native PHP bool. Textual forms need explicit handling:
+                // Postgres sends 't'/'f' (and 'true'/'false' for introspected
+                // defaults), and (bool)'f' / (bool)'false' / (bool)'0' would
+                // all be TRUE under a naive cast. Bools are converted back to
+                // ints at bind time (Connection::bind_values).
+                if (is_string($value)) {
+                    return match (strtolower(trim($value))) {
+                        't', 'true', '1' => true,
+                        'f', 'false', '0', '' => false,
+                        default => (bool) $value,
+                    };
+                }
+
+                return (bool) $value;
             case self::DATETIME:
             case self::DATE:
                 if (!$value) {
