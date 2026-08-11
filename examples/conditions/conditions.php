@@ -20,7 +20,7 @@ function out(string $s): void
     echo $s . "\n";
 }
 
-/** @param array<int, Task> $tasks */
+/** @param array<int, ActiveRecord\Model> $tasks */
 function names(array $tasks): string
 {
     return $tasks === [] ? '(no rows)' : implode(', ', ActiveRecord\collect($tasks, 'name'));
