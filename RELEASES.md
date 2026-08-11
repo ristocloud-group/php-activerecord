@@ -20,14 +20,20 @@
   the column IS NULL — `['flag' => [1, null]]` renders
   `(flag IN(?) OR flag IS NULL)`; previously NULL rows were silently excluded.
   User-authored SQL fragments are not rewritten (#98)
-* **BREAKING (behavior):** boolean columns (Postgres `boolean`, SQLite
-  `boolean`/`bool` declarations) now map to a real `Column::BOOLEAN` type whose
-  values cast to int `0`/`1` — matching MySQL's `tinyint(1)` semantics — instead
-  of falling through to `STRING`. On Postgres this fixes saving `false`
-  (previously cast to `''` and rejected with `SQLSTATE[22P02]`) and the
-  introspected `DEFAULT false` becoming the truthy string `'false'`; on
-  Postgres/SQLite hydrated boolean attributes change from strings/native bools
-  to int `0`/`1`. MySQL/MariaDB behavior is unchanged (#30)
+* **BREAKING:** boolean columns cast to native PHP `true`/`false` on every
+  adapter via a new `Column::BOOLEAN` type: Postgres `boolean` and SQLite
+  `boolean`/`bool` declarations (previously untyped strings — saving `false`
+  on Postgres even crashed with `SQLSTATE[22P02]`, and an introspected
+  `DEFAULT false` became the truthy string `'false'`), and MySQL/MariaDB
+  `tinyint(1)` — exactly display width 1, the expansion of MySQL's own
+  `BOOLEAN` DDL alias — by Rails-style convention (previously int `0`/`1`;
+  wider tinyints and all other int types keep INTEGER semantics). Bools are
+  converted to `0`/`1` at bind time, so saves and boolean condition values
+  work on every adapter, and JSON serialization now emits literal
+  `true`/`false` for boolean columns. **Migration note:** a `tinyint(1)`
+  column used to store real small numbers is now boolean by convention — the
+  value `5` hydrates as `true` and writes back as `1`; migrate such columns to
+  `tinyint(2)` or wider BEFORE upgrading (#30)
 * **BREAKING (behavior):** eager-loading a `has_many`/`has_one` `'through'`
   relationship with multiple parents now groups related rows per parent exactly
   like lazy loading — previously every parent received the union of ALL related

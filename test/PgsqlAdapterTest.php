@@ -51,9 +51,9 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_equals(Column::BOOLEAN, $columns['is_retired']->type);
 
         // pg_get_expr() yields the textual 'true'/'false' — they must cast to
-        // int 1/0, not survive as (truthy) strings (GH-30)
-        $this->assert_same(1, $columns['is_available']->default);
-        $this->assert_same(0, $columns['is_retired']->default);
+        // native bools, not survive as (truthy) strings (GH-30)
+        $this->assert_same(true, $columns['is_available']->default);
+        $this->assert_same(false, $columns['is_retired']->default);
     }
 
     public function test_max_bind_params_default()

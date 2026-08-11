@@ -424,14 +424,14 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals($datetime, $this->conn->date_to_string(date_create($datetime)));
     }
 
-    public function test_boolean_column_defaults_hydrate_as_integers()
+    public function test_boolean_column_defaults_hydrate_as_native_bools()
     {
-        // Same semantics on every adapter (MySQL tinyint(1) is the reference):
-        // DEFAULT true => int 1, DEFAULT false => int 0 — never the truthy
-        // string 'false' (GH-30).
+        // Same semantics on every adapter (pg/sqlite `boolean`, mysql/mariadb
+        // tinyint(1) by convention): DEFAULT true => bool true, DEFAULT false
+        // => bool false — never the truthy string 'false' or int 0/1 (GH-30).
         $venue = new Venue();
-        $this->assert_same(1, $venue->is_available);
-        $this->assert_same(0, $venue->is_retired);
+        $this->assert_same(true, $venue->is_available);
+        $this->assert_same(false, $venue->is_retired);
     }
 
     public function test_boolean_attribute_round_trip()
@@ -443,11 +443,38 @@ abstract class AdapterTest extends DatabaseTest
         $venue->save();
 
         $found = Venue::find($venue->id);
-        $this->assert_same(0, $found->is_available);
+        $this->assert_same(false, $found->is_available);
 
         $found->is_available = true;
         $found->save();
-        $this->assert_same(1, Venue::find($venue->id)->is_available);
+        $this->assert_same(true, Venue::find($venue->id)->is_available);
+    }
+
+    public function test_boolean_assignment_shapes_cast_to_bool()
+    {
+        $venue = new Venue();
+
+        $venue->is_available = 't';
+        $this->assert_same(true, $venue->is_available);
+
+        $venue->is_available = 1;
+        $this->assert_same(true, $venue->is_available);
+
+        $venue->is_available = '0';
+        $this->assert_same(false, $venue->is_available);
+    }
+
+    public function test_boolean_in_hash_conditions()
+    {
+        // bools in conditions must be bindable on every adapter (Postgres
+        // rejects PDO's default stringification of false as '')
+        $venue = new Venue(['name' => 'Bool Cond']);
+        $venue->is_available = false;
+        $venue->save();
+
+        $matches = Venue::find('all', ['conditions' => ['name' => 'Bool Cond', 'is_available' => false]]);
+        $this->assert_equals(1, count($matches));
+        $this->assert_same(false, $matches[0]->is_available);
     }
 
     public function test_boolean_attribute_null_stays_null()

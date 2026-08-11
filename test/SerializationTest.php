@@ -106,6 +106,17 @@ class SerializationTest extends DatabaseTest
         $this->assert_equals($book->attributes(), (array) json_decode($json));
     }
 
+    public function test_to_json_boolean_columns_emit_json_booleans()
+    {
+        // GH-30: boolean columns hold native PHP bools, so JSON gets literal
+        // true/false on every adapter (previously 0/1 on MySQL, "0"/"1"
+        // strings on Postgres/SQLite)
+        $json = Venue::find(1)->to_json(['only' => ['is_available', 'is_retired']]);
+
+        $this->assert_true(str_contains($json, '"is_available":true'));
+        $this->assert_true(str_contains($json, '"is_retired":false'));
+    }
+
     public function test_to_json_include_root()
     {
         ActiveRecord\JsonSerializer::$include_root = true;

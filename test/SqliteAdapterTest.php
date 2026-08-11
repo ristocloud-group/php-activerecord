@@ -67,9 +67,9 @@ class SqliteAdapterTest extends AdapterTest
         $this->assert_equals(Column::BOOLEAN, $columns['is_retired']->type);
 
         // pragma table_info reports the literal default expression text
-        // ('true'/'false') — it must cast to int 1/0 (GH-30)
-        $this->assert_same(1, $columns['is_available']->default);
-        $this->assert_same(0, $columns['is_retired']->default);
+        // ('true'/'false') — it must cast to native bools (GH-30)
+        $this->assert_same(true, $columns['is_available']->default);
+        $this->assert_same(false, $columns['is_retired']->default);
     }
 
     public function test_datetime_to_string()

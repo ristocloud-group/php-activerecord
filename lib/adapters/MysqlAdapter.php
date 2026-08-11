@@ -73,6 +73,16 @@ class MysqlAdapter extends Connection
         }
 
         $c->map_raw_type();
+
+        // Rails-style convention: tinyint(1) — exactly display width 1, the
+        // expansion of MySQL's own BOOLEAN DDL alias — is a boolean column.
+        // Wider tinyints keep INTEGER semantics. (MySQL 8.0.19+ drops display
+        // widths from SHOW COLUMNS except for tinyint(1), which is preserved
+        // precisely because of this convention; MariaDB reports all widths.)
+        if ('tinyint' === $c->raw_type && 1 === $c->length) {
+            $c->type = Column::BOOLEAN;
+        }
+
         $c->default = $c->cast($column['default'], $this);
 
         return $c;

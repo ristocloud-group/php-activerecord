@@ -346,10 +346,22 @@ abstract class Connection
      * Default binding delegates to PDOStatement::execute(), which binds every
      * value as PDO::PARAM_STR. Adapters may override to bind by type.
      *
+     * PHP bools (boolean model attributes and condition values) are converted
+     * to ints first: PDO would stringify false to '' — rejected by Postgres
+     * boolean input and by MySQL strict mode for numeric columns — whereas
+     * '0'/'1' are valid boolean input everywhere.
+     *
      * @param array<int, mixed> $values Positional bind values
      */
     protected function bind_values(\PDOStatement $sth, array $values): bool
     {
+        foreach ($values as &$value) {
+            if (is_bool($value)) {
+                $value = (int) $value;
+            }
+        }
+        unset($value);
+
         return $sth->execute($values);
     }
 

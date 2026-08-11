@@ -45,8 +45,9 @@ class Column
         'decimal'	=> self::DECIMAL,
         'dec'		=> self::DECIMAL,
 
-        // Postgres `boolean` / SQLite `boolean`/`bool` declarations. MySQL is
-        // unaffected: its BOOLEAN DDL alias introspects as tinyint(1) => INTEGER.
+        // Postgres `boolean` / SQLite `boolean`/`bool` declarations. MySQL/
+        // MariaDB report tinyint(1) instead — MysqlAdapter maps that display
+        // width to BOOLEAN by convention (Rails parity).
         'boolean'	=> self::BOOLEAN,
         'bool'		=> self::BOOLEAN];
 
@@ -128,24 +129,24 @@ class Column
             case self::INTEGER:	return (int) $value;
             case self::DECIMAL:	return (float) $value;
             case self::BOOLEAN:
-                // int 0/1, matching MySQL's tinyint(1) semantics (and a valid
-                // bind for a Postgres boolean). Postgres sends textual forms
-                // ('t'/'f', and 'true'/'false' for introspected defaults) —
-                // they need explicit handling: (int)'true' and (int)'false'
-                // are both 0.
+                // Native PHP bool. Textual forms need explicit handling:
+                // Postgres sends 't'/'f' (and 'true'/'false' for introspected
+                // defaults), and (bool)'f' / (bool)'false' / (bool)'0' would
+                // all be TRUE under a naive cast. Bools are converted back to
+                // ints at bind time (Connection::bind_values).
                 if (is_string($value)) {
                     $lower = strtolower(trim($value));
 
-                    if ('t' === $lower || 'true' === $lower) {
-                        return 1;
+                    if ('t' === $lower || 'true' === $lower || '1' === $lower) {
+                        return true;
                     }
 
-                    if ('f' === $lower || 'false' === $lower) {
-                        return 0;
+                    if ('f' === $lower || 'false' === $lower || '0' === $lower || '' === $lower) {
+                        return false;
                     }
                 }
 
-                return (int) (bool) $value;
+                return (bool) $value;
             case self::DATETIME:
             case self::DATE:
                 if (!$value) {
