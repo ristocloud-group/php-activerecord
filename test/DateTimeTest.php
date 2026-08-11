@@ -43,6 +43,30 @@ class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_dirtifies('setTimestamp', 1);
     }
 
+    public function test_should_flag_the_attribute_dirty_on_in_place_mutators()
+    {
+        $this->assert_dirtifies('modify', '+1 day');
+        $this->assert_dirtifies('add', new DateInterval('PT1S'));
+        $this->assert_dirtifies('sub', new DateInterval('PT1S'));
+        $this->assert_dirtifies('setTimezone', new DateTimeZone('Pacific/Auckland'));
+    }
+
+    public function test_modify_failure_does_not_flag_dirty()
+    {
+        $model = new Author();
+        $datetime = new DateTime();
+        $datetime->attribute_of($model, 'some_date');
+
+        try {
+            $datetime->modify('this is not a valid modifier');
+            $this->fail('Expected DateMalformedStringException to be thrown');
+        } catch (DateMalformedStringException $e) {
+            // PHP >= 8.3: modify() throws instead of returning false
+        }
+
+        $this->assert_null($model->dirty_attributes());
+    }
+
     public function test_set_iso_date()
     {
         $a = new \DateTime();

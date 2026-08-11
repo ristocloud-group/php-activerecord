@@ -344,6 +344,27 @@ class ActiveRecordWriteTest extends DatabaseTest
         $this->assert_has_keys('some_date', $author->dirty_attributes());
     }
 
+    public function test_modify_flags_dirty()
+    {
+        $author = Author::create(['name' => 'issue29']);
+        $author = Author::find($author->id);
+        $author->created_at->modify('+1 day');
+        $this->assert_has_keys('created_at', $author->dirty_attributes());
+    }
+
+    public function test_modify_is_persisted_on_save()
+    {
+        $author = Author::create(['name' => 'issue29']);
+        $author = Author::find($author->id);
+
+        $author->created_at->modify('+1 day');
+        $expected = $author->created_at->format('Y-m-d H:i:s');
+        $this->assert_true($author->save());
+
+        $reloaded = Author::find($author->id);
+        $this->assert_equals($expected, $reloaded->created_at->format('Y-m-d H:i:s'));
+    }
+
     public function test_delete_all_with_conditions_as_string()
     {
         $num_affected = Author::delete_all(['conditions' => 'parent_author_id = 2']);

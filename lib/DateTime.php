@@ -162,4 +162,43 @@ class DateTime extends \DateTime
         $this->flag_dirty();
         return parent::setTimestamp($timestamp);
     }
+
+    /**
+     * The in-place mutators below flag the attribute dirty only after the
+     * parent call succeeds: on PHP >= 8.3 modify() throws
+     * DateMalformedStringException (it no longer returns false) and sub()
+     * throws DateInvalidOperationException on failure, in which case the
+     * value was not changed and must not be marked dirty.
+     */
+    public function modify(string $modifier): DateTime
+    {
+        $result = parent::modify($modifier);
+        $this->flag_dirty();
+
+        return $result;
+    }
+
+    public function add(\DateInterval $interval): DateTime
+    {
+        $result = parent::add($interval);
+        $this->flag_dirty();
+
+        return $result;
+    }
+
+    public function sub(\DateInterval $interval): DateTime
+    {
+        $result = parent::sub($interval);
+        $this->flag_dirty();
+
+        return $result;
+    }
+
+    public function setTimezone(\DateTimeZone $timezone): DateTime
+    {
+        $result = parent::setTimezone($timezone);
+        $this->flag_dirty();
+
+        return $result;
+    }
 }

@@ -44,6 +44,11 @@
   PHP type (#26 / #93)
 * Fixed `Expressions` leaking the glue argument into bind values when
   constructed from an all-null hash with an explicit glue (#94 / #95)
+* Fixed `ActiveRecord\DateTime::modify()`/`add()`/`sub()`/`setTimezone()` not
+  flagging the attribute dirty: mutating a datetime attribute in place with
+  these methods then calling `save()` previously returned `true` without
+  issuing an UPDATE (silent data loss); the mutation is now persisted —
+  visible behavior change for code that relied on the silent no-op (#29)
 * The test suite runs against a selectable connection via `PHPAR_CONNECTION`;
   CI now covers MySQL, MariaDB and SQLite (Postgres deferred — #92) (#26 / #93)
 * `Model::exists()` now uses `EXISTS` instead of `COUNT(*)` (#23)
