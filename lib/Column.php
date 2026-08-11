@@ -135,15 +135,11 @@ class Column
                 // all be TRUE under a naive cast. Bools are converted back to
                 // ints at bind time (Connection::bind_values).
                 if (is_string($value)) {
-                    $lower = strtolower(trim($value));
-
-                    if ('t' === $lower || 'true' === $lower || '1' === $lower) {
-                        return true;
-                    }
-
-                    if ('f' === $lower || 'false' === $lower || '0' === $lower || '' === $lower) {
-                        return false;
-                    }
+                    return match (strtolower(trim($value))) {
+                        't', 'true', '1' => true,
+                        'f', 'false', '0', '' => false,
+                        default => (bool) $value,
+                    };
                 }
 
                 return (bool) $value;
