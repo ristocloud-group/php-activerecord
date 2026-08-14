@@ -56,22 +56,16 @@ abstract class AdapterTest extends DatabaseTest
     {
         $this->expectException(ActiveRecord\DatabaseException::class);
 
-        if (!$GLOBALS['slow_tests']) {
-            throw new ActiveRecord\DatabaseException("");
-        }
-
         ActiveRecord\Connection::instance("{$this->conn->protocol}://user:pass");
     }
 
     public function test_connection_failed_invalid_host()
     {
+        // .invalid is reserved (RFC 2606): resolution fails fast and
+        // deterministically, so no slow network timeout is involved
         $this->expectException(ActiveRecord\DatabaseException::class);
 
-        if (!$GLOBALS['slow_tests']) {
-            throw new ActiveRecord\DatabaseException("");
-        }
-
-        ActiveRecord\Connection::instance("{$this->conn->protocol}://user:pass/1.1.1.1/db");
+        ActiveRecord\Connection::instance("{$this->conn->protocol}://user:pass@host-that-does-not-exist.invalid/db");
     }
 
     public function test_connection_failed()
@@ -154,11 +148,12 @@ abstract class AdapterTest extends DatabaseTest
 
     public function test_columns_sequence()
     {
+        $author_columns = $this->conn->columns('authors');
+
         if ($this->conn->supports_sequences()) {
-            $author_columns = $this->conn->columns('authors');
             $this->assert_equals('authors_author_id_seq', $author_columns['author_id']->sequence);
         } else {
-            $this->assert_true(true);
+            $this->assert_null($author_columns['author_id']->sequence);
         }
     }
 

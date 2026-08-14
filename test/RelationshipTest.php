@@ -80,7 +80,7 @@ class RelationshipTest extends DatabaseTest
     {
         $this->assert_true($employee->$association_name instanceof Position);
         $this->assert_equals('physicist', $employee->$association_name->title);
-        $this->assert_not_null($employee->id, $employee->$association_name->title);
+        $this->assert_not_null($employee->id);
     }
 
     public function test_has_many_basic()
@@ -638,7 +638,7 @@ class RelationshipTest extends DatabaseTest
     {
         $event = new Event();
         $event->venue;
-        $this->assert_sql_doesnt_has($this->conn->last_query, 'is IS NULL');
+        $this->assert_sql_doesnt_has('IS NULL', $this->conn->last_query);
     }
 
     public function test_relationship_on_table_with_underscores()
