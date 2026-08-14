@@ -236,7 +236,14 @@ abstract class AdapterTest extends DatabaseTest
     public function test_insert_id_should_return_explicitly_inserted_id()
     {
         $this->conn->query('INSERT INTO authors(author_id,name) VALUES(99,\'name\')');
-        $this->assert_true($this->conn->insert_id() > 0);
+
+        if ($this->conn->supports_sequences()) {
+            // Postgres' lastval() only reflects sequence use; an explicit pk
+            // insert never advances the sequence, so 99 is not visible here
+            $this->assert_true($this->conn->insert_id() > 0);
+        } else {
+            $this->assert_equals(99, $this->conn->insert_id());
+        }
     }
 
     public function test_insert_id()
@@ -250,6 +257,24 @@ abstract class AdapterTest extends DatabaseTest
         $x = ['name'];
         $this->conn->query('INSERT INTO authors(name) VALUES(?)', $x);
         $this->assert_true($this->conn->insert_id() > 0);
+    }
+
+    public function test_next_sequence_value()
+    {
+        if ($this->conn->supports_sequences()) {
+            $this->assert_equals("nextval('authors_author_id_seq')", $this->conn->next_sequence_value('authors_author_id_seq'));
+        } else {
+            $this->assert_null($this->conn->next_sequence_value('authors_author_id_seq'));
+        }
+    }
+
+    public function test_native_database_types_cover_the_core_types()
+    {
+        $types = $this->conn->native_database_types();
+
+        foreach (['primary_key', 'string', 'text', 'integer', 'float', 'datetime', 'timestamp', 'time', 'date', 'binary', 'boolean'] as $type) {
+            $this->assert_true(array_key_exists($type, $types), "missing native type: $type");
+        }
     }
 
     public function test_inflection()

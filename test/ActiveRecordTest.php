@@ -595,4 +595,54 @@ class ActiveRecordTest extends DatabaseTest
         $book->set_relationship_from_eager_load(null, 'author');
         $this->assert_null($book->author);
     }
+
+    public function test_serialize_unserialize_round_trip()
+    {
+        $book = Book::find(1);
+        $serialized = serialize($book);
+
+        // simulate waking up in a fresh process: the Table cache is cold and
+        // __wakeup must re-resolve it
+        ActiveRecord\Table::clear_cache();
+        $copy = unserialize($serialized);
+
+        $this->assert_true($copy instanceof Book);
+        $this->assert_equals($book->attributes(), $copy->attributes());
+        $this->assert_false($copy->is_dirty());
+        $this->assert_false($copy->is_new_record());
+
+        $copy->name = 'woken up';
+        $copy->save();
+        $this->assert_equals('woken up', Book::find(1)->name);
+    }
+
+    public function test_values_for()
+    {
+        $book = Book::find(1);
+        $this->assert_equals(
+            ['book_id' => 1, 'name' => 'Ancient Art of Main Tanking'],
+            $book->values_for(['book_id', 'name'])
+        );
+    }
+
+    public function test_values_for_pk()
+    {
+        $book = Book::find(1);
+        $this->assert_equals(['book_id' => 1], $book->values_for_pk());
+    }
+
+    public function test_pk_conditions()
+    {
+        $this->assert_equals(['book_id' => 5], Book::pk_conditions(5));
+    }
+
+    public function test_get_column_by_inflected_name()
+    {
+        $table = Author::table();
+
+        $column = $table->get_column_by_inflected_name('mixedcasefield');
+        $this->assert_equals('mixedCaseField', $column->name);
+
+        $this->assert_null($table->get_column_by_inflected_name('no_such_column'));
+    }
 };

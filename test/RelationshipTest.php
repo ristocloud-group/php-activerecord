@@ -9,6 +9,12 @@ class AuthorWithNonModelRelationship extends ActiveRecord\Model
     public static $has_many = [['books', 'class_name' => 'NotModel']];
 }
 
+class AuthorWithHabtm extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $has_and_belongs_to_many = [['books']];
+}
+
 class RelationshipTest extends DatabaseTest
 {
     protected $relationship_name;
@@ -881,5 +887,59 @@ class RelationshipTest extends DatabaseTest
     public function test_gh22_book_reviews_fixture_loads()
     {
         $this->assert_equals(3, count(BookReview::all()));
+    }
+
+    public function test_has_relationship()
+    {
+        $this->assert_true(Author::table()->has_relationship('books'));
+        $this->assert_false(Author::table()->has_relationship('nonexistent'));
+    }
+
+    public function test_has_and_belongs_to_many_is_not_wired_into_the_table()
+    {
+        // characterization: HABTM is an unimplemented stub — its constructor
+        // never sets attribute_name, so declaring it does NOT register a
+        // relationship under the declared name and the attribute stays
+        // undefined on the model
+        $this->assert_false(AuthorWithHabtm::table()->has_relationship('books'));
+
+        $this->assert_exception_message_contains('books', function () {
+            AuthorWithHabtm::find(1)->books;
+        });
+    }
+
+    public function test_has_and_belongs_to_many_eager_load_is_undeclared()
+    {
+        // characterization: because the stub never registers itself by name,
+        // eager loading fails as an undeclared relationship rather than
+        // reaching the not-implemented HABTM path
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('Relationship named books has not been declared for class: AuthorWithHabtm');
+
+        AuthorWithHabtm::find('first', ['include' => ['books']]);
+    }
+
+    public function test_has_and_belongs_to_many_lazy_load_stub_returns_null()
+    {
+        $habtm = new ActiveRecord\HasAndBelongsToMany(['books']);
+
+        $this->assert_null($habtm->attribute_name);
+        $this->assert_null($habtm->load(AuthorWithHabtm::find(1)));
+    }
+
+    public function test_has_and_belongs_to_many_eager_loading_is_not_implemented()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('has_and_belongs_to_many eager loading is not implemented');
+
+        $habtm = new ActiveRecord\HasAndBelongsToMany(['books']);
+        $habtm->load_eagerly([], [], [], AuthorWithHabtm::table());
+    }
+
+    public function test_has_and_belongs_to_many_requires_a_name()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+
+        new ActiveRecord\HasAndBelongsToMany([]);
     }
 };

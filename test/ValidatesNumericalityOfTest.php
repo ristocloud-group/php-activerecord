@@ -149,6 +149,14 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         $this->assert_invalid([1,3,4]);
     }
 
+    public function test_odd()
+    {
+        BookNumericality::$validates_numericality_of[0] = ['numeric_test', 'odd' => true];
+
+        $this->assert_valid([1, 3]);
+        $this->assert_invalid([2, 4], 'must be odd');
+    }
+
     public function test_custom_message()
     {
         BookNumericality::$validates_numericality_of = [
