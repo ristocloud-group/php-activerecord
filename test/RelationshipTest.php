@@ -1,5 +1,9 @@
 <?php
 
+// Relationship classes load lazily (require_once in lib/Table.php), but the
+// HabtmStubProbe subclass below needs its parent at parse time.
+require_once __DIR__ . '/../lib/Relationship.php';
+
 class NotModel {};
 
 class AuthorWithNonModelRelationship extends ActiveRecord\Model
@@ -13,6 +17,13 @@ class AuthorWithHabtm extends ActiveRecord\Model
 {
     public static $table_name = 'authors';
     public static $has_and_belongs_to_many = [['books']];
+}
+
+// Constructor-less subclass so the abstract-contract stubs of the
+// otherwise-unconstructable HasAndBelongsToMany stay pinned.
+class HabtmStubProbe extends ActiveRecord\HasAndBelongsToMany
+{
+    public function __construct($options = []) {}
 }
 
 class RelationshipTest extends DatabaseTest
@@ -895,51 +906,42 @@ class RelationshipTest extends DatabaseTest
         $this->assert_false(Author::table()->has_relationship('nonexistent'));
     }
 
-    public function test_has_and_belongs_to_many_is_not_wired_into_the_table()
+    public function test_has_and_belongs_to_many_declaration_fails_fast()
     {
-        // characterization: HABTM is an unimplemented stub — its constructor
-        // never sets attribute_name, so declaring it does NOT register a
-        // relationship under the declared name and the attribute stays
-        // undefined on the model
-        $this->assert_false(AuthorWithHabtm::table()->has_relationship('books'));
-
-        $this->assert_exception_message_contains('books', function () {
-            AuthorWithHabtm::find(1)->books;
-        });
-    }
-
-    public function test_has_and_belongs_to_many_eager_load_is_undeclared()
-    {
-        // characterization: because the stub never registers itself by name,
-        // eager loading fails as an undeclared relationship rather than
-        // reaching the not-implemented HABTM path
+        // declaring $has_and_belongs_to_many is refused as soon as the
+        // model's table is loaded — HABTM is not implemented
         $this->expectException(ActiveRecord\RelationshipException::class);
-        $this->expectExceptionMessage('Relationship named books has not been declared for class: AuthorWithHabtm');
+        $this->expectExceptionMessage("has_and_belongs_to_many is not implemented; use a has_many 'through' relationship instead.");
 
-        AuthorWithHabtm::find('first', ['include' => ['books']]);
+        AuthorWithHabtm::table();
     }
 
-    public function test_has_and_belongs_to_many_lazy_load_stub_returns_null()
+    public function test_has_and_belongs_to_many_fails_fast_through_finders_too()
     {
-        $habtm = new ActiveRecord\HasAndBelongsToMany(['books']);
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('has_and_belongs_to_many is not implemented');
 
-        $this->assert_null($habtm->attribute_name);
-        $this->assert_null($habtm->load(AuthorWithHabtm::find(1)));
+        AuthorWithHabtm::find(1);
     }
 
-    public function test_has_and_belongs_to_many_eager_loading_is_not_implemented()
+    public function test_has_and_belongs_to_many_direct_construction_throws()
     {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('has_and_belongs_to_many is not implemented');
+
+        new ActiveRecord\HasAndBelongsToMany(['books']);
+    }
+
+    public function test_has_and_belongs_to_many_abstract_contract_stubs()
+    {
+        // the load/load_eagerly implementations only exist to satisfy the
+        // abstract parent; pin them through a constructor-less subclass
+        $stub = new HabtmStubProbe();
+
+        $this->assert_null($stub->load(Author::find(1)));
+
         $this->expectException(ActiveRecord\RelationshipException::class);
         $this->expectExceptionMessage('has_and_belongs_to_many eager loading is not implemented');
-
-        $habtm = new ActiveRecord\HasAndBelongsToMany(['books']);
-        $habtm->load_eagerly([], [], [], AuthorWithHabtm::table());
-    }
-
-    public function test_has_and_belongs_to_many_requires_a_name()
-    {
-        $this->expectException(ActiveRecord\RelationshipException::class);
-
-        new ActiveRecord\HasAndBelongsToMany([]);
+        $stub->load_eagerly([], [], [], Author::table());
     }
 };

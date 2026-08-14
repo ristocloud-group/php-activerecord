@@ -257,6 +257,9 @@ class Model
     public static $belongs_to;
 
     /**
+     * Not implemented: declaring this throws a RelationshipException at
+     * table load. Use $has_many with the 'through' option instead.
+     *
      * @var array<int, Relationship|string>|string|null
      * @phpstan-var array<int, Relationship>|string|null
      */

@@ -610,9 +610,7 @@ class Table
      */
     private function add_relationship(AbstractRelationship $relationship)
     {
-        // attribute_name is null for the HasAndBelongsToMany stub; PHP 8.5
-        // deprecates null array offsets, so keep the pre-8.5 ''-key behavior.
-        $this->relationships[(string) $relationship->attribute_name] = $relationship;
+        $this->relationships[$relationship->attribute_name] = $relationship;
     }
 
     /**

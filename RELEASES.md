@@ -1,6 +1,13 @@
 # Release Notes
 
 ## v2.1.0 (TBD)
+* **BREAKING:** `$has_and_belongs_to_many` — never implemented (the
+  relationship was not registered under its name: attribute access threw
+  `UndefinedPropertyException`, eager `include` failed as an undeclared
+  relationship) — now fails fast: declaring it throws `RelationshipException`
+  at table load, pointing to `has_many … 'through'` as the supported way to
+  model many-to-many. Remove any dormant `$has_and_belongs_to_many`
+  declarations before upgrading (#86)
 * **BREAKING:** relationship declarations are now validated: an unknown option
   key in `$has_many` / `$has_one` / `$belongs_to` / `$has_and_belongs_to_many`
   (e.g. `primary_key` on `belongs_to`) throws `RelationshipException` instead
