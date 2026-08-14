@@ -9,10 +9,11 @@
   model many-to-many. Remove any dormant `$has_and_belongs_to_many`
   declarations before upgrading (#86)
 * **BREAKING:** relationship declarations are now validated: an unknown option
-  key in `$has_many` / `$has_one` / `$belongs_to` / `$has_and_belongs_to_many`
-  (e.g. `primary_key` on `belongs_to`) throws `RelationshipException` instead
-  of being silently ignored, and malformed definitions (e.g. a missing name)
-  throw too (#24)
+  key in `$has_many` / `$has_one` / `$belongs_to` (e.g. `primary_key` on
+  `belongs_to`) throws `RelationshipException` instead of being silently
+  ignored, and malformed definitions (e.g. a missing name) throw too (#24).
+  (`$has_and_belongs_to_many` no longer reaches option validation — it fails
+  fast at construction, see the entry above)
 * **BREAKING (behavior):** hash conditions with a `null` value render a literal
   `IS NULL` instead of binding the null to an `IS ?` marker — identical results
   on MySQL (emulated prepares already inlined `IS NULL` on the wire), fixes the
