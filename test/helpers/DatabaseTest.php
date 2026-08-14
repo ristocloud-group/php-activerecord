@@ -54,13 +54,25 @@ abstract class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
         }
     }
 
-    public function assert_exception_message_contains($contains, $closure)
+    /**
+     * Asserts that $closure throws $exception_class and that its message
+     * contains $contains. Any other exception type escapes untouched, and
+     * a closure that does not throw fails the assertion.
+     *
+     * @param string $contains
+     * @param callable $closure
+     * @param class-string<\Throwable> $exception_class
+     */
+    public function assert_exception_message_contains($contains, $closure, $exception_class = ActiveRecord\UndefinedPropertyException::class)
     {
         $message = "";
 
         try {
             $closure();
-        } catch (ActiveRecord\UndefinedPropertyException $e) {
+        } catch (Throwable $e) {
+            if (!($e instanceof $exception_class)) {
+                throw $e;
+            }
             $message = $e->getMessage();
         }
 

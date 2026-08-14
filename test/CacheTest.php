@@ -84,4 +84,14 @@ class CacheTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->cache_get();
         $this->assert_same("abcd", Cache::$adapter->read("myapp::1337"));
     }
+
+    public function test_initialize_without_scheme_throws_cache_exception()
+    {
+        try {
+            Cache::initialize('cache-url-without-scheme');
+            $this->fail('Expected ActiveRecord\CacheException to be thrown');
+        } catch (ActiveRecord\CacheException $e) {
+            $this->assert_true(strpos($e->getMessage(), 'must specify a scheme') !== false);
+        }
+    }
 }

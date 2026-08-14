@@ -453,4 +453,35 @@ class ActiveRecordWriteTest extends DatabaseTest
         $this->assert_equals(1, $num_affected);
         $this->assert_true(strpos(Author::table()->last_sql, 'ORDER BY name asc LIMIT 1') !== false);
     }
+
+    public function test_reset_dirty()
+    {
+        $book = Book::find(1);
+        $book->name = 'dirty name';
+        $this->assert_equals(['name'], array_keys($book->dirty_attributes()));
+
+        $book->reset_dirty();
+        $this->assert_null($book->dirty_attributes());
+    }
+
+    public function test_set_timestamps_touches_updated_at_on_persisted_records()
+    {
+        $author = Author::find(1);
+        $this->assert_null($author->updated_at);
+
+        $author->set_timestamps();
+
+        $this->assert_not_null($author->updated_at);
+        // not a new record: created_at must be left alone
+        $this->assert_null($author->created_at);
+    }
+
+    public function test_set_timestamps_sets_both_timestamps_on_new_records()
+    {
+        $author = new Author();
+        $author->set_timestamps();
+
+        $this->assert_not_null($author->created_at);
+        $this->assert_not_null($author->updated_at);
+    }
 };

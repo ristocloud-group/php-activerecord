@@ -1,5 +1,9 @@
 <?php
 
+// Relationship classes load lazily (require_once in lib/Table.php), but the
+// HabtmStubProbe subclass below needs its parent at parse time.
+require_once __DIR__ . '/../lib/Relationship.php';
+
 class NotModel {};
 
 class AuthorWithNonModelRelationship extends ActiveRecord\Model
@@ -7,6 +11,19 @@ class AuthorWithNonModelRelationship extends ActiveRecord\Model
     public static $pk = 'id';
     public static $table_name = 'authors';
     public static $has_many = [['books', 'class_name' => 'NotModel']];
+}
+
+class AuthorWithHabtm extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $has_and_belongs_to_many = [['books']];
+}
+
+// Constructor-less subclass so the abstract-contract stubs of the
+// otherwise-unconstructable HasAndBelongsToMany stay pinned.
+class HabtmStubProbe extends ActiveRecord\HasAndBelongsToMany
+{
+    public function __construct($options = []) {}
 }
 
 class RelationshipTest extends DatabaseTest
@@ -881,5 +898,50 @@ class RelationshipTest extends DatabaseTest
     public function test_gh22_book_reviews_fixture_loads()
     {
         $this->assert_equals(3, count(BookReview::all()));
+    }
+
+    public function test_has_relationship()
+    {
+        $this->assert_true(Author::table()->has_relationship('books'));
+        $this->assert_false(Author::table()->has_relationship('nonexistent'));
+    }
+
+    public function test_has_and_belongs_to_many_declaration_fails_fast()
+    {
+        // declaring $has_and_belongs_to_many is refused as soon as the
+        // model's table is loaded — HABTM is not implemented
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage("has_and_belongs_to_many is not implemented; use a has_many 'through' relationship instead.");
+
+        AuthorWithHabtm::table();
+    }
+
+    public function test_has_and_belongs_to_many_fails_fast_through_finders_too()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('has_and_belongs_to_many is not implemented');
+
+        AuthorWithHabtm::find(1);
+    }
+
+    public function test_has_and_belongs_to_many_direct_construction_throws()
+    {
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('has_and_belongs_to_many is not implemented');
+
+        new ActiveRecord\HasAndBelongsToMany(['books']);
+    }
+
+    public function test_has_and_belongs_to_many_abstract_contract_stubs()
+    {
+        // the load/load_eagerly implementations only exist to satisfy the
+        // abstract parent; pin them through a constructor-less subclass
+        $stub = new HabtmStubProbe();
+
+        $this->assert_null($stub->load(Author::find(1)));
+
+        $this->expectException(ActiveRecord\RelationshipException::class);
+        $this->expectExceptionMessage('has_and_belongs_to_many eager loading is not implemented');
+        $stub->load_eagerly([], [], [], Author::table());
     }
 };

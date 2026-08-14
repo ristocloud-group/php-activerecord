@@ -871,9 +871,14 @@ class HasMany extends AbstractRelationship
 class HasOne extends HasMany {};
 
 /**
- * @todo implement me
+ * Not implemented — and deliberately loud about it: declaring
+ * $has_and_belongs_to_many throws a RelationshipException as soon as the
+ * model's table is loaded, instead of leaving a silently unusable
+ * association behind. Model many-to-many with a has_many 'through'
+ * relationship instead (see HasMany).
+ *
  * @package ActiveRecord
- * @see http://www.phpactiverecord.org/guides/associations
+ * @see HasMany
  */
 class HasAndBelongsToMany extends AbstractRelationship
 {
@@ -882,22 +887,12 @@ class HasAndBelongsToMany extends AbstractRelationship
      */
     public function __construct($options = [])
     {
-        // Validate the definition (HABTM is otherwise an unimplemented stub).
-        if (!isset($options[0]) || !is_string($options[0]) || '' === $options[0]) {
-            throw new RelationshipException('Relationship definition is missing its name (expected a non-empty string at index 0).');
-        }
-
-        /* options =>
-         *   join_table - name of the join table if not in lexical order
-         *   foreign_key -
-         *   association_foreign_key - default is {assoc_class}_id
-         *   uniq - if true duplicate assoc objects will be ignored
-         *   validate
-         */
+        throw new RelationshipException("has_and_belongs_to_many is not implemented; use a has_many 'through' relationship instead.");
     }
 
     /**
-     * Unimplemented stub (see class-level @todo); always returns null.
+     * Unreachable (the constructor always throws); kept only to satisfy the
+     * abstract parent contract.
      *
      * @return null
      */
