@@ -21,3 +21,4 @@ php examples/validations/validations.php
 | [`simple/`](simple/) | The minimal model (`class Book extends Model {}`) and convention overrides (`$table_name`, `$primary_key`) |
 | [`orders/`](orders/) | A fuller app: `$validates_*`, a `before_validation_on_create` callback (applies tax), `belongs_to`/`has_many`, `has_many … through` with `select`/`conditions`, dynamic finders |
 | [`upsert/`](upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and automatically-managed timestamps |
+| [`sequences/`](sequences/) | Primary-key sequences: the Postgres `{table}_{pk}_seq` convention, explicit `static $sequence`, `supports_sequences()`, and why the declaration is harmlessly ignored on MySQL/SQLite. The Postgres half runs only when `PHPAR_PGSQL` points at a reachable server (this repo's Docker setup does) and is skipped otherwise |
