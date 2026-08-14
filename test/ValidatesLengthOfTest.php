@@ -165,6 +165,7 @@ class ValidatesLengthOfTest extends DatabaseTest
         $book->name = '123';
         try {
             $book->save();
+            $this->fail('An expected exception has not been raised.');
         } catch (ActiveRecord\ValidationsArgumentError $e) {
             $this->assert_equals('maximum value cannot use a float for length.', $e->getMessage());
         }

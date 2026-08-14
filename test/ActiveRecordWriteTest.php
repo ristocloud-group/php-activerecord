@@ -55,12 +55,15 @@ class ActiveRecordWriteTest extends DatabaseTest
 
     public function test_insert_with_no_sequence_defined()
     {
-        $this->expectException(ActiveRecord\DatabaseException::class);
-
         if (!$this->conn->supports_sequences()) {
-            throw new ActiveRecord\DatabaseException('');
+            // adapters without sequences ignore $sequence entirely: the
+            // insert must succeed through the regular auto-increment pk
+            $author = AuthorWithoutSequence::create(['name' => 'Bob!']);
+            $this->assert_true($author->author_id > 0);
+            return;
         }
 
+        $this->expectException(ActiveRecord\DatabaseException::class);
         AuthorWithoutSequence::create(['name' => 'Bob!']);
     }
 
@@ -124,7 +127,7 @@ class ActiveRecordWriteTest extends DatabaseTest
         $book->save();
 
         $this->assert_same($new_name, $book->name);
-        $this->assert_same($new_name, $book->name, Book::find(1)->name);
+        $this->assert_same($new_name, Book::find(1)->name);
     }
 
     public function test_update_should_quote_keys()
@@ -143,7 +146,7 @@ class ActiveRecordWriteTest extends DatabaseTest
         $book->update_attributes($attrs);
 
         $this->assert_same($new_name, $book->name);
-        $this->assert_same($new_name, $book->name, Book::find(1)->name);
+        $this->assert_same($new_name, Book::find(1)->name);
     }
 
     public function test_update_attributes_undefined_property()
@@ -161,7 +164,7 @@ class ActiveRecordWriteTest extends DatabaseTest
         $book->update_attribute('name', $new_name);
 
         $this->assert_same($new_name, $book->name);
-        $this->assert_same($new_name, $book->name, Book::find(1)->name);
+        $this->assert_same($new_name, Book::find(1)->name);
     }
 
     public function test_update_attribute_undefined_property()
@@ -244,10 +247,12 @@ class ActiveRecordWriteTest extends DatabaseTest
     {
         $author = new Author();
         $author->save();
-        $this->assert_not_null($author->created_at, $author->updated_at);
+        $this->assert_not_null($author->created_at);
+        $this->assert_not_null($author->updated_at);
 
         $author->reload();
-        $this->assert_not_null($author->created_at, $author->updated_at);
+        $this->assert_not_null($author->created_at);
+        $this->assert_not_null($author->updated_at);
     }
 
     public function test_timestamps_updated_at_only_set_before_update()
