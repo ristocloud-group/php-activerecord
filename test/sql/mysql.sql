@@ -120,7 +120,7 @@ CREATE TABLE stories (
 ) ENGINE=InnoDB;
 
 CREATE TABLE news_read_receipts (
-  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `user_id` INT NOT NULL,
-  `story_id` INT NOT NULL
+  `story_id` INT NOT NULL,
+  PRIMARY KEY(`user_id`, `story_id`)
 ) ENGINE=InnoDB;

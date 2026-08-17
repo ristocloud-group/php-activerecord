@@ -119,7 +119,7 @@ CREATE TABLE stories (
 );
 
 CREATE TABLE news_read_receipts (
-	id INTEGER NOT NULL PRIMARY KEY,
   user_id INTEGER NOT NULL,
-	story_id INTEGER NOT NULL
+  story_id INTEGER NOT NULL,
+  PRIMARY KEY(user_id, story_id)
 );

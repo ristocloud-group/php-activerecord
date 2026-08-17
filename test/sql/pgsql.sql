@@ -122,7 +122,7 @@ CREATE TABLE stories (
 );
 
 CREATE TABLE news_read_receipts (
-	id serial primary key,
-  user_id int not null,
-	story_id int not null
+  user_id int NOT NULL,
+  story_id int NOT NULL,
+  PRIMARY KEY(user_id, story_id)
 );
