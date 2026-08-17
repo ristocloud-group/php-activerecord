@@ -7,7 +7,7 @@ CREATE TABLE authors(
 	some_Date date,
 	some_time time,
 	some_text text,
-	some_enum enum('a','b','c'),
+	some_enum enum('a','b','c'), -- mysql-only column: enum introspection coverage (MysqlAdapterTest)
 	encrypted_password varchar(50),
 	mixedCaseField varchar(50)
 ) ENGINE=InnoDB;
@@ -120,7 +120,7 @@ CREATE TABLE stories (
 ) ENGINE=InnoDB;
 
 CREATE TABLE news_read_receipts (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `user_id` INT NOT NULL,
-	`story_id` INT NOT NULL,
-	PRIMARY KEY(`user_id`, `story_id`)
+  `story_id` INT NOT NULL
 ) ENGINE=InnoDB;

@@ -29,11 +29,11 @@ class DatabaseLoader
             $this->load_fixture_data($table);
         }
 
+        // Not every adapter has an after-fixtures script; a missing file is
+        // fine, but SQL errors in an existing one must propagate (GH-81).
         $after_fixtures = $this->db->protocol . '-after-fixtures';
-        try {
+        if (is_file(__DIR__ . "/../sql/$after_fixtures.sql")) {
             $this->exec_sql_script($after_fixtures);
-        } catch (Exception $e) {
-            // pass
         }
     }
 

@@ -206,7 +206,7 @@ abstract class AdapterTest extends DatabaseTest
 
     public function test_fetch()
     {
-        $sth = $this->conn->query('SELECT * FROM authors WHERE author_id IN(1,2,3)');
+        $sth = $this->conn->query('SELECT * FROM authors WHERE author_id IN(1,2,3) ORDER BY author_id');
         $i = 0;
         $ids = [];
 

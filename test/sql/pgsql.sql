@@ -44,7 +44,7 @@ CREATE TABLE events (
 	venue_id int NOT NULL,
 	host_id int NOT NULL,
 	title varchar(60) NOT NULL,
-	description varchar(10),
+	description varchar(50),
 	type varchar(15) default NULL
 );
 
@@ -68,7 +68,7 @@ CREATE TABLE positions (
 );
 
 CREATE TABLE "rm-bldg"(
-    "rm-id" SERIAL PRIMARY KEY,
+    "rm-id" INT NOT NULL,
     "rm-name" VARCHAR(10) NOT NULL,
     "space out" VARCHAR(1) NOT NULL
 );
@@ -81,7 +81,7 @@ CREATE TABLE awesome_people(
 
 CREATE TABLE amenities(
 	amenity_id serial primary key,
-	type varchar(40) NOT NULL
+	type varchar(40) NOT NULL DEFAULT ''
 );
 
 CREATE TABLE property(

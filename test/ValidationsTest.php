@@ -33,8 +33,11 @@ class ValidationsTest extends DatabaseTest
     {
         parent::set_up($connection_name);
 
-        BookValidations::$validates_presence_of[0] = 'name';
-        BookValidations::$validates_uniqueness_of[0] = 'name';
+        // full assignments, not [0] =: tests replace these arrays wholesale
+        // (e.g. a 3-element $validates_presence_of), and a partial reset
+        // leaks the extra entries into whatever test runs next (GH-77)
+        BookValidations::$validates_presence_of = ['name'];
+        BookValidations::$validates_uniqueness_of = ['name'];
         BookValidations::$validates_numericality_of = [];
         BookValidations::$validates_inclusion_of = [];
 

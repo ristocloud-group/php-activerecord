@@ -44,7 +44,7 @@ CREATE TABLE events (
   venue_id int NOT NULL,
   host_id int NOT NULL,
   title varchar(60) NOT NULL,
-  description varchar(10),
+  description varchar(50),
   type varchar(15) default NULL
 );
 
@@ -81,7 +81,7 @@ CREATE TABLE awesome_people(
 
 CREATE TABLE amenities(
   `amenity_id` INTEGER NOT NULL PRIMARY KEY,
-  `type` varchar(40) DEFAULT NULL
+  `type` varchar(40) NOT NULL DEFAULT ''
 );
 
 CREATE TABLE property(

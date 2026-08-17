@@ -31,9 +31,26 @@ class RelationshipTest extends DatabaseTest
     protected $relationship_name;
     protected $relationship_names = ['has_many', 'belongs_to', 'has_one'];
 
+    /** Snapshot of every model static this file mutates, restored per test (GH-77). */
+    private static $model_statics_snapshot;
+
     public function set_up($connection_name = null)
     {
         parent::set_up($connection_name);
+
+        self::$model_statics_snapshot ??= [
+            ['Event', 'belongs_to', Event::$belongs_to],
+            ['Venue', 'has_many', Venue::$has_many],
+            ['Venue', 'has_one', Venue::$has_one],
+            ['Employee', 'has_one', Employee::$has_one],
+            ['Host', 'has_many', Host::$has_many],
+            ['Author', 'has_many', Author::$has_many],
+            ['Author', 'has_one', Author::$has_one],
+            ['Author', 'belongs_to', Author::$belongs_to],
+            ['Book', 'has_many', Book::$has_many],
+            ['Book', 'has_one', Book::$has_one],
+            ['Book', 'belongs_to', Book::$belongs_to],
+        ];
 
         Event::$belongs_to = [['venue'], ['host']];
         Venue::$has_many = [['events', 'order' => 'id asc'],['hosts', 'through' => 'events', 'order' => 'hosts.id asc']];
@@ -53,6 +70,17 @@ class RelationshipTest extends DatabaseTest
                 $this->relationship_name = $match[0];
             }
         }
+    }
+
+    public function tear_down()
+    {
+        // GH-77: restore every mutated model static so filtered/reordered
+        // runs of OTHER files don't inherit this file's relationship config
+        foreach (self::$model_statics_snapshot as [$class, $static, $value]) {
+            $class::$$static = $value;
+        }
+
+        parent::tear_down();
     }
 
     protected function get_relationship($type = null)
