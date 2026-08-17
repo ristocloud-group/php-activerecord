@@ -88,11 +88,31 @@ class SqliteAdapterTest extends AdapterTest
     #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function test_connect_with_port() {}
 
-    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
-    public function test_query_column_info() {}
+    public function test_query_column_info()
+    {
+        // sqlite's pragma statements report no rowCount (the base test's
+        // assertion), so assert on the actual rows instead
+        $names = [];
+        $sth = $this->conn->query_column_info('authors');
+        while (($row = $sth->fetch())) {
+            $names[] = $row['name'];
+        }
 
-    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
-    public function test_query_table_info() {}
+        $this->assert_true(in_array('author_id', $names));
+        $this->assert_true(in_array('name', $names));
+    }
+
+    public function test_query_table_info()
+    {
+        $names = [];
+        $sth = $this->conn->query_for_tables();
+        while (($row = $sth->fetch())) {
+            $names[] = $row['name'];
+        }
+
+        // note: sqlite_master also lists indexes/triggers/views — see GH-65
+        $this->assert_true(in_array('authors', $names));
+    }
 
     #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function test_i_have_a_default_port() {}

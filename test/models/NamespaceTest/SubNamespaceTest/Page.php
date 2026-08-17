@@ -4,7 +4,7 @@ namespace NamespaceTest\SubNamespaceTest;
 
 class Page extends \ActiveRecord\Model
 {
-    public static $belong_to = [
+    public static $belongs_to = [
         ['book', 'class_name' => '\NamespaceTest\Book'],
     ];
 }

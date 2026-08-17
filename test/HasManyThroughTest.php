@@ -5,6 +5,7 @@ include 'helpers/foo.php';
 use foo\bar\biz\User;
 use foo\bar\biz\Newsletter;
 use foo\bar\biz\Story;
+use foo\bar\biz\NewsReadReceipt;
 
 class HasManyThroughTest extends DatabaseTest
 {
@@ -83,5 +84,14 @@ class HasManyThroughTest extends DatabaseTest
 
         $second_story = Story::find(2, ['include' => ['readers']]);
         $this->assertEquals([2], array_map(fn($u) => $u->id, $second_story->readers));
+    }
+
+    public function test_read_receipts_join_table_has_composite_primary_key()
+    {
+        // Deliberate schema shape on EVERY adapter (GH-79): the through
+        // relationship above must work against a composite pk, with no
+        // surrogate id — this pins the aligned shape so it can't drift back.
+        $table = ActiveRecord\Table::load(NewsReadReceipt::class);
+        $this->assert_equals(['user_id', 'story_id'], $table->pk);
     }
 }

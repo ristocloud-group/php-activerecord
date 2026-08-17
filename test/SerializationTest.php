@@ -11,6 +11,8 @@ class SerializationTest extends DatabaseTest
         parent::tear_down();
         ActiveRecord\ArraySerializer::$include_root = false;
         ActiveRecord\JsonSerializer::$include_root = false;
+        ActiveRecord\CsvSerializer::$delimiter = ',';
+        ActiveRecord\CsvSerializer::$enclosure = '"';
     }
 
     public function _a($options = [], $model = null)

@@ -21,7 +21,7 @@ class Newsletter extends \ActiveRecord\Model
 
 class UserNewsletter extends \ActiveRecord\Model
 {
-    public static $belong_to = [
+    public static $belongs_to = [
         ['user'],
         ['newsletter'],
     ];

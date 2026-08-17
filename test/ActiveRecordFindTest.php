@@ -252,17 +252,6 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_true($i > 0);
     }
 
-    public function test_fetch_all()
-    {
-        $i = 0;
-
-        foreach (Author::all() as $author) {
-            $this->assert_true($author instanceof ActiveRecord\Model);
-            $i++;
-        }
-        $this->assert_true($i > 0);
-    }
-
     public function test_count()
     {
         $this->assert_equals(1, Author::count(1));
@@ -535,13 +524,6 @@ class ActiveRecordFindTest extends DatabaseTest
 
     public function test_find_by_datetime()
     {
-        if (getenv('TRAVIS')) {
-            $this->markTestSkipped(
-                'The Travis CI environment seems to screw this up for unknonwn reasons; '
-                . 'see Github #298 (https://github.com/kla/php-activerecord/issues/298)'
-            );
-        }
-
         $now = new DateTime();
         $arnow = new ActiveRecord\DateTime();
         $arnow->setTimestamp($now->getTimestamp());
