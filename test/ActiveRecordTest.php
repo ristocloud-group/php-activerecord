@@ -364,24 +364,122 @@ class ActiveRecordTest extends DatabaseTest
         $this->assert_equals($original, Author::count());
     }
 
-    public function test_nested_transaction_rolledback()
+    public function test_transaction_rolledback_by_throwing_error()
     {
+        // GH-43: an \Error (TypeError, DivisionByZeroError, ...) must roll
+        // back like an \Exception, not leave the transaction open
         $original = Author::count();
-        $exception = null;
+        $error = null;
 
         try {
             Author::transaction(function () {
                 Author::create(["name" => "blah"]);
-                Author::transaction(function () {
-                    Author::create(["name" => "nested"]);
-                });
+                throw new TypeError("boom");
             });
-        } catch (Exception $e) {
-            $exception = $e;
+        } catch (TypeError $e) {
+            $error = $e;
         }
 
-        $this->assert_equals("There is already an active transaction", $exception->getMessage());
+        $this->assert_not_null($error);
+        $this->assert_false(Author::connection()->inTransaction());
         $this->assert_equals($original, Author::count());
+    }
+
+    public function test_nested_transaction_commits_with_outer()
+    {
+        $original = Author::count();
+
+        $ret = Author::transaction(function () {
+            Author::create(["name" => "outer"]);
+            $inner = Author::transaction(function () {
+                Author::create(["name" => "inner"]);
+            });
+            $this->assert_true($inner);
+            // the inner commit must not close the real transaction (GH-104)
+            $this->assert_true(Author::connection()->inTransaction());
+        });
+
+        $this->assert_true($ret);
+        $this->assert_false(Author::connection()->inTransaction());
+        $this->assert_equals($original + 2, Author::count());
+    }
+
+    public function test_nested_transaction_outer_rollback_discards_inner_commit()
+    {
+        $original = Author::count();
+
+        $ret = Author::transaction(function () {
+            Author::create(["name" => "outer"]);
+            Author::transaction(function () {
+                Author::create(["name" => "inner"]);
+            });
+            return false;
+        });
+
+        $this->assert_false($ret);
+        $this->assert_equals($original, Author::count());
+    }
+
+    public function test_nested_transaction_inner_rollback_keeps_outer_writes()
+    {
+        $original = Author::count();
+
+        $ret = Author::transaction(function () {
+            Author::create(["name" => "outer"]);
+            $inner = Author::transaction(function () {
+                Author::create(["name" => "inner"]);
+                return false;
+            });
+            $this->assert_false($inner);
+        });
+
+        $this->assert_true($ret);
+        $this->assert_equals($original + 1, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'inner']]));
+    }
+
+    public function test_nested_transaction_error_rolls_back_only_inner_scope()
+    {
+        // GH-43 × GH-104: an \Error thrown at depth N must roll back to the
+        // right savepoint; the outer scope keeps working and commits its own
+        $original = Author::count();
+
+        $ret = Author::transaction(function () {
+            Author::create(["name" => "outer"]);
+            try {
+                Author::transaction(function () {
+                    Author::create(["name" => "inner"]);
+                    throw new TypeError("boom");
+                });
+            } catch (TypeError) {
+            }
+            $this->assert_true(Author::connection()->inTransaction());
+            Author::create(["name" => "after-inner"]);
+        });
+
+        $this->assert_true($ret);
+        $this->assert_equals($original + 2, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'inner']]));
+    }
+
+    public function test_nested_transaction_three_levels_deep()
+    {
+        $original = Author::count();
+
+        $ret = Author::transaction(function () {
+            Author::create(["name" => "level1"]);
+            Author::transaction(function () {
+                Author::create(["name" => "level2"]);
+                Author::transaction(function () {
+                    Author::create(["name" => "level3"]);
+                    return false;
+                });
+            });
+        });
+
+        $this->assert_true($ret);
+        $this->assert_equals($original + 2, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'level3']]));
     }
 
     public function test_delegate()
