@@ -462,6 +462,63 @@ class ActiveRecordTest extends DatabaseTest
         $this->assert_equals(0, Author::count(['conditions' => ['name' => 'inner']]));
     }
 
+    public function test_transaction_rethrows_the_same_throwable_instance()
+    {
+        $thrown = new RuntimeException('original');
+        $caught = null;
+
+        try {
+            Author::transaction(function () use ($thrown) {
+                throw $thrown;
+            });
+        } catch (RuntimeException $e) {
+            $caught = $e;
+        }
+
+        $this->assert_same($thrown, $caught);
+    }
+
+    public function test_transaction_skips_rollback_when_closure_already_ended_the_transaction()
+    {
+        // the inTransaction() guard: when the closure itself closed the
+        // transaction (here an explicit commit; on MySQL an implicitly
+        // committing DDL behaves the same), the rethrow must not attempt a
+        // rollback on a connection with no active transaction
+        $original = Author::count();
+        $caught = null;
+
+        try {
+            Author::transaction(function () {
+                Author::create(["name" => "early-commit"]);
+                Author::connection()->commit();
+                throw new RuntimeException("after commit");
+            });
+        } catch (RuntimeException $e) {
+            $caught = $e;
+        }
+
+        $this->assert_equals("after commit", $caught->getMessage());
+        $this->assert_false(Author::connection()->inTransaction());
+        $this->assert_equals($original + 1, Author::count());
+    }
+
+    public function test_connection_usable_after_rolled_back_transaction()
+    {
+        $original = Author::count();
+
+        try {
+            Author::transaction(function () {
+                Author::create(["name" => "doomed"]);
+                throw new TypeError("boom");
+            });
+        } catch (TypeError) {
+        }
+
+        Author::create(["name" => "survivor"]);
+        $this->assert_equals($original + 1, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'doomed']]));
+    }
+
     public function test_nested_transaction_three_levels_deep()
     {
         $original = Author::count();
