@@ -222,22 +222,20 @@ abstract class Connection
             $info->port = $url['port'];
         }
 
-        if (strpos($connection_url, 'decode=true') !== false) {
-            if ($info->user) {
-                $info->user = urldecode($info->user);
-            }
-
-            if ($info->pass) {
-                $info->pass = urldecode($info->pass);
-            }
-        }
-
         if (isset($url['query'])) {
-            foreach (explode('/&/', $url['query']) as $pair) {
-                [$name, $value] = explode('=', $pair);
+            parse_str($url['query'], $params);
 
-                if ($name == 'charset') {
-                    $info->charset = $value;
+            if (isset($params['charset']) && is_string($params['charset']) && $params['charset'] !== '') {
+                $info->charset = $params['charset'];
+            }
+
+            if (($params['decode'] ?? null) === 'true') {
+                if ($info->user) {
+                    $info->user = urldecode($info->user);
+                }
+
+                if ($info->pass) {
+                    $info->pass = urldecode($info->pass);
                 }
             }
         }
