@@ -56,7 +56,7 @@ class Config extends Singleton
     /**
      * Contains a Logger object that must implement a log() method.
      *
-     * @var LoggerInterface
+     * @var LoggerInterface|null
      */
     private $logger;
 
@@ -185,7 +185,7 @@ class Config extends Singleton
     /**
      * Returns the logger
      *
-     * @return LoggerInterface
+     * @return LoggerInterface|null
      */
     public function get_logger()
     {

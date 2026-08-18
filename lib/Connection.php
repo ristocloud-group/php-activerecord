@@ -12,6 +12,7 @@ use PDO;
 use PDOException;
 use Closure;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
  * The base class for database connection adapters.
@@ -122,7 +123,9 @@ abstract class Connection
             /** @var Connection $connection */
             $connection = new $fqclass($info);
             $connection->protocol = $info->protocol;
-            $connection->logger = $config->get_logger();
+            // fall back to a NullLogger: query() logs unconditionally, so a
+            // consumer that never configured a logger must not fatal there
+            $connection->logger = $config->get_logger() ?? new NullLogger();
 
             if (isset($info->charset)) {
                 $connection->set_encoding($info->charset);

@@ -1254,6 +1254,28 @@ class Model
     }
 
     /**
+     * Logs a warning when mass assignment drops a guarded attribute.
+     *
+     * Dropping silently is the guard's contract (untrusted input must be
+     * filterable, not fatal); the warning only makes the drop observable.
+     */
+    private function log_guarded_attribute_drop(string $given_name, string $resolved_name, string $guard): void
+    {
+        $message = sprintf(
+            "%s: mass assignment of attribute '%s' blocked by %s",
+            static::class,
+            $resolved_name,
+            $guard
+        );
+
+        if ($given_name !== $resolved_name) {
+            $message .= sprintf(" (passed as '%s')", $given_name);
+        }
+
+        Config::instance()->get_logger()?->warning($message);
+    }
+
+    /**
      * Passing $guard_attributes as true will throw an exception if an attribute does not exist.
      *
      * @throws UndefinedPropertyException
@@ -1287,10 +1309,12 @@ class Model
                 }
 
                 if ($use_attr_accessible && !in_array($guarded_name, static::$attr_accessible)) {
+                    $this->log_guarded_attribute_drop($name, $guarded_name, 'attr_accessible');
                     continue;
                 }
 
                 if ($use_attr_protected && in_array($guarded_name, static::$attr_protected)) {
+                    $this->log_guarded_attribute_drop($name, $guarded_name, 'attr_protected');
                     continue;
                 }
 
