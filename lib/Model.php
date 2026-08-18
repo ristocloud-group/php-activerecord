@@ -1254,6 +1254,28 @@ class Model
     }
 
     /**
+     * Logs a warning when mass assignment drops a guarded attribute.
+     *
+     * Dropping silently is the guard's contract (untrusted input must be
+     * filterable, not fatal); the warning only makes the drop observable.
+     */
+    private function log_guarded_attribute_drop(string $given_name, string $resolved_name, string $guard): void
+    {
+        $message = sprintf(
+            "%s: mass assignment of attribute '%s' blocked by %s",
+            static::class,
+            $resolved_name,
+            $guard
+        );
+
+        if ($given_name !== $resolved_name) {
+            $message .= sprintf(" (passed as '%s')", $given_name);
+        }
+
+        Config::instance()->get_logger()?->warning($message);
+    }
+
+    /**
      * Passing $guard_attributes as true will throw an exception if an attribute does not exist.
      *
      * @throws UndefinedPropertyException
@@ -1278,11 +1300,21 @@ class Model
             }
 
             if ($guard_attributes) {
-                if ($use_attr_accessible && !in_array($name, static::$attr_accessible)) {
+                // The guard must check the resolved attribute name, otherwise
+                // attr_accessible/attr_protected could be bypassed through an
+                // alias_attribute or the 'id' primary-key shortcut (issue #28).
+                $guarded_name = static::$alias_attribute[$name] ?? $name;
+                if ('id' === $guarded_name && !array_key_exists('id', $this->attributes)) {
+                    $guarded_name = $this->get_primary_key(true);
+                }
+
+                if ($use_attr_accessible && !in_array($guarded_name, static::$attr_accessible)) {
+                    $this->log_guarded_attribute_drop($name, $guarded_name, 'attr_accessible');
                     continue;
                 }
 
-                if ($use_attr_protected && in_array($name, static::$attr_protected)) {
+                if ($use_attr_protected && in_array($guarded_name, static::$attr_protected)) {
+                    $this->log_guarded_attribute_drop($name, $guarded_name, 'attr_protected');
                     continue;
                 }
 

@@ -102,6 +102,40 @@ $cfg->set_connections([
 
 MariaDB uses the same `mysql://` connection scheme (and the MySQL adapter) as MySQL.
 
+### Connection URLs ###
+
+Connections are configured with URLs of the form:
+
+```
+protocol://username:password@host[:port]/dbname
+```
+
+- **Protocols:** `mysql://` (MySQL and MariaDB), `pgsql://` (PostgreSQL) and `sqlite://`. The Oracle adapter was removed in v1.8.0 — an `oci://` URL throws a `DatabaseException`.
+- **Port** is optional and defaults to the adapter's standard port (3306 for MySQL/MariaDB, 5432 for PostgreSQL).
+- **Unix sockets:** pass the socket path in place of the host: `mysql://user:pass@unix(/var/run/mysqld/mysqld.sock)/dbname`.
+
+The query string may carry two optional parameters, separated by `&` as usual:
+
+- `charset=<charset>` — character set for the connection, applied with `SET NAMES` right after connecting. Supported by MySQL/MariaDB and PostgreSQL; SQLite does not support it and throws.
+- `decode=true` — URL-decode the username and password before connecting. Use it when credentials contain characters that are reserved in URLs (`@`, `:`, `/`, …): percent-encode them and add `decode=true`.
+
+```php
+$cfg->set_connections([
+    'development' => 'mysql://username:password@localhost/database_name?charset=utf8mb4',
+    // password is "p@ss:word", percent-encoded because of decode=true
+    'production' => 'mysql://username:p%40ss%3Aword@db.example.com:3307/database_name?charset=utf8mb4&decode=true',
+]);
+```
+
+SQLite needs no credentials or database name — the URL is a path to an existing database file:
+
+```
+sqlite://file.db                            relative to the current working directory
+sqlite://../relative/path/to/file.db
+sqlite://unix(/absolute/path/to/file.db)    absolute path on Unix
+sqlite://windows(c%3A/absolute/path/to/file.db)   absolute path on Windows (drive colon percent-encoded)
+```
+
 PHP ActiveRecord will default to use your development database. For testing or production, you simply set the default
 connection according to your current environment ('test' or 'production'):
 

@@ -5,10 +5,48 @@ class ActiveRecordTest extends DatabaseTest
     /** @var array */
     protected $options;
 
+    /** @var Psr\Log\LoggerInterface|null */
+    private $original_logger;
+
     public function set_up($connection_name = null)
     {
         parent::set_up($connection_name);
         $this->options = ['conditions' => 'blah', 'order' => 'blah'];
+    }
+
+    public function tear_down()
+    {
+        if ($this->original_logger) {
+            ActiveRecord\Config::instance()->set_logger($this->original_logger);
+            $this->original_logger = null;
+        }
+        parent::tear_down();
+    }
+
+    /**
+     * Swaps a record-capturing logger into the global Config; the suite's
+     * logger is put back in tear_down(). Only Config is swapped — existing
+     * Connection objects keep the logger they grabbed at connect time.
+     *
+     * @return Psr\Log\AbstractLogger&object{records: list<array{level: string, message: string}>}
+     */
+    private function capture_log()
+    {
+        $config = ActiveRecord\Config::instance();
+        $this->original_logger = $config->get_logger();
+
+        $logger = new class extends Psr\Log\AbstractLogger {
+            /** @var list<array{level: string, message: string}> */
+            public array $records = [];
+
+            public function log($level, string|Stringable $message, array $context = []): void
+            {
+                $this->records[] = ['level' => (string) $level, 'message' => (string) $message];
+            }
+        };
+        $config->set_logger($logger);
+
+        return $logger;
     }
 
     public function test_options_is_not()
@@ -268,6 +306,112 @@ class ActiveRecordTest extends DatabaseTest
         $this->assert_null($book->book_id);
         $book->book_id = 999;
         $this->assert_equals(999, $book->book_id);
+    }
+
+    public function test_attr_protected_is_not_bypassed_by_alias()
+    {
+        $book = new BookAttrProtected(['name_alias' => 'sneaky']);
+        $this->assert_null($book->name);
+    }
+
+    public function test_attr_protected_pk_is_not_bypassed_by_id_shortcut()
+    {
+        $book = new BookAttrProtected(['id' => 999]);
+        $this->assert_null($book->book_id);
+    }
+
+    public function test_attr_protected_pk_is_not_bypassed_by_alias()
+    {
+        $book = new BookAttrProtected(['protected_pk_alias' => 999]);
+        $this->assert_null($book->book_id);
+    }
+
+    public function test_attr_protected_blocks_direct_names()
+    {
+        $book = new BookAttrProtected(['name' => 'sneaky', 'book_id' => 999]);
+        $this->assert_null($book->name);
+        $this->assert_null($book->book_id);
+    }
+
+    public function test_attr_protected_mass_assignment_drop_is_logged()
+    {
+        $log = $this->capture_log();
+        new BookAttrProtected(['name' => 'sneaky']);
+
+        $this->assert_count(1, $log->records);
+        $this->assert_equals('warning', $log->records[0]['level']);
+        $this->assert_string_contains_string('BookAttrProtected', $log->records[0]['message']);
+        $this->assert_string_contains_string("'name'", $log->records[0]['message']);
+        $this->assert_string_contains_string('attr_protected', $log->records[0]['message']);
+    }
+
+    public function test_attr_protected_mass_assignment_drop_via_alias_logs_both_names()
+    {
+        $log = $this->capture_log();
+        new BookAttrProtected(['name_alias' => 'sneaky']);
+
+        $this->assert_count(1, $log->records);
+        $this->assert_string_contains_string("'name'", $log->records[0]['message']);
+        $this->assert_string_contains_string("'name_alias'", $log->records[0]['message']);
+    }
+
+    public function test_attr_accessible_mass_assignment_drop_is_logged()
+    {
+        $log = $this->capture_log();
+        new BookAttrAccessible(['name' => 'sneaky']);
+
+        $this->assert_count(1, $log->records);
+        $this->assert_equals('warning', $log->records[0]['level']);
+        $this->assert_string_contains_string("'name'", $log->records[0]['message']);
+        $this->assert_string_contains_string('attr_accessible', $log->records[0]['message']);
+    }
+
+    public function test_allowed_mass_assignment_logs_nothing()
+    {
+        $log = $this->capture_log();
+        new BookAttrProtected(['author_id' => 1]);
+
+        $warnings = array_filter($log->records, fn($r) => $r['level'] === 'warning');
+        $this->assert_count(0, $warnings);
+    }
+
+    public function test_guarded_mass_assignment_drop_without_logger_is_silent()
+    {
+        $config = ActiveRecord\Config::instance();
+        $this->original_logger = $config->get_logger();
+
+        $logger_property = new ReflectionProperty(ActiveRecord\Config::class, 'logger');
+        $logger_property->setValue($config, null);
+
+        $book = new BookAttrProtected(['name' => 'sneaky']);
+        $this->assert_null($book->name);
+    }
+
+    public function test_attr_protected_leaves_other_attributes_and_aliases_assignable()
+    {
+        $book = new BookAttrProtected(['author_id' => 1, 'secondary_author_alias' => 2]);
+        $this->assert_equals(1, $book->author_id);
+        $this->assert_equals(2, $book->secondary_author_id);
+    }
+
+    public function test_attr_protected_still_allows_direct_assignment()
+    {
+        $book = new BookAttrProtected([]);
+        $book->name = 'not mass assignment';
+        $book->name_alias = 'not mass assignment either';
+        $this->assert_equals('not mass assignment either', $book->name);
+    }
+
+    public function test_attr_accessible_applies_to_resolved_alias()
+    {
+        $book = new BookAttrAccessible(['accessible_alias' => 1]);
+        $this->assert_equals(1, $book->author_id);
+    }
+
+    public function test_attr_accessible_blocks_id_shortcut_for_non_whitelisted_pk()
+    {
+        $book = new BookAttrAccessible(['id' => 999]);
+        $this->assert_null($book->book_id);
     }
 
     public function test_isset()

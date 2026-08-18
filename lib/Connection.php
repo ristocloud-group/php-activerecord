@@ -12,6 +12,7 @@ use PDO;
 use PDOException;
 use Closure;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
  * The base class for database connection adapters.
@@ -122,7 +123,9 @@ abstract class Connection
             /** @var Connection $connection */
             $connection = new $fqclass($info);
             $connection->protocol = $info->protocol;
-            $connection->logger = $config->get_logger();
+            // fall back to a NullLogger: query() logs unconditionally, so a
+            // consumer that never configured a logger must not fatal there
+            $connection->logger = $config->get_logger() ?? new NullLogger();
 
             if (isset($info->charset)) {
                 $connection->set_encoding($info->charset);
@@ -173,7 +176,7 @@ abstract class Connection
      * sqlite://file.db
      * sqlite://../relative/path/to/file.db
      * sqlite://unix(/absolute/path/to/file.db)
-     * sqlite://windows(c%2A/absolute/path/to/file.db)
+     * sqlite://windows(c%3A/absolute/path/to/file.db)
      * </code>
      *
      * @param string $connection_url A connection URL
@@ -222,22 +225,20 @@ abstract class Connection
             $info->port = $url['port'];
         }
 
-        if (strpos($connection_url, 'decode=true') !== false) {
-            if ($info->user) {
-                $info->user = urldecode($info->user);
-            }
-
-            if ($info->pass) {
-                $info->pass = urldecode($info->pass);
-            }
-        }
-
         if (isset($url['query'])) {
-            foreach (explode('/&/', $url['query']) as $pair) {
-                [$name, $value] = explode('=', $pair);
+            parse_str($url['query'], $params);
 
-                if ($name == 'charset') {
-                    $info->charset = $value;
+            if (isset($params['charset']) && is_string($params['charset']) && $params['charset'] !== '') {
+                $info->charset = $params['charset'];
+            }
+
+            if (($params['decode'] ?? null) === 'true') {
+                if ($info->user) {
+                    $info->user = urldecode($info->user);
+                }
+
+                if ($info->pass) {
+                    $info->pass = urldecode($info->pass);
                 }
             }
         }
