@@ -173,7 +173,7 @@ abstract class Connection
      * sqlite://file.db
      * sqlite://../relative/path/to/file.db
      * sqlite://unix(/absolute/path/to/file.db)
-     * sqlite://windows(c%2A/absolute/path/to/file.db)
+     * sqlite://windows(c%3A/absolute/path/to/file.db)
      * </code>
      *
      * @param string $connection_url A connection URL
