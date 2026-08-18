@@ -47,6 +47,11 @@ abstract class Connection
      */
     public $protocol;
     /**
+     * Current nesting depth of transaction()/commit()/rollback() calls.
+     * Depth 1 is the real PDO transaction; deeper levels are SAVEPOINTs.
+     */
+    private int $transaction_depth = 0;
+    /**
      * Database's date format
      * @var string
      */
@@ -427,39 +432,65 @@ abstract class Connection
     }
 
     /**
-     * Starts a transaction.
+     * Starts a transaction, or a SAVEPOINT when one is already active.
+     *
+     * Calls nest: the first call opens the real PDO transaction, every
+     * further call creates a savepoint, so nested scopes compose instead of
+     * clobbering the outer transaction (supported by MySQL/MariaDB,
+     * PostgreSQL and SQLite).
      *
      * @return void
      */
     public function transaction()
     {
-        if (!$this->connection->beginTransaction()) {
-            throw new DatabaseException($this);
+        if ($this->transaction_depth === 0) {
+            if (!$this->connection->beginTransaction()) {
+                throw new DatabaseException($this);
+            }
+        } else {
+            $this->query('SAVEPOINT ar_sp_' . $this->transaction_depth);
         }
+        ++$this->transaction_depth;
     }
 
     /**
-     * Commits the current transaction.
+     * Commits the current scope: releases the savepoint when nested,
+     * commits the real transaction at the outermost level.
      *
      * @return void
      */
     public function commit()
     {
+        if ($this->transaction_depth > 1) {
+            $this->query('RELEASE SAVEPOINT ar_sp_' . ($this->transaction_depth - 1));
+            --$this->transaction_depth;
+            return;
+        }
+
         if (!$this->connection->commit()) {
             throw new DatabaseException($this);
         }
+        $this->transaction_depth = 0;
     }
 
     /**
-     * Rollback a transaction.
+     * Rolls back the current scope: back to the savepoint when nested,
+     * the whole transaction at the outermost level.
      *
      * @return void
      */
     public function rollback()
     {
+        if ($this->transaction_depth > 1) {
+            $this->query('ROLLBACK TO SAVEPOINT ar_sp_' . ($this->transaction_depth - 1));
+            --$this->transaction_depth;
+            return;
+        }
+
         if (!$this->connection->rollback()) {
             throw new DatabaseException($this);
         }
+        $this->transaction_depth = 0;
     }
 
     /**

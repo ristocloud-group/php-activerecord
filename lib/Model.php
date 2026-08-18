@@ -1964,23 +1964,28 @@ class Model
      * });
      * </code>
      *
+     * Any \Throwable (an \Error such as TypeError included, not just
+     * \Exception) rolls the transaction back before being rethrown.
+     *
+     * Calls nest: a transaction() opened inside another one becomes a
+     * SAVEPOINT, so the inner scope commits or rolls back on its own while
+     * the real commit happens only at the outermost level.
+     *
      * @param Closure $closure The closure to execute. To cause a rollback have your closure return false or throw an exception.
      * @return boolean True if the transaction was committed, False if rolled back.
      */
     public static function transaction($closure)
     {
         $connection = static::connection();
+        $connection->transaction();
 
         try {
-            $connection->transaction();
-
             if ($closure() === false) {
                 $connection->rollback();
                 return false;
-            } else {
-                $connection->commit();
             }
-        } catch (\Exception $e) {
+            $connection->commit();
+        } catch (\Throwable $e) {
             if ($connection->inTransaction()) {
                 $connection->rollback();
             }

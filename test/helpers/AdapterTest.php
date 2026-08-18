@@ -519,4 +519,84 @@ abstract class AdapterTest extends DatabaseTest
         );
         $this->assert_same(0, (int) $this->conn->query_and_fetch_one($none));
     }
+
+    private function count_authors_named($name)
+    {
+        $values = [$name];
+        return (int) $this->conn->query_and_fetch_one('SELECT COUNT(*) FROM authors WHERE name = ?', $values);
+    }
+
+    private function insert_author_named($name)
+    {
+        $values = [$name];
+        $this->conn->query('INSERT INTO authors(name) VALUES(?)', $values);
+    }
+
+    public function test_transaction_commit_persists_writes()
+    {
+        $this->conn->transaction();
+        $this->insert_author_named('tx_commit');
+        $this->conn->commit();
+
+        $this->assert_false($this->conn->inTransaction());
+        $this->assert_equals(1, $this->count_authors_named('tx_commit'));
+    }
+
+    public function test_transaction_rollback_discards_writes()
+    {
+        $this->conn->transaction();
+        $this->insert_author_named('tx_rollback');
+        $this->conn->rollback();
+
+        $this->assert_false($this->conn->inTransaction());
+        $this->assert_equals(0, $this->count_authors_named('tx_rollback'));
+    }
+
+    public function test_nested_transaction_savepoints_and_state()
+    {
+        $this->assert_false($this->conn->inTransaction());
+
+        $this->conn->transaction();
+        $this->assert_true($this->conn->inTransaction());
+
+        $this->conn->transaction();
+        $this->assert_equals('SAVEPOINT ar_sp_1', $this->conn->last_query);
+        $this->assert_true($this->conn->inTransaction());
+
+        $this->conn->commit();
+        $this->assert_equals('RELEASE SAVEPOINT ar_sp_1', $this->conn->last_query);
+        // releasing the savepoint must NOT close the real transaction
+        $this->assert_true($this->conn->inTransaction());
+
+        $this->conn->commit();
+        $this->assert_false($this->conn->inTransaction());
+    }
+
+    public function test_nested_transaction_rollback_discards_only_inner_writes()
+    {
+        $this->conn->transaction();
+        $this->insert_author_named('tx_outer');
+
+        $this->conn->transaction();
+        $this->insert_author_named('tx_inner');
+        $this->conn->rollback();
+        $this->assert_equals('ROLLBACK TO SAVEPOINT ar_sp_1', $this->conn->last_query);
+
+        $this->conn->commit();
+
+        $this->assert_equals(1, $this->count_authors_named('tx_outer'));
+        $this->assert_equals(0, $this->count_authors_named('tx_inner'));
+    }
+
+    public function test_commit_without_active_transaction_throws()
+    {
+        $this->expect_exception(PDOException::class);
+        $this->conn->commit();
+    }
+
+    public function test_rollback_without_active_transaction_throws()
+    {
+        $this->expect_exception(PDOException::class);
+        $this->conn->rollback();
+    }
 }

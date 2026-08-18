@@ -47,6 +47,17 @@
   like lazy loading — previously every parent received the union of ALL related
   rows (silently wrong data). Eager-loaded through models now carry the
   middle-table FK attribute used for grouping (#27 / #97)
+* **BREAKING (behavior):** `Model::transaction()` now rolls back on any
+  `\Throwable`, not just `\Exception` — previously an `\Error` (e.g.
+  `TypeError`, `DivisionByZeroError`) escaped without commit or rollback,
+  leaving the statically-cached PDO connection inside an open transaction that
+  silently absorbed every subsequent write on that connection (#43)
+* Nested `Model::transaction()` calls now compose via SAVEPOINTs
+  (MySQL/MariaDB, Postgres and SQLite): an inner commit releases its savepoint
+  — the real commit happens only when the outermost scope commits — and an
+  inner rollback (`return false` or a throw) undoes only the inner scope's
+  writes. Previously a nested call threw `PDOException: There is already an
+  active transaction` and aborted the whole outer transaction (#104)
 * Fixed a SQLite-only eager-load failure (integer condition values were
   compared as TEXT and never matched): `SqliteAdapter` now binds parameters by
   PHP type (#26 / #93)
