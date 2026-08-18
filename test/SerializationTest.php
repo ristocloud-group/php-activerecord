@@ -82,6 +82,65 @@ class SerializationTest extends DatabaseTest
         $this->assert_has_keys('parent_author_id', $a['author']);
     }
 
+    public function test_include_of_null_belongs_to_serializes_as_null()
+    {
+        // GH-31: nullable FK -> association resolves to no record
+        $book = Book::find(1);
+        $book->author_id = null;
+
+        $a = $book->to_array(['include' => 'author']);
+
+        $this->assert_true(array_key_exists('author', $a));
+        $this->assert_null($a['author']);
+    }
+
+    public function test_to_json_include_of_null_belongs_to_serializes_as_null()
+    {
+        $book = Book::find(1);
+        $book->author_id = null;
+
+        $this->assert_true(str_contains($book->to_json(['include' => 'author']), '"author":null'));
+    }
+
+    public function test_include_of_dangling_belongs_to_serializes_as_null()
+    {
+        // GH-31: FK points at a row that does not exist
+        $book = Book::find(1);
+        $book->author_id = 999999;
+
+        $a = $book->to_array(['include' => 'author']);
+
+        $this->assert_true(array_key_exists('author', $a));
+        $this->assert_null($a['author']);
+    }
+
+    public function test_include_of_null_has_one_serializes_as_null()
+    {
+        // author 4 has no awesome_person fixture row
+        $a = Author::find(4)->to_array(['include' => 'awesome_person']);
+
+        $this->assert_true(array_key_exists('awesome_person', $a));
+        $this->assert_null($a['awesome_person']);
+    }
+
+    public function test_to_xml_include_of_null_belongs_to_does_not_fatal()
+    {
+        $book = Book::find(1);
+        $book->author_id = null;
+
+        $xml = $book->to_xml(['include' => 'author']);
+
+        $decoded = new SimpleXMLElement($xml);
+        $this->assert_equals('', (string) $decoded->author);
+    }
+
+    public function test_include_of_present_belongs_to_still_serializes()
+    {
+        $a = Book::find(1)->to_array(['include' => 'author']);
+
+        $this->assert_equals('Tito', $a['author']['name']);
+    }
+
     public function test_include_nested_with_nested_options()
     {
         $a = $this->_a(

@@ -182,10 +182,13 @@ abstract class Serialization
                 try {
                     $assoc = $this->model->$association;
 
-                    if (!is_array($assoc)) {
+                    if (null === $assoc) {
+                        // a belongs_to/has_one that resolved to no record
+                        // serializes as null (like an empty has_many is [])
+                        $this->attributes[$association] = null;
+                    } elseif (!is_array($assoc)) {
                         $serialized = new $serializer_class($assoc, $options);
                         $this->attributes[$association] = $serialized->to_a();
-                        ;
                     } else {
                         $includes = [];
 
