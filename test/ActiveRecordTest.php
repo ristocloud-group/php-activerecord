@@ -270,6 +270,58 @@ class ActiveRecordTest extends DatabaseTest
         $this->assert_equals(999, $book->book_id);
     }
 
+    public function test_attr_protected_is_not_bypassed_by_alias()
+    {
+        $book = new BookAttrProtected(['name_alias' => 'sneaky']);
+        $this->assert_null($book->name);
+    }
+
+    public function test_attr_protected_pk_is_not_bypassed_by_id_shortcut()
+    {
+        $book = new BookAttrProtected(['id' => 999]);
+        $this->assert_null($book->book_id);
+    }
+
+    public function test_attr_protected_pk_is_not_bypassed_by_alias()
+    {
+        $book = new BookAttrProtected(['protected_pk_alias' => 999]);
+        $this->assert_null($book->book_id);
+    }
+
+    public function test_attr_protected_blocks_direct_names()
+    {
+        $book = new BookAttrProtected(['name' => 'sneaky', 'book_id' => 999]);
+        $this->assert_null($book->name);
+        $this->assert_null($book->book_id);
+    }
+
+    public function test_attr_protected_leaves_other_attributes_and_aliases_assignable()
+    {
+        $book = new BookAttrProtected(['author_id' => 1, 'secondary_author_alias' => 2]);
+        $this->assert_equals(1, $book->author_id);
+        $this->assert_equals(2, $book->secondary_author_id);
+    }
+
+    public function test_attr_protected_still_allows_direct_assignment()
+    {
+        $book = new BookAttrProtected([]);
+        $book->name = 'not mass assignment';
+        $book->name_alias = 'not mass assignment either';
+        $this->assert_equals('not mass assignment either', $book->name);
+    }
+
+    public function test_attr_accessible_applies_to_resolved_alias()
+    {
+        $book = new BookAttrAccessible(['accessible_alias' => 1]);
+        $this->assert_equals(1, $book->author_id);
+    }
+
+    public function test_attr_accessible_blocks_id_shortcut_for_non_whitelisted_pk()
+    {
+        $book = new BookAttrAccessible(['id' => 999]);
+        $this->assert_null($book->book_id);
+    }
+
     public function test_isset()
     {
         $book = new Book();

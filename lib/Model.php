@@ -1278,11 +1278,19 @@ class Model
             }
 
             if ($guard_attributes) {
-                if ($use_attr_accessible && !in_array($name, static::$attr_accessible)) {
+                // The guard must check the resolved attribute name, otherwise
+                // attr_accessible/attr_protected could be bypassed through an
+                // alias_attribute or the 'id' primary-key shortcut (issue #28).
+                $guarded_name = static::$alias_attribute[$name] ?? $name;
+                if ('id' === $guarded_name && !array_key_exists('id', $this->attributes)) {
+                    $guarded_name = $this->get_primary_key(true);
+                }
+
+                if ($use_attr_accessible && !in_array($guarded_name, static::$attr_accessible)) {
                     continue;
                 }
 
-                if ($use_attr_protected && in_array($name, static::$attr_protected)) {
+                if ($use_attr_protected && in_array($guarded_name, static::$attr_protected)) {
                     continue;
                 }
 
