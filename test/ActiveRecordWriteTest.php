@@ -388,6 +388,12 @@ class ActiveRecordWriteTest extends DatabaseTest
         $this->assert_equals(2, $num_affected);
     }
 
+    public function test_delete_all_with_no_conditions_key()
+    {
+        $num_affected = Author::delete_all();
+        $this->assert_equals(4, $num_affected);
+    }
+
     public function test_delete_all_with_limit_and_order()
     {
         if (!$this->conn->accepts_limit_and_order_for_update_and_delete()) {
