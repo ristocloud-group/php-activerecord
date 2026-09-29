@@ -13,6 +13,23 @@ namespace ActiveRecord;
  */
 class SQLBuilder
 {
+    /**
+     * The direction keyword that reverse_order() flips in one ORDER BY item (#37).
+     *
+     * An item ends in "ASC|DESC [NULLS FIRST|LAST]". Every gap after the keyword may hold
+     * whitespace or comments (non-nesting block comments, "--" or "#" line comments), and
+     * nothing else may follow. Only the text after the keyword is read that way, so a "#"
+     * operator (Postgres) inside the expression is untouched. The keyword must be preceded
+     * by whitespace, so identifiers such as "description" or "t.desc" never match.
+     */
+    private const string REVERSE_ORDER_DIRECTION = <<<'REGEX'
+        ~
+        (?(DEFINE) (?<gap> \s++ | /\*(?:[^*]|\*(?!/))*+\*/ | (?:--|\#)\N*+ ) )
+        (?<=\s) (?<direction> asc|desc )
+        (?= (?: (?&gap)++ nulls (?&gap)++ (?:first|last) )? (?&gap)*+ \z )
+        ~ix
+        REGEX;
+
     private Connection $connection;
     private string $operation = 'SELECT';
     private ?string $table;
@@ -287,11 +304,9 @@ class SQLBuilder
         $parts = explode(',', $order);
 
         for ($i = 0,$n = count($parts); $i < $n; ++$i) {
-            // Flip only a whitespace-delimited ASC/DESC that ends the part (optionally
-            // followed by NULLS FIRST|LAST), so identifiers such as "description" or
-            // "ascii_code" are never rewritten (#37).
-            if (preg_match('/(?<=\s)(asc|desc)(?=(?:\s+nulls\s+(?:first|last))?\s*$)/i', $parts[$i], $m, PREG_OFFSET_CAPTURE)) {
-                [$direction, $offset] = $m[1];
+            // Flip only the item's own direction keyword, never a substring of an identifier (#37).
+            if (preg_match(self::REVERSE_ORDER_DIRECTION, $parts[$i], $m, PREG_OFFSET_CAPTURE)) {
+                [$direction, $offset] = $m['direction'];
                 $flipped = strcasecmp($direction, 'asc') === 0 ? 'DESC' : 'ASC';
                 $parts[$i] = substr_replace($parts[$i], $flipped, $offset, strlen($direction));
             } else {

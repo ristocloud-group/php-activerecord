@@ -256,6 +256,35 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals('created_at ASC  Nulls   Last ', SQLBuilder::reverse_order('created_at desc  Nulls   Last '));
     }
 
+    public function test_gh_37_reverse_order_keeps_comments_after_the_direction()
+    {
+        $this->assert_equals('id ASC /* note */', SQLBuilder::reverse_order('id desc /* note */'));
+        $this->assert_equals('id ASC -- note', SQLBuilder::reverse_order('id desc -- note'));
+        $this->assert_equals('id ASC # note', SQLBuilder::reverse_order('id desc # note'));
+        $this->assert_equals("id DESC -- a\n/* b */ ", SQLBuilder::reverse_order("id asc -- a\n/* b */ "));
+        $this->assert_equals('id DESC nulls last /* x */', SQLBuilder::reverse_order('id asc nulls last /* x */'));
+        $this->assert_equals('id ASC /* c */ nulls last', SQLBuilder::reverse_order('id desc /* c */ nulls last'));
+        $this->assert_equals('id ASC nulls/**/first', SQLBuilder::reverse_order('id desc nulls/**/first'));
+        $this->assert_equals("id ASC -- c\nnulls last", SQLBuilder::reverse_order("id desc -- c\nnulls last"));
+        $this->assert_equals('description ASC /* x */, id DESC', SQLBuilder::reverse_order('description desc /* x */, id'));
+    }
+
+    public function test_gh_37_reverse_order_treats_hash_as_a_comment_only_after_the_direction()
+    {
+        // '#' is an operator in Postgres (bitwise XOR): an expression containing it is left alone
+        $this->assert_equals('a # b ASC', SQLBuilder::reverse_order('a # b desc'));
+        $this->assert_equals('flags # 4 DESC', SQLBuilder::reverse_order('flags # 4'));
+        $this->assert_equals('flags # description DESC', SQLBuilder::reverse_order('flags # description'));
+    }
+
+    public function test_gh_37_reverse_order_does_not_flip_a_direction_inside_a_nested_expression_or_comment()
+    {
+        $this->assert_equals('FIRST_VALUE(x) OVER (ORDER BY y desc) DESC', SQLBuilder::reverse_order('FIRST_VALUE(x) OVER (ORDER BY y desc)'));
+        $this->assert_equals('(SELECT MAX(y) FROM t ORDER BY y desc LIMIT 1) DESC', SQLBuilder::reverse_order('(SELECT MAX(y) FROM t ORDER BY y desc LIMIT 1)'));
+        $this->assert_equals('x /* sort desc */ DESC', SQLBuilder::reverse_order('x /* sort desc */'));
+        $this->assert_equals('id ASC /* desc */', SQLBuilder::reverse_order('id desc /* desc */'));
+    }
+
     public function test_create_conditions_from_underscored_string()
     {
         $this->assert_conditions('id=? AND name=? OR z=?', [1,'Tito','X'], 'id_and_name_or_z');
