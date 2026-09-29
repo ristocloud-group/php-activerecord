@@ -126,4 +126,52 @@ class ConnectionTest extends SnakeCase_PHPUnit_Framework_TestCase
 
         ActiveRecord\Connection::instance('oci://test:test@127.0.0.1/dev');
     }
+
+    /**
+     * Schema-cache identity computed by $adapter_class for a connection URL,
+     * without opening a connection.
+     */
+    private function cache_identity_for(string $adapter_class, string $url): string
+    {
+        $method = new ReflectionMethod($adapter_class, 'cache_identity_for');
+
+        return $method->invoke(null, Connection::parse_connection_url($url));
+    }
+
+    public function test_gh_45_cache_identity_ignores_password()
+    {
+        $this->assert_equals(
+            $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, 'mysql://user:old@db.local/app'),
+            $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, 'mysql://user:rotated@db.local/app'),
+        );
+    }
+
+    public function test_gh_45_cache_identity_treats_the_adapter_default_port_as_omitted()
+    {
+        $this->assert_equals(
+            $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, 'mysql://user:pass@db.local/app'),
+            $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, 'mysql://user:pass@db.local:3306/app'),
+        );
+    }
+
+    public function test_gh_45_cache_identity_differs_per_host_port_database_and_user()
+    {
+        $base = $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, 'mysql://user:pass@db.local/app');
+
+        foreach ([
+            'mysql://user:pass@replica.local/app',
+            'mysql://user:pass@db.local:3307/app',
+            'mysql://user:pass@db.local/reporting',
+            'mysql://reader:pass@db.local/app',
+        ] as $url) {
+            $this->assert_not_equals($base, $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, $url), $url);
+        }
+    }
+
+    public function test_gh_45_cache_identity_does_not_expose_credentials()
+    {
+        $identity = $this->cache_identity_for(ActiveRecord\MysqlAdapter::class, 'mysql://user:s3cret@db.local/app');
+
+        $this->assert_matches_regular_expression('/^[0-9a-f]{32}$/', $identity);
+    }
 }
