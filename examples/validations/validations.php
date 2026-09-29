@@ -46,6 +46,15 @@ foreach (['spiral', null] as $binding) {
     out('binding ' . ($binding ?? 'null') . ' -> ' . implode(', ', (array) ($job->errors->on('binding') ?? [])));
 }
 
+// Numericality odd/even truncates a non-integer first, like Rails'
+// value.to_i.odd?: 3.5 counts as odd and 4.5 as even. (Before #59 the same
+// results came with an "Implicit conversion from float" deprecation.)
+$range = new PrintJob(['binding' => 'paperback', 'first_page' => '3.5', 'last_page' => '4.5']);
+out('pages 3.5-4.5 valid? ' . ($range->is_valid() ? 'yes' : 'no'));
+$range->last_page = '3.5';
+$range->is_valid();
+out('last_page 3.5 -> ' . implode(', ', (array) ($range->errors->on('last_page') ?? [])));
+
 // Reserved-word custom rule + uniqueness on an existing email.
 $dup = new User(['name' => 'admin', 'email' => 'taken@example.com', 'age' => 20, 'role' => 'guest']);
 $dup->save();
