@@ -36,6 +36,16 @@ $page = Widget::all([
 ]);
 out('page names: ' . implode(', ', ActiveRecord\collect($page, 'name')));
 
+// last() reverses the order: only each item's own trailing asc/desc is flipped
+// (an item without one gets DESC), so a column like "description" is left
+// intact. (Before #37 it became "ASCription" and the query failed.)
+foreach (['description desc', 'category asc, description'] as $order) {
+    /** @var Widget|null $last */
+    $last = Widget::last(['order' => $order]);
+    out("last() by '$order': " . ($last->name ?? '(none)'));
+    out('  SQL: ' . Widget::table()->last_sql);
+}
+
 // group / having (aggregate).
 $rows = Widget::all([
     'select' => 'category, COUNT(*) AS n',
