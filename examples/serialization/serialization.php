@@ -4,6 +4,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Category.php';
 require_once __DIR__ . '/models/Product.php';
+require_once __DIR__ . '/models/Review.php';
 
 $db = __DIR__ . '/serialization.db';
 @unlink($db);
@@ -37,6 +38,15 @@ out('to_json methods: ' . $p->to_json(['only' => ['name'], 'methods' => ['discou
 
 // include pulls in an association.
 out('to_json include: ' . $p->to_json(['only' => ['name'], 'include' => ['category']]));
+
+// to_xml names included records after their short class name, like the root
+// element, so a namespaced has_many renders as <review> elements. (Before #32
+// it threw a ValueError on the element name "examples\serialization\review".)
+foreach ([5, 4] as $stars) {
+    Examples\Serialization\Review::create(['product_id' => $p->id, 'stars' => $stars]);
+}
+out('to_xml include of namespaced reviews:');
+out($p->to_xml(['only' => ['name'], 'include' => ['reviews' => ['only' => ['stars']]]]));
 
 // to_array mirrors the same options; to_xml renders XML.
 $arr = $p->to_array(['only' => ['name', 'price']]);
