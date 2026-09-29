@@ -20,8 +20,9 @@ class SQLBuilder
      * whitespace or comments (non-nesting block comments, "--" or "#" line comments), and
      * nothing else may follow. Only the text after the keyword is read that way, so a "#"
      * operator (Postgres) inside the expression is untouched. Because the keyword must end
-     * the item, "desc" inside "description" (or inside a literal) never matches. Because it
-     * must follow whitespace, a qualified name such as "t.desc" never matches either.
+     * the item, "desc" inside "description" never matches. Because it must follow
+     * whitespace, a qualified name such as "t.desc" never matches either. String literals
+     * are not parsed, so an item ending in 'x desc -- y' is flipped, as on master.
      */
     private const string REVERSE_ORDER_DIRECTION = <<<'REGEX'
         ~

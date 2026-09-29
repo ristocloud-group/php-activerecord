@@ -267,8 +267,9 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals('id ASC nulls/**/first', SQLBuilder::reverse_order('id desc nulls/**/first'));
         $this->assert_equals("id ASC -- c\nnulls last", SQLBuilder::reverse_order("id desc -- c\nnulls last"));
         $this->assert_equals('description ASC /* x */, id DESC', SQLBuilder::reverse_order('description desc /* x */, id'));
-        // a keyword that ends a line comment is flipped, exactly as on master
+        // literals and comments are not parsed: these are flipped exactly as on master
         $this->assert_equals('x -- sort ASC', SQLBuilder::reverse_order('x -- sort desc'));
+        $this->assert_equals("name = 'x ASC -- y'", SQLBuilder::reverse_order("name = 'x desc -- y'"));
     }
 
     public function test_gh_37_reverse_order_treats_hash_as_a_comment_only_after_the_direction()
