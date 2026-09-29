@@ -283,6 +283,19 @@ class ActiveRecordWriteTest extends DatabaseTest
         $this->assert_not_null($author->created_at);
     }
 
+    public function test_create_on_table_without_primary_key()
+    {
+        $item = PklessItem::create(['code' => 2, 'name' => 'second']);
+        $this->assert_false($item->is_new_record());
+        $this->assert_same(['code' => 2, 'name' => 'second'], $item->attributes());
+
+        $rows = PklessItem::all(['order' => 'code']);
+        $this->assert_same([
+            ['code' => 1, 'name' => 'first'],
+            ['code' => 2, 'name' => 'second'],
+        ], array_map(fn(PklessItem $row) => $row->attributes(), $rows));
+    }
+
     public function test_update_with_no_primary_key_defined()
     {
         $this->expectException(ActiveRecord\ActiveRecordException::class);

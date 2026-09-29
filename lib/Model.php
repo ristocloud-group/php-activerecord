@@ -450,7 +450,8 @@ class Model
         }
 
         if ($name == 'id') {
-            $this->assign_attribute($this->get_primary_key(true), $value);
+            // pk-less table: '' is what a null pk offset always mapped to
+            $this->assign_attribute($this->get_primary_key(true) ?? '', $value);
             return;
         }
 
@@ -542,7 +543,8 @@ class Model
         }
 
         if ($name == 'id') {
-            $pk = $this->get_primary_key(true);
+            // pk-less table: '' is what a null pk offset always mapped to
+            $pk = $this->get_primary_key(true) ?? '';
             if (isset($this->attributes[$pk])) {
                 return $this->attributes[$pk];
             }
@@ -620,12 +622,12 @@ class Model
      * Retrieve the primary key name.
      *
      * @param bool $first Set to true to return the first value in the pk array only
-     * @return ($first is true ? string : list<string>) The primary key for the model
+     * @return ($first is true ? string|null : list<string>) The primary key for the model (null for $first on a table without one)
      */
     public function get_primary_key($first = false)
     {
         $pk = static::table()->pk;
-        return $first ? $pk[0] : $pk;
+        return $first ? ($pk[0] ?? null) : $pk;
     }
 
     /**
@@ -893,7 +895,8 @@ class Model
             $attributes = $this->attributes;
         }
 
-        $pk = $this->get_primary_key(true);
+        // pk-less table: '' is what a null pk offset always mapped to
+        $pk = $this->get_primary_key(true) ?? '';
         $use_sequence = false;
 
         if ($table->sequence && !isset($attributes[$pk])) {
@@ -1305,7 +1308,8 @@ class Model
                 // alias_attribute or the 'id' primary-key shortcut (issue #28).
                 $guarded_name = static::$alias_attribute[$name] ?? $name;
                 if ('id' === $guarded_name && !array_key_exists('id', $this->attributes)) {
-                    $guarded_name = $this->get_primary_key(true);
+                    // pk-less table: __set() writes the '' key
+                    $guarded_name = $this->get_primary_key(true) ?? '';
                 }
 
                 if ($use_attr_accessible && !in_array($guarded_name, static::$attr_accessible)) {

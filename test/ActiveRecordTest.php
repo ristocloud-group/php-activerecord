@@ -165,6 +165,42 @@ class ActiveRecordTest extends DatabaseTest
         $this->assert_true(in_array('space_out', $keys));
     }
 
+    public function test_get_primary_key()
+    {
+        $author = new Author();
+        $this->assert_same(['author_id'], $author->get_primary_key());
+        $this->assert_same('author_id', $author->get_primary_key(true));
+    }
+
+    public function test_get_primary_key_on_table_without_primary_key()
+    {
+        $item = new PklessItem();
+        $this->assert_same([], $item->get_primary_key());
+        $this->assert_null($item->get_primary_key(true));
+    }
+
+    public function test_id_shortcut_on_table_without_primary_key_is_undefined()
+    {
+        $this->expectException(ActiveRecord\UndefinedPropertyException::class);
+        PklessItem::first()->id;
+    }
+
+    public function test_id_shortcut_assignment_on_table_without_primary_key()
+    {
+        // Pinned legacy behavior: with no primary key to resolve to, the id
+        // shortcut writes and reads back the '' attribute key.
+        $item = new PklessItem();
+        $item->id = 5;
+        $this->assert_same(5, $item->id);
+        $this->assert_same(5, $item->attributes()['']);
+    }
+
+    public function test_attr_accessible_drops_id_shortcut_on_table_without_primary_key()
+    {
+        $item = new PklessItemAttrAccessible(['code' => 7, 'id' => 5]);
+        $this->assert_same(['code' => 7, 'name' => null], $item->attributes());
+    }
+
     public function test_mixed_case_column_name()
     {
         $keys = array_keys(Author::first()->attributes());
