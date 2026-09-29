@@ -78,6 +78,7 @@ use Closure;
  *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
  *           property since column schema is introspected at runtime.
  * @phpstan-import-type Relationship from AbstractRelationship
+ * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */
 class Model
 {
@@ -251,8 +252,8 @@ class Model
     public static $has_one;
 
     /**
-     * @var array<int, Relationship|string>|string|null
-     * @phpstan-var array<int, Relationship>|string|null
+     * @var array<int, BelongsToRelationship|string>|string|null
+     * @phpstan-var array<int, BelongsToRelationship>|string|null
      */
     public static $belongs_to;
 
