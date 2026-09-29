@@ -132,6 +132,16 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_same(false, AR\Utils::is_odd(0));
     }
 
+    public function test_is_odd_truncates_non_integer_floats()
+    {
+        // Truncation toward zero (Rails' to_i), with no implicit float-to-int
+        // deprecation (#59).
+        $this->assert_same(true, AR\Utils::is_odd(3.5));
+        $this->assert_same(false, AR\Utils::is_odd(4.5));
+        $this->assert_same(true, AR\Utils::is_odd(-3.5));
+        $this->assert_same(false, AR\Utils::is_odd(-0.5));
+    }
+
     public function test_wrap_strings_in_arrays()
     {
         $x = ['1',['2']];

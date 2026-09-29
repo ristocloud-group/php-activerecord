@@ -278,12 +278,16 @@ class Utils
     }
 
     /**
+     * A non-integer is truncated toward zero first, like Rails' `to_i.odd?`
+     * (so 3.5 is odd). The cast is explicit to avoid PHP 8.1+'s implicit
+     * float-to-int deprecation.
+     *
      * @param int|float $number
      * @return bool
      */
     public static function is_odd($number)
     {
-        return ($number & 1) === 1;
+        return ((int) $number & 1) === 1;
     }
 
     /**
