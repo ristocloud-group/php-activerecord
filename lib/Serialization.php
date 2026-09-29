@@ -197,7 +197,8 @@ abstract class Serialization
                             $serialized = new $serializer_class($a, $options);
 
                             if ($this->includes_with_class_name_element) {
-                                $includes[strtolower(get_class($a))][] = $serialized->to_a();
+                                // short class name, like XmlSerializer's root element
+                                $includes[strtolower(denamespace($a))][] = $serialized->to_a();
                             } else {
                                 $includes[] = $serialized->to_a();
                             }
