@@ -19,8 +19,9 @@ class SQLBuilder
      * An item ends in "ASC|DESC [NULLS FIRST|LAST]". Every gap after the keyword may hold
      * whitespace or comments (non-nesting block comments, "--" or "#" line comments), and
      * nothing else may follow. Only the text after the keyword is read that way, so a "#"
-     * operator (Postgres) inside the expression is untouched. The keyword must be preceded
-     * by whitespace, so identifiers such as "description" or "t.desc" never match.
+     * operator (Postgres) inside the expression is untouched. Because the keyword must end
+     * the item, "desc" inside "description" (or inside a literal) never matches. Because it
+     * must follow whitespace, a qualified name such as "t.desc" never matches either.
      */
     private const string REVERSE_ORDER_DIRECTION = <<<'REGEX'
         ~

@@ -267,6 +267,8 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals('id ASC nulls/**/first', SQLBuilder::reverse_order('id desc nulls/**/first'));
         $this->assert_equals("id ASC -- c\nnulls last", SQLBuilder::reverse_order("id desc -- c\nnulls last"));
         $this->assert_equals('description ASC /* x */, id DESC', SQLBuilder::reverse_order('description desc /* x */, id'));
+        // a keyword that ends a line comment is flipped, exactly as on master
+        $this->assert_equals('x -- sort ASC', SQLBuilder::reverse_order('x -- sort desc'));
     }
 
     public function test_gh_37_reverse_order_treats_hash_as_a_comment_only_after_the_direction()
@@ -283,6 +285,18 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals('(SELECT MAX(y) FROM t ORDER BY y desc LIMIT 1) DESC', SQLBuilder::reverse_order('(SELECT MAX(y) FROM t ORDER BY y desc LIMIT 1)'));
         $this->assert_equals('x /* sort desc */ DESC', SQLBuilder::reverse_order('x /* sort desc */'));
         $this->assert_equals('id ASC /* desc */', SQLBuilder::reverse_order('id desc /* desc */'));
+    }
+
+    public function test_gh_37_reverse_order_does_not_rewrite_string_literals()
+    {
+        $this->assert_equals(
+            "MATCH(a) AGAINST('foo desc' IN BOOLEAN MODE) ASC",
+            SQLBuilder::reverse_order("MATCH(a) AGAINST('foo desc' IN BOOLEAN MODE) desc"),
+        );
+        $this->assert_equals(
+            "CASE WHEN dir = 'desc' THEN a END ASC",
+            SQLBuilder::reverse_order("CASE WHEN dir = 'desc' THEN a END desc"),
+        );
     }
 
     public function test_create_conditions_from_underscored_string()
