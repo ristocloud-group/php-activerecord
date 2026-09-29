@@ -287,12 +287,13 @@ class SQLBuilder
         $parts = explode(',', $order);
 
         for ($i = 0,$n = count($parts); $i < $n; ++$i) {
-            $v = strtolower($parts[$i]);
-
-            if (strpos($v, ' asc') !== false) {
-                $parts[$i] = preg_replace('/asc/i', 'DESC', $parts[$i]) ?? $parts[$i];
-            } elseif (strpos($v, ' desc') !== false) {
-                $parts[$i] = preg_replace('/desc/i', 'ASC', $parts[$i]) ?? $parts[$i];
+            // Flip only a whitespace-delimited ASC/DESC that ends the part (optionally
+            // followed by NULLS FIRST|LAST), so identifiers such as "description" or
+            // "ascii_code" are never rewritten (#37).
+            if (preg_match('/(?<=\s)(asc|desc)(?=(?:\s+nulls\s+(?:first|last))?\s*$)/i', $parts[$i], $m, PREG_OFFSET_CAPTURE)) {
+                [$direction, $offset] = $m[1];
+                $flipped = strcasecmp($direction, 'asc') === 0 ? 'DESC' : 'ASC';
+                $parts[$i] = substr_replace($parts[$i], $flipped, $offset, strlen($direction));
             } else {
                 $parts[$i] .= ' DESC';
             }

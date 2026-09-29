@@ -226,6 +226,36 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals(null, SQLBuilder::reverse_order(null));
     }
 
+    public function test_gh_37_reverse_order_does_not_corrupt_identifiers_containing_asc_or_desc()
+    {
+        $this->assert_equals('description ASC', SQLBuilder::reverse_order('description desc'));
+        $this->assert_equals('t.description ASC', SQLBuilder::reverse_order('t.description DESC'));
+        $this->assert_equals('cascade DESC, id ASC', SQLBuilder::reverse_order('cascade asc, id desc'));
+        $this->assert_equals('id DESC, description DESC', SQLBuilder::reverse_order('id asc, description'));
+        $this->assert_equals('name DESC, ascii_code DESC', SQLBuilder::reverse_order('name asc, ascii_code'));
+        $this->assert_equals('id DESC, ascii_name ASC', SQLBuilder::reverse_order('id, ascii_name desc'));
+        $this->assert_equals('id DESC, descr DESC', SQLBuilder::reverse_order('id, descr'));
+        $this->assert_equals('description ASC nulls last', SQLBuilder::reverse_order('description desc nulls last'));
+    }
+
+    public function test_gh_37_reverse_order_flips_only_a_trailing_whole_word_direction()
+    {
+        $this->assert_equals('id ASC', SQLBuilder::reverse_order('id Desc'));
+        $this->assert_equals('id ASC ', SQLBuilder::reverse_order('id desc '));
+        $this->assert_equals("id\tASC", SQLBuilder::reverse_order("id\tdesc"));
+        $this->assert_equals('name ASC , zzz DESC', SQLBuilder::reverse_order('name DESC , zzz ASC'));
+        $this->assert_equals('t.desc DESC', SQLBuilder::reverse_order('t.desc'));
+        $this->assert_equals('id DESC, `desc` DESC', SQLBuilder::reverse_order('id, `desc`'));
+        $this->assert_equals('ascending DESC', SQLBuilder::reverse_order('ascending'));
+    }
+
+    public function test_gh_37_reverse_order_keeps_nulls_first_last_after_the_direction()
+    {
+        $this->assert_equals('id DESC nulls last', SQLBuilder::reverse_order('id asc nulls last'));
+        $this->assert_equals('id ASC NULLS FIRST, name DESC', SQLBuilder::reverse_order('id DESC NULLS FIRST, name'));
+        $this->assert_equals('created_at ASC  Nulls   Last ', SQLBuilder::reverse_order('created_at desc  Nulls   Last '));
+    }
+
     public function test_create_conditions_from_underscored_string()
     {
         $this->assert_conditions('id=? AND name=? OR z=?', [1,'Tito','X'], 'id_and_name_or_z');

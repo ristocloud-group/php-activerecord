@@ -233,6 +233,17 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals('Uncle Bob', $author->name);
     }
 
+    public function test_gh_37_last_with_order_on_column_containing_desc()
+    {
+        // reverse_order() used to turn 'description desc' into 'ASCription ASC' (unknown column)
+        $order = 'description desc, id desc';
+        $all = Event::all(['order' => $order]);
+        $last = Event::last(['order' => $order]);
+
+        $this->assert_not_null($last);
+        $this->assert_equals(end($all)->id, $last->id);
+    }
+
     public function test_limit_before_order()
     {
         $authors = Author::all(['limit' => 2, 'order' => 'author_id desc', 'conditions' => 'author_id in(1,2)']);
