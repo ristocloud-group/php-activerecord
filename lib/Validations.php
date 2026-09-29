@@ -650,7 +650,7 @@ class Validations
      */
     private function is_blank_with_option(mixed $var, array &$options): bool
     {
-        return (Utils::is_blank($var) && (isset($options['allow_blank']) && $options['allow_blank']));
+        return (isset($options['allow_blank']) && $options['allow_blank'] && Utils::is_blank($var));
     }
 }
 

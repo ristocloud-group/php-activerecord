@@ -309,12 +309,28 @@ class Utils
     }
 
     /**
+     * Blank means null, an empty string or anything whose string form is empty
+     * (false, a Stringable returning ''), or an empty array. Non-empty arrays,
+     * other objects and resources are never blank.
+     *
      * @param mixed $var
      * @return bool
      */
     public static function is_blank($var)
     {
-        return is_null($var) || 0 === strlen($var);
+        if (is_null($var)) {
+            return true;
+        }
+
+        if (is_array($var)) {
+            return [] === $var;
+        }
+
+        if (is_scalar($var) || $var instanceof \Stringable) {
+            return '' === (string) $var;
+        }
+
+        return false;
     }
 
     /** @var array<string, string> */
