@@ -78,7 +78,7 @@ from the live database at runtime and cached — models never declare columns.**
 `Table` runs through **`Connection`** + a `lib/adapters/*Adapter.php` (a thin PDO
 wrapper; adapters supply quoting, `LIMIT` syntax, and introspection queries).
 Relationships and eager-loading live in `lib/Relationship.php` — **`has_many …
-through` is a historical bug hotspot** (see `RELEASES.md` and open issues).
+through` is a historical bug hotspot** (see the GitHub release notes and open issues).
 The remaining pieces are self-describing — read the file: `SQLBuilder`,
 `Validations` (+`Errors`), `CallBack`, `Serialization`, `Cache`
 (`lib/cache/*`), `Config`, `ConnectionManager`, `Inflector`, `Reflections`,
