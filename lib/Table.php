@@ -624,7 +624,8 @@ class Table
 
         $table_name = $this->get_fully_qualified_table_name($quote_name);
         $conn = $this->connection();
-        $this->columns = Cache::get("get_meta_data-$table_name", function () use ($conn, $table_name) {
+        // scoped by connection identity: same-named tables on different databases differ (#45)
+        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () use ($conn, $table_name) {
             return $conn->columns($table_name);
         });
     }

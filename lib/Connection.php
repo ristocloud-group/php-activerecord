@@ -53,6 +53,11 @@ abstract class Connection
      */
     private int $transaction_depth = 0;
     /**
+     * Opaque identity of the database this connection points to.
+     * @see cache_identity()
+     */
+    private string $cache_identity = '';
+    /**
      * Database's date format
      * @var string
      */
@@ -123,6 +128,7 @@ abstract class Connection
             /** @var Connection $connection */
             $connection = new $fqclass($info);
             $connection->protocol = $info->protocol;
+            $connection->cache_identity = $fqclass::cache_identity_for($info);
             // fall back to a NullLogger: query() logs unconditionally, so a
             // consumer that never configured a logger must not fatal there
             $connection->logger = $config->get_logger() ?? new NullLogger();
@@ -134,6 +140,31 @@ abstract class Connection
             throw new DatabaseException($e);
         }
         return $connection;
+    }
+
+    /**
+     * Opaque identity of the database this connection points to, used to
+     * scope cache keys (e.g. schema metadata) so that same-named tables on
+     * different connections never share an entry.
+     */
+    public function cache_identity(): string
+    {
+        return $this->cache_identity;
+    }
+
+    /**
+     * Hashes what determines the schema a connection sees: protocol, host,
+     * port, database and user (privileges and search_path are per user). The
+     * password is left out so rotating it keeps the cache warm; an omitted
+     * port is the adapter's default, so both spellings share one identity.
+     *
+     * @param ConnectionInfo $info Parsed connection-url object (see parse_connection_url())
+     */
+    protected static function cache_identity_for(\stdClass $info): string
+    {
+        $port = $info->port ?? static::$DEFAULT_PORT;
+
+        return hash('xxh128', implode("\0", [$info->protocol, $info->host, $port, $info->db ?? '', $info->user ?? '']));
     }
 
     /**
