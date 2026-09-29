@@ -198,6 +198,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         if (isset($options['conditions']) && strlen($options['conditions'][0]) > 1) {
+            // Group the declared fragment so its own OR cannot swallow the key
+            // condition ("a OR b AND fk IN(?)" would match "a" for any owner).
+            $options['conditions'][0] = '(' . $options['conditions'][0] . ')';
             Utils::add_condition($options['conditions'], $conditions);
         } else {
             $options['conditions'] = $conditions;
@@ -480,9 +483,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
         # marker received every value (expanded to "?,?") and the next marker none
         # (ExpressionsException). Append one bind per key marker instead, each in
         # the one-element-array shape add_condition() gives a single key: the
-        # single-key result (and the Expressions path SQLBuilder takes for it) is
-        # unchanged, composite keys get one value per placeholder.
-        $options_conditions[0] .= ' AND ' . array_shift($conditions);
+        # single-key binds (and the Expressions path SQLBuilder takes for them)
+        # are unchanged, composite keys get one value per placeholder.
+        # The declared fragment is parenthesized so its own OR cannot swallow the
+        # key condition ("a OR b AND fk=?" would match "a" for any owner).
+        $options_conditions[0] = '(' . $options_conditions[0] . ') AND ' . array_shift($conditions);
 
         foreach ($conditions as $value) {
             $options_conditions[] = array_flatten([$value]);

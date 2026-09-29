@@ -100,34 +100,34 @@ class RelationshipCompositeKeyConditionsTest extends DatabaseTest
     {
         $this->assert_equals([1], $this->ids(CompositeKeyAuthorPositionalNoBind::find(1)->items));
         $this->assert_equals([5], $this->ids(CompositeKeyAuthorPositionalNoBind::find(3)->items));
-        $this->assert_sql_has("WHERE title <> 'x' AND author_ref=? AND parent_ref=?", Table::load('CompositeItem')->last_sql);
+        $this->assert_sql_has("WHERE (title <> 'x') AND author_ref=? AND parent_ref=?", Table::load('CompositeItem')->last_sql);
     }
 
     public function test_composite_keys_with_positional_condition_with_a_bind()
     {
         $this->assert_equals([1], $this->ids(CompositeKeyAuthorPositionalBind::find(1)->items));
         $this->assert_equals([5], $this->ids(CompositeKeyAuthorPositionalBind::find(3)->items));
-        $this->assert_sql_has('WHERE title <> ? AND author_ref=? AND parent_ref=?', Table::load('CompositeItem')->last_sql);
+        $this->assert_sql_has('WHERE (title <> ?) AND author_ref=? AND parent_ref=?', Table::load('CompositeItem')->last_sql);
     }
 
     public function test_composite_keys_with_positional_condition_with_an_array_bind()
     {
         $this->assert_equals([1], $this->ids(CompositeKeyAuthorPositionalArrayBind::find(1)->items));
         $this->assert_equals([5], $this->ids(CompositeKeyAuthorPositionalArrayBind::find(3)->items));
-        $this->assert_sql_has('WHERE title IN(?,?,?) AND author_ref=? AND parent_ref=?', Table::load('CompositeItem')->last_sql);
+        $this->assert_sql_has('WHERE (title IN(?,?,?)) AND author_ref=? AND parent_ref=?', Table::load('CompositeItem')->last_sql);
     }
 
     public function test_composite_keys_with_condition_starting_with_a_string_literal()
     {
         $this->assert_equals([1], $this->ids(CompositeKeyAuthorLeadingLiteral::find(1)->items));
         $this->assert_equals([5], $this->ids(CompositeKeyAuthorLeadingLiteral::find(3)->items));
-        $this->assert_sql_has("WHERE 'x' <> title AND author_ref=? AND parent_ref=?", Table::load('CompositeItem')->last_sql);
+        $this->assert_sql_has("WHERE ('x' <> title) AND author_ref=? AND parent_ref=?", Table::load('CompositeItem')->last_sql);
     }
 
     public function test_composite_keys_with_hash_condition()
     {
         $this->assert_equals([1], $this->ids(CompositeKeyAuthorHash::find(1)->items));
         $this->assert_equals([], $this->ids(CompositeKeyAuthorHash::find(3)->items));
-        $this->assert_sql_has('WHERE title=? AND author_ref=? AND parent_ref=?', Table::load('CompositeItem')->last_sql);
+        $this->assert_sql_has('WHERE (title=?) AND author_ref=? AND parent_ref=?', Table::load('CompositeItem')->last_sql);
     }
 }
