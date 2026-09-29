@@ -56,6 +56,20 @@ $own_versions = $p1->own_versions;
 out('own published versions: ' . implode(', ', ActiveRecord\collect($own_versions, 'body')));
 out('  SQL: ' . Version::table()->last_sql);
 
+// Declared `conditions` that contain OR stay scoped to the owner: the library
+// wraps them as "(<conditions>) AND <key>". Before that fix they were glued on
+// as "a OR b AND author_id = ?", which SQL reads as "a OR (b AND ...)": Ada's
+// featured posts also listed Babbage's post, and her featured author was Babbage.
+/** @var Author $babbage */
+$babbage = Author::create(['name' => 'Babbage']);
+$engine = $babbage->create_posts(['title' => 'On the Analytical Engine']);
+$featured = $ada->featured_posts;
+out('Ada featured posts (has_many, OR conditions): ' . implode(', ', ActiveRecord\collect($featured, 'title')));
+out('  SQL: ' . Post::table()->last_sql);
+out('Ada post featured author (belongs_to, OR conditions): ' . ($p1->featured_author->name ?? '(none)'));
+out('  SQL: ' . Author::table()->last_sql);
+out('Babbage post featured author: ' . ($engine->featured_author->name ?? '(none)'));
+
 // Note: this fork's has_many :through only supports the join-table shape (see
 // tags/taggings below) -- not a plain one-to-many chain like "comments through
 // posts" -- so comments are aggregated across the author's posts directly.
