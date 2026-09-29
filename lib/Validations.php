@@ -299,7 +299,8 @@ class Validations
             }
 
             if (('inclusion' == $type && !in_array($var, $enum)) || ('exclusion' == $type && in_array($var, $enum))) {
-                $message = str_replace('%s', $var, $options['message']);
+                // null interpolates as '' (as before), without str_replace()'s null deprecation (#60)
+                $message = str_replace('%s', $var ?? '', $options['message']);
                 $this->record->add($attribute, $message);
             }
         }
