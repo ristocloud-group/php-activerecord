@@ -192,6 +192,28 @@ class SerializationTest extends DatabaseTest
         $this->assert_equals(3, count($decoded['events']->event));
     }
 
+    public function test_to_xml_include_of_namespaced_has_many_uses_denamespaced_element_name()
+    {
+        // GH-32: the included records are NamespaceTest\Book instances; their
+        // element is named after the short class name, like the root element
+        $xml = NamespaceTest\Author::find(1)->to_xml(['include' => 'books']);
+        $decoded = new SimpleXMLElement($xml);
+
+        $this->assert_equals('author', $decoded->getName());
+        $this->assert_equals(1, count($decoded->books->book));
+        $this->assert_equals('1', (string) $decoded->books->book->book_id);
+        $this->assert_equals('Ancient Art of Main Tanking', (string) $decoded->books->book->name);
+    }
+
+    public function test_to_array_include_of_namespaced_has_many_is_a_list()
+    {
+        // only the XML serializer keys included records by class name
+        $a = NamespaceTest\Author::find(1)->to_array(['include' => 'books']);
+
+        $this->assert_equals([0], array_keys($a['books']));
+        $this->assert_equals('Ancient Art of Main Tanking', $a['books'][0]['name']);
+    }
+
     public function test_to_xml()
     {
         $book = Book::find(1);
