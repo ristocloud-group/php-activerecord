@@ -45,6 +45,15 @@ $rows = Task::all(['conditions' => ['id = ? AND id IN(?)', 5, []]]);
 out('fragment IN(?) with []: ' . names($rows));
 out('  SQL: ' . Task::table()->last_sql);
 
+// 3b. A fragment may START with a string literal and still expand an array
+//     bind: IN(?) becomes IN(?,?), and a '?' inside the literal stays text.
+//     (Before #52 a quote at position 0 was missed, so the IN(?) marker was
+//     skipped and the query failed at bind time.) Several scalars take one
+//     bind per '?' — ['a = ? AND b = ?', 1, 2] — never one array.
+$rows = Task::all(['conditions' => ["'review PR' <> name AND flag IN(?)", [1, 2]]]);
+out('leading literal [1,2]:  ' . names($rows));
+out('  SQL: ' . Task::table()->last_sql);
+
 // 4. An array containing null matches BOTH the listed values and NULL rows:
 //    the library partitions it into (flag IN(?) OR flag IS NULL).
 $rows = Task::all(['conditions' => ['flag' => [1, null]]]);
