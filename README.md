@@ -245,7 +245,7 @@ php examples/simple/simple.php
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to`, `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions` |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |
-| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible`, `$delegate`, dirty tracking |
+| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking |
 | [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |
 | [`upsert/`](examples/upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and managed timestamps |
 | [`orders/`](examples/orders/) | A fuller app combining validations, a callback, and relationships |
