@@ -74,6 +74,12 @@ CREATE TABLE `rm-bldg`(
     `space out` VARCHAR(1) NOT NULL
 );
 
+-- no primary key, plain column names: exercises the pk-less write paths
+CREATE TABLE pkless_items(
+    code INT NOT NULL,
+    name VARCHAR(10)
+);
+
 CREATE TABLE awesome_people(
 	id int not null primary key auto_increment,
 	author_id int,

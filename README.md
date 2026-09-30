@@ -149,6 +149,21 @@ Once you have configured these settings you are done. ActiveRecord takes care of
 It does not require that you map your table schema to yaml/xml files. It will query the database for this information and
 cache it so that it does not make multiple calls to the database for a single schema.
 
+### Optional: strict mass assignment ###
+
+By default, mass assignment (`new Model($attributes)`, `set_attributes()`, `update_attributes()`, `create()`) drops
+every attribute blocked by a model's `$attr_accessible` / `$attr_protected` and, if a logger is configured, logs a
+warning. Turn on strict mode to throw an `ActiveRecord\MassAssignmentException` instead — raised before anything is
+assigned, its message lists every blocked attribute. It is global and off by default; assigning a single attribute
+(`$model->name = …`) is not affected. The foreign key that association builders (`build_*` / `create_*`) inject is
+subject to the same guard, so list it in the associated model's `$attr_accessible`.
+
+```php
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_strict_mass_assignment(true);
+});
+```
+
 ### Optional: caching the schema ###
 
 php-activerecord introspects each table's schema (columns, types, primary key) from the database. Within a single request this is kept in memory, but PHP's shared-nothing model means it is re-introspected on every request. To persist it across requests, configure an external cache. Three backends are bundled:
@@ -227,12 +242,12 @@ php examples/simple/simple.php
 
 | Example | Demonstrates |
 |---|---|
-| [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete) and convention overrides (`$table_name`, `$primary_key`) |
+| [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete), tables without a primary key, and convention overrides (`$table_name`, `$primary_key`) |
 | [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes |
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |
-| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible`, `$delegate`, dirty tracking |
+| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking |
 | [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |
 | [`upsert/`](examples/upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and managed timestamps |
 | [`orders/`](examples/orders/) | A fuller app combining validations, a callback, and relationships |

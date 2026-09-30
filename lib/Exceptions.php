@@ -106,6 +106,15 @@ class UndefinedPropertyException extends ModelException
 };
 
 /**
+ * Thrown by {@link Model} mass assignment, when strict mass assignment is on
+ * ({@link Config::set_strict_mass_assignment()}), for attributes blocked by
+ * attr_accessible or attr_protected.
+ *
+ * @package ActiveRecord
+ */
+class MassAssignmentException extends ModelException {};
+
+/**
  * Thrown when attempting to perform a write operation on a {@link Model} that is in read-only mode.
  *
  * @package ActiveRecord

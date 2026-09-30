@@ -37,6 +37,20 @@ out('is_admin after mass-assign (protected): ' . (int) $m->is_admin);   // 0
 out('password stored as hash: ' . $m->password_hash);
 out('alias_attribute email_address: ' . $m->email_address);
 
+// Strict mass assignment (opt-in, global, off by default): a key blocked by
+// $attr_accessible/$attr_protected throws instead of being dropped, before
+// anything is assigned. Assigning one attribute ($m->is_admin = 1) is unaffected.
+$cfg = ActiveRecord\Config::instance();
+$was_strict = $cfg->get_strict_mass_assignment();
+$cfg->set_strict_mass_assignment(true);
+try {
+    new Member(['first_name' => 'Ada', 'is_admin' => 1]);
+} catch (ActiveRecord\MassAssignmentException $e) {
+    out('strict mass assignment: ' . $e->getMessage());
+} finally {
+    $cfg->set_strict_mass_assignment($was_strict);
+}
+
 // Delegation: read company.country through the member.
 out('delegated country: ' . $m->country);
 
