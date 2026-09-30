@@ -330,4 +330,12 @@ class ValidatesLengthOfTest extends DatabaseTest
         $book->is_valid();
         $this->assert_equals(["Name is the wrong length (should be 2 characters)"], $book->errors->full_messages());
     }
+
+    public function test_allow_blank_skips_empty_array()
+    {
+        BookLength::$validates_length_of[0] = ['tags', 'maximum' => 5, 'allow_blank' => true];
+        $book = new BookLength();
+        $book->assign_attribute('tags', []);
+        $this->assert_true($book->is_valid());
+    }
 };

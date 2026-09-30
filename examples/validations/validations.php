@@ -24,6 +24,20 @@ function out(string $s): void
 $ok = new User(['name' => 'Ada', 'email' => 'ada@example.com', 'age' => 36, 'role' => 'member']);
 out('valid saved? ' . ($ok->save() ? 'yes' : 'no'));
 
+// allow_blank: a blank value (null, '' or an empty array) skips the rule; any other value
+// is still validated. Before #58 an empty array made the blank check throw a TypeError.
+require_once __DIR__ . '/models/Signup.php';
+$blank = new Signup(['email' => '']);
+$blank->assign_attribute('topic', []);
+out('blank email + empty topic valid? ' . ($blank->is_valid() ? 'yes' : 'no'));
+$filled = new Signup(['email' => 'bo@example.com']);
+$filled->assign_attribute('topic', 'php');
+out('good email + known topic valid? ' . ($filled->is_valid() ? 'yes' : 'no'));
+$filled = new Signup(['email' => 'not-an-email']);
+$filled->assign_attribute('topic', 'cobol');
+out('bad email + unknown topic valid? ' . ($filled->is_valid() ? 'yes' : 'no')
+    . ' (' . implode('; ', $filled->errors->full_messages()) . ')');
+
 // An invalid record: fails presence, format, uniqueness, inclusion, and the custom rule.
 $bad = new User(['name' => 'a', 'email' => 'not-an-email', 'age' => 999, 'role' => 'wizard']);
 out('invalid saved? ' . ($bad->save() ? 'yes' : 'no'));

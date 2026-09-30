@@ -196,6 +196,47 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_false(AR\Utils::is_blank('0'));
     }
 
+    public function test_is_blank_scalars_use_their_string_form()
+    {
+        $this->assert_false(AR\Utils::is_blank(0));
+        $this->assert_false(AR\Utils::is_blank(0.0));
+        $this->assert_false(AR\Utils::is_blank(1.5));
+        $this->assert_false(AR\Utils::is_blank(true));
+        // (string) false === ''
+        $this->assert_true(AR\Utils::is_blank(false));
+    }
+
+    public function test_is_blank_stringable_uses_its_string_form()
+    {
+        $this->assert_true(AR\Utils::is_blank(new class {
+            public function __toString(): string
+            {
+                return '';
+            }
+        }));
+        $this->assert_false(AR\Utils::is_blank(new AR\DateTime('2024-01-02 03:04:05')));
+    }
+
+    public function test_is_blank_array()
+    {
+        $this->assert_true(AR\Utils::is_blank([]));
+        $this->assert_false(AR\Utils::is_blank(['a']));
+        $this->assert_false(AR\Utils::is_blank(['']));
+    }
+
+    public function test_is_blank_non_stringable_object_is_not_blank()
+    {
+        $this->assert_false(AR\Utils::is_blank(new stdClass()));
+    }
+
+    public function test_is_blank_resource_is_not_blank()
+    {
+        $handle = fopen('php://memory', 'r');
+        $this->assert_false(AR\Utils::is_blank($handle));
+        fclose($handle);
+        $this->assert_false(AR\Utils::is_blank($handle));
+    }
+
     public function test_pluralize_if()
     {
         $this->assert_equals('dog', AR\Utils::pluralize_if(1, 'dog'));

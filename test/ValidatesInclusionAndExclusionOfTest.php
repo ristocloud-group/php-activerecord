@@ -227,4 +227,26 @@ class ValidatesInclusionAndExclusionOfTest extends DatabaseTest
         $this->assert_same("value '5' is not allowed", $book->errors->on('secondary_author_id'));
     }
 
+    public function test_exclusion_with_array_value()
+    {
+        BookExclusion::$validates_exclusion_of[0] = ['tags', 'in' => ['blah', 'alpha', 'bravo']];
+        $book = new BookExclusion();
+        $book->assign_attribute('tags', ['alpha']);
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_exclusion_with_non_stringable_object_value()
+    {
+        $book = new BookExclusion();
+        $book->name = new stdClass();
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_inclusion_allow_blank_skips_empty_array()
+    {
+        BookInclusion::$validates_inclusion_of[0] = ['tags', 'in' => ['blah'], 'allow_blank' => true];
+        $book = new BookInclusion();
+        $book->assign_attribute('tags', []);
+        $this->assert_true($book->is_valid());
+    }
 };
