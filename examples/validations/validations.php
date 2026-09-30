@@ -84,3 +84,17 @@ $dup = new User(['name' => 'admin', 'email' => 'taken@example.com', 'age' => 20,
 $dup->save();
 out('errors on name: ' . implode(', ', (array) ($dup->errors->on('name') ?? [])));
 out('errors on email: ' . implode(', ', (array) ($dup->errors->on('email') ?? [])));
+
+// Length ranges with a zero or an exact bound: 'within' => [0, N] makes a field
+// optional with a maximum length, [N, N] requires exactly N characters.
+// (Before #56 both threw ValidationsArgumentError instead of validating.)
+require_once __DIR__ . '/models/LengthRangeUser.php';
+foreach ([['ADA', ''], ['ADA', 'member'], ['AD', 'a-very-long-role']] as [$name, $role]) {
+    $u = new LengthRangeUser(['name' => $name, 'role' => $role]);
+    out(sprintf(
+        'length name=%s role=%s: %s',
+        var_export($name, true),
+        var_export($role, true),
+        $u->is_valid() ? 'valid' : implode('; ', $u->errors->full_messages()),
+    ));
+}
