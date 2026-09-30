@@ -33,6 +33,12 @@ foreach ($bad->errors->full_messages() as $msg) {
     out('  - ' . $msg);
 }
 
+// Reserved-word custom rule + uniqueness on an existing email.
+$dup = new User(['name' => 'admin', 'email' => 'taken@example.com', 'age' => 20, 'role' => 'guest']);
+$dup->save();
+out('errors on name: ' . implode(', ', (array) ($dup->errors->on('name') ?? [])));
+out('errors on email: ' . implode(', ', (array) ($dup->errors->on('email') ?? [])));
+
 // Length ranges with a zero or an exact bound: 'within' => [0, N] makes a field
 // optional with a maximum length, [N, N] requires exactly N characters.
 // (Before #56 both threw ValidationsArgumentError instead of validating.)
@@ -46,9 +52,3 @@ foreach ([['ADA', ''], ['ADA', 'member'], ['AD', 'a-very-long-role']] as [$name,
         $u->is_valid() ? 'valid' : implode('; ', $u->errors->full_messages()),
     ));
 }
-
-// Reserved-word custom rule + uniqueness on an existing email.
-$dup = new User(['name' => 'admin', 'email' => 'taken@example.com', 'age' => 20, 'role' => 'guest']);
-$dup->save();
-out('errors on name: ' . implode(', ', (array) ($dup->errors->on('name') ?? [])));
-out('errors on email: ' . implode(', ', (array) ($dup->errors->on('email') ?? [])));
