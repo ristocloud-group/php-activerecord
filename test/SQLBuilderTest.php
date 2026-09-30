@@ -226,6 +226,80 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals(null, SQLBuilder::reverse_order(null));
     }
 
+    public function test_gh_37_reverse_order_does_not_corrupt_identifiers_containing_asc_or_desc()
+    {
+        $this->assert_equals('description ASC', SQLBuilder::reverse_order('description desc'));
+        $this->assert_equals('t.description ASC', SQLBuilder::reverse_order('t.description DESC'));
+        $this->assert_equals('cascade DESC, id ASC', SQLBuilder::reverse_order('cascade asc, id desc'));
+        $this->assert_equals('id DESC, description DESC', SQLBuilder::reverse_order('id asc, description'));
+        $this->assert_equals('name DESC, ascii_code DESC', SQLBuilder::reverse_order('name asc, ascii_code'));
+        $this->assert_equals('id DESC, ascii_name ASC', SQLBuilder::reverse_order('id, ascii_name desc'));
+        $this->assert_equals('id DESC, descr DESC', SQLBuilder::reverse_order('id, descr'));
+        $this->assert_equals('description ASC nulls last', SQLBuilder::reverse_order('description desc nulls last'));
+    }
+
+    public function test_gh_37_reverse_order_flips_only_a_trailing_whole_word_direction()
+    {
+        $this->assert_equals('id ASC', SQLBuilder::reverse_order('id Desc'));
+        $this->assert_equals('id ASC ', SQLBuilder::reverse_order('id desc '));
+        $this->assert_equals("id\tASC", SQLBuilder::reverse_order("id\tdesc"));
+        $this->assert_equals('name ASC , zzz DESC', SQLBuilder::reverse_order('name DESC , zzz ASC'));
+        $this->assert_equals('t.desc DESC', SQLBuilder::reverse_order('t.desc'));
+        $this->assert_equals('id DESC, `desc` DESC', SQLBuilder::reverse_order('id, `desc`'));
+        $this->assert_equals('ascending DESC', SQLBuilder::reverse_order('ascending'));
+    }
+
+    public function test_gh_37_reverse_order_keeps_nulls_first_last_after_the_direction()
+    {
+        $this->assert_equals('id DESC nulls last', SQLBuilder::reverse_order('id asc nulls last'));
+        $this->assert_equals('id ASC NULLS FIRST, name DESC', SQLBuilder::reverse_order('id DESC NULLS FIRST, name'));
+        $this->assert_equals('created_at ASC  Nulls   Last ', SQLBuilder::reverse_order('created_at desc  Nulls   Last '));
+    }
+
+    public function test_gh_37_reverse_order_keeps_comments_after_the_direction()
+    {
+        $this->assert_equals('id ASC /* note */', SQLBuilder::reverse_order('id desc /* note */'));
+        $this->assert_equals('id ASC -- note', SQLBuilder::reverse_order('id desc -- note'));
+        $this->assert_equals('id ASC # note', SQLBuilder::reverse_order('id desc # note'));
+        $this->assert_equals("id DESC -- a\n/* b */ ", SQLBuilder::reverse_order("id asc -- a\n/* b */ "));
+        $this->assert_equals('id DESC nulls last /* x */', SQLBuilder::reverse_order('id asc nulls last /* x */'));
+        $this->assert_equals('id ASC /* c */ nulls last', SQLBuilder::reverse_order('id desc /* c */ nulls last'));
+        $this->assert_equals('id ASC nulls/**/first', SQLBuilder::reverse_order('id desc nulls/**/first'));
+        $this->assert_equals("id ASC -- c\nnulls last", SQLBuilder::reverse_order("id desc -- c\nnulls last"));
+        $this->assert_equals('description ASC /* x */, id DESC', SQLBuilder::reverse_order('description desc /* x */, id'));
+        // literals and comments are not parsed: these are flipped exactly as on master
+        $this->assert_equals('x -- sort ASC', SQLBuilder::reverse_order('x -- sort desc'));
+        $this->assert_equals("name = 'x ASC -- y'", SQLBuilder::reverse_order("name = 'x desc -- y'"));
+    }
+
+    public function test_gh_37_reverse_order_treats_hash_as_a_comment_only_after_the_direction()
+    {
+        // '#' is an operator in Postgres (bitwise XOR): an expression containing it is left alone
+        $this->assert_equals('a # b ASC', SQLBuilder::reverse_order('a # b desc'));
+        $this->assert_equals('flags # 4 DESC', SQLBuilder::reverse_order('flags # 4'));
+        $this->assert_equals('flags # description DESC', SQLBuilder::reverse_order('flags # description'));
+    }
+
+    public function test_gh_37_reverse_order_does_not_flip_a_direction_inside_a_nested_expression_or_comment()
+    {
+        $this->assert_equals('FIRST_VALUE(x) OVER (ORDER BY y desc) DESC', SQLBuilder::reverse_order('FIRST_VALUE(x) OVER (ORDER BY y desc)'));
+        $this->assert_equals('(SELECT MAX(y) FROM t ORDER BY y desc LIMIT 1) DESC', SQLBuilder::reverse_order('(SELECT MAX(y) FROM t ORDER BY y desc LIMIT 1)'));
+        $this->assert_equals('x /* sort desc */ DESC', SQLBuilder::reverse_order('x /* sort desc */'));
+        $this->assert_equals('id ASC /* desc */', SQLBuilder::reverse_order('id desc /* desc */'));
+    }
+
+    public function test_gh_37_reverse_order_does_not_rewrite_string_literals()
+    {
+        $this->assert_equals(
+            "MATCH(a) AGAINST('foo desc' IN BOOLEAN MODE) ASC",
+            SQLBuilder::reverse_order("MATCH(a) AGAINST('foo desc' IN BOOLEAN MODE) desc"),
+        );
+        $this->assert_equals(
+            "CASE WHEN dir = 'desc' THEN a END ASC",
+            SQLBuilder::reverse_order("CASE WHEN dir = 'desc' THEN a END desc"),
+        );
+    }
+
     public function test_create_conditions_from_underscored_string()
     {
         $this->assert_conditions('id=? AND name=? OR z=?', [1,'Tito','X'], 'id_and_name_or_z');

@@ -64,6 +64,21 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_true(count($authors) >= 3);
     }
 
+    // GH #52: a condition that BEGINS with a string literal, combined with an
+    // array bind (the Expressions IN(?) expansion path). The quote at position
+    // 0 used to be missed, so the literal's '?' was expanded instead of the
+    // real IN(?) marker and the query failed at bind time.
+    public function test_find_all_with_leading_string_literal_and_array_bind()
+    {
+        $authors = Author::find('all', ['conditions' => ["'Tito' = name AND author_id IN(?)", [1, 2]]]);
+        $this->assert_equals([1], array_map(fn($a) => $a->author_id, $authors));
+        $this->assert_sql_has("WHERE 'Tito' = name AND author_id IN(?,?)", Author::table()->last_sql);
+
+        $authors = Author::find('all', ['conditions' => ["'a?b' <> name AND author_id IN(?)", [1, 2]], 'order' => 'author_id asc']);
+        $this->assert_equals([1, 2], array_map(fn($a) => $a->author_id, $authors));
+        $this->assert_sql_has("WHERE 'a?b' <> name AND author_id IN(?,?)", Author::table()->last_sql);
+    }
+
     public function test_find_all_with_no_bind_values()
     {
         $authors = Author::find('all', ['conditions' => ['author_id IN(1,2,3)']]);
@@ -231,6 +246,17 @@ class ActiveRecordFindTest extends DatabaseTest
         $author = Author::find('last', ['conditions' => 'author_id IN(1,2,3,4)']);
         $this->assert_equals(4, $author->author_id);
         $this->assert_equals('Uncle Bob', $author->name);
+    }
+
+    public function test_gh_37_last_with_order_on_column_containing_desc()
+    {
+        // reverse_order() used to turn 'description desc' into 'ASCription ASC' (unknown column)
+        $order = 'description desc, id desc';
+        $all = Event::all(['order' => $order]);
+        $last = Event::last(['order' => $order]);
+
+        $this->assert_not_null($last);
+        $this->assert_equals(end($all)->id, $last->id);
     }
 
     public function test_limit_before_order()

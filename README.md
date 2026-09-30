@@ -228,7 +228,7 @@ php examples/simple/simple.php
 | Example | Demonstrates |
 |---|---|
 | [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete) and convention overrides (`$table_name`, `$primary_key`) |
-| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `find_by_sql`, static scopes |
+| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes |
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to`, `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |

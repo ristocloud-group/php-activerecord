@@ -714,6 +714,40 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals(1, count($venues[0]->events));
     }
 
+    // GH #52: a positional relationship condition that BEGINS with a string
+    // literal. Eager include over >= 2 owners merges the FK values as a nested
+    // array (Utils::add_condition), which routes the fragment through the
+    // Expressions parser — where the quote at position 0 used to be missed.
+    public function test_gh52_eager_loading_with_leading_string_literal_condition()
+    {
+        Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ["'Yeah Yeah Yeahs' = title"]]];
+        $venues = Venue::find([2, 6], ['include' => 'events']);
+
+        $this->assert_sql_has("WHERE 'Yeah Yeah Yeahs' = title AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+        $this->assert_equals(['Yeah Yeah Yeahs'], array_map(fn($e) => $e->title, $venues[0]->events));
+        $this->assert_equals([], $venues[1]->events);
+    }
+
+    public function test_gh52_eager_loading_with_leading_string_literal_condition_holding_a_marker()
+    {
+        Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ["'a?b' <> title"]]];
+        $venues = Venue::find([2, 6], ['include' => 'events']);
+
+        $this->assert_sql_has("WHERE 'a?b' <> title AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+        $this->assert_equals([2, 3], array_map(fn($e) => $e->id, $venues[0]->events));
+        $this->assert_equals([5], array_map(fn($e) => $e->id, $venues[1]->events));
+    }
+
+    // BC guard for GH #52: the lazy load (a single FK value) already worked
+    // and must keep rendering the same fragment.
+    public function test_gh52_lazy_loading_with_leading_string_literal_condition()
+    {
+        Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ["'a?b' <> title"]]];
+
+        $this->assert_equals([2, 3], array_map(fn($e) => $e->id, Venue::find(2)->events));
+        $this->assert_sql_has("WHERE 'a?b' <> title AND venue_id=? ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+    }
+
     public function test_eager_loading_has_many_x()
     {
         $venues = Venue::find([2, 6], ['include' => 'events']);

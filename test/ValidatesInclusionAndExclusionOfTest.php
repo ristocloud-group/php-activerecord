@@ -153,4 +153,100 @@ class ValidatesInclusionAndExclusionOfTest extends DatabaseTest
         $this->assert_equals('is using a custom message.', $book->errors->on('name'));
     }
 
+    // #60: a null value failing inclusion must not raise a str_replace(null) deprecation.
+    public function test_invalid_inclusion_with_null()
+    {
+        $book = new BookInclusion();
+        $book->name = null;
+        $this->assert_false($book->save());
+        $this->assert_true($book->errors->is_invalid('name'));
+        $this->assert_same('is not included in the list', $book->errors->on('name'));
+    }
+
+    // #60: same for a null value failing exclusion (null listed in `in`).
+    public function test_invalid_exclusion_with_null()
+    {
+        BookExclusion::$validates_exclusion_of[0]['in'] = ['blah', null];
+        $book = new BookExclusion();
+        $book->name = null;
+        $this->assert_false($book->save());
+        $this->assert_true($book->errors->is_invalid('name'));
+        $this->assert_same('is reserved', $book->errors->on('name'));
+    }
+
+    // #60: a `%s` placeholder keeps interpolating a null value as the empty string.
+    public function test_custom_message_placeholder_with_null()
+    {
+        $msg = "value '%s' is not allowed";
+        BookInclusion::$validates_inclusion_of[0]['message'] = $msg;
+        BookExclusion::$validates_exclusion_of[0] = ['name', 'in' => [null], 'message' => $msg];
+
+        $book = new BookInclusion();
+        $book->name = null;
+        $this->assert_false($book->is_valid());
+        $this->assert_same("value '' is not allowed", $book->errors->on('name'));
+
+        $book = new BookExclusion();
+        $book->name = null;
+        $this->assert_false($book->is_valid());
+        $this->assert_same("value '' is not allowed", $book->errors->on('name'));
+    }
+
+    // Pins the `%s` interpolation of non-null values (string, int, Stringable) around the #60 fix.
+    public function test_custom_message_placeholder_with_non_null_values()
+    {
+        $msg = "value '%s' is not allowed";
+        BookInclusion::$validates_inclusion_of[0]['message'] = $msg;
+        BookExclusion::$validates_exclusion_of[0]['message'] = $msg;
+
+        $book = new BookInclusion();
+        $book->name = 'thanker';
+        $this->assert_false($book->is_valid());
+        $this->assert_same("value 'thanker' is not allowed", $book->errors->on('name'));
+
+        $book = new BookExclusion();
+        $book->name = 'bravo';
+        $this->assert_false($book->is_valid());
+        $this->assert_same("value 'bravo' is not allowed", $book->errors->on('name'));
+
+        $book = new BookInclusion();
+        $book->name = new class implements Stringable {
+            public function __toString(): string
+            {
+                return 'stringable';
+            }
+        };
+        $this->assert_false($book->is_valid());
+        $this->assert_same("value 'stringable' is not allowed", $book->errors->on('name'));
+
+        BookInclusion::$validates_inclusion_of[0] = ['secondary_author_id', 'in' => [1, 2], 'message' => $msg];
+        $book = new BookInclusion();
+        $book->secondary_author_id = 5;
+        $this->assert_same(5, $book->secondary_author_id);
+        $this->assert_false($book->is_valid());
+        $this->assert_same("value '5' is not allowed", $book->errors->on('secondary_author_id'));
+    }
+
+    public function test_exclusion_with_array_value()
+    {
+        BookExclusion::$validates_exclusion_of[0] = ['tags', 'in' => ['blah', 'alpha', 'bravo']];
+        $book = new BookExclusion();
+        $book->assign_attribute('tags', ['alpha']);
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_exclusion_with_non_stringable_object_value()
+    {
+        $book = new BookExclusion();
+        $book->name = new stdClass();
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_inclusion_allow_blank_skips_empty_array()
+    {
+        BookInclusion::$validates_inclusion_of[0] = ['tags', 'in' => ['blah'], 'allow_blank' => true];
+        $book = new BookInclusion();
+        $book->assign_attribute('tags', []);
+        $this->assert_true($book->is_valid());
+    }
 };

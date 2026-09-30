@@ -394,4 +394,52 @@ class ExpressionsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals('flag IN(?,?)', $a->to_s());
         $this->assert_equals('flag IN(1,NULL)', $a->to_s(true));
     }
+
+    // GH #52: a quote at position 0 opens a string literal like one anywhere
+    // else. The '?' inside the leading literal is not a bind marker; the real
+    // marker after the closing quote is.
+    public function test_leading_quoted_literal_marker_is_ignored()
+    {
+        $a = new Expressions(null, "'a?b' = name AND id IN(?)", [1, 2]);
+        $this->assert_equals("'a?b' = name AND id IN(?,?)", $a->to_s());
+        $this->assert_equals("'a?b' = name AND id IN(1,2)", $a->to_s(true));
+    }
+
+    // GH #52: no '?' inside the leading literal — the real marker must still
+    // be seen (and expanded) rather than skipped as "inside quotes".
+    public function test_leading_quoted_literal_without_marker_expands_real_marker()
+    {
+        $a = new Expressions(null, "'other' = name AND id IN(?)", [1, 2]);
+        $this->assert_equals("'other' = name AND id IN(?,?)", $a->to_s());
+        $this->assert_equals("'other' = name AND id IN(1,2)", $a->to_s(true));
+    }
+
+    // GH #52: a leading literal holding a '?' and no bind values at all is a
+    // plain fragment — nothing to bind, nothing to throw about.
+    public function test_leading_quoted_literal_with_no_values()
+    {
+        $a = new Expressions(null, "'a?b' = name");
+        $this->assert_equals("'a?b' = name", $a->to_s());
+        $this->assert_equals("'a?b' = name", $a->to_s(true));
+    }
+
+    // GH #52: both escaped-quote forms inside a leading literal keep the
+    // literal open, exactly as they do for a literal later in the fragment.
+    public function test_leading_quoted_literal_with_escaped_quotes()
+    {
+        $a = new Expressions(null, "'it\\'s?' = name AND id=?", 7);
+        $this->assert_equals("'it\\'s?' = name AND id=7", $a->to_s(true));
+
+        $b = new Expressions(null, "'it''s?' = name AND id=?", 7);
+        $this->assert_equals("'it''s?' = name AND id=7", $b->to_s(true));
+    }
+
+    // BC guard for GH #52: with scalar binds and no substitution a leading
+    // literal fragment renders byte-identically (it worked before the fix).
+    public function test_leading_quoted_literal_with_scalar_bind_is_unchanged()
+    {
+        $a = new Expressions(null, "'a?b' = name AND id=?", 7);
+        $this->assert_equals("'a?b' = name AND id=?", $a->to_s());
+        $this->assert_equals([7], $a->values());
+    }
 }
