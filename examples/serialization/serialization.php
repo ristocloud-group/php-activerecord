@@ -51,5 +51,14 @@ out($p->to_xml(['only' => ['name'], 'include' => ['reviews' => ['only' => ['star
 // to_array mirrors the same options; to_xml renders XML.
 $arr = $p->to_array(['only' => ['name', 'price']]);
 out('to_array keys: ' . implode(', ', array_keys($arr)));
+
+// ArraySerializer::$include_root and JsonSerializer::$include_root are
+// independent: to_json() roots on its own flag and leaves to_array() alone.
+// (Before #61 one to_json() call un-rooted every later to_array().)
+ActiveRecord\ArraySerializer::$include_root = true;
+out('to_array rooted: ' . json_encode($p->to_array(['only' => ['name']])));
+out('to_json unrooted: ' . $p->to_json(['only' => ['name']]));
+out('to_array still rooted: ' . json_encode($p->to_array(['only' => ['name']])));
+ActiveRecord\ArraySerializer::$include_root = false;
 out('to_xml except secret_cost:');
 out($p->to_xml(['except' => ['secret_cost']]));
