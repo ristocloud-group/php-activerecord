@@ -648,9 +648,10 @@ class Validations
 
     /**
      * An `[N, N]` within/in range (length exactly N), N a non-negative integer
-     * (int or digit string). Utils::is_a('range') only accepts strictly
-     * ascending ranges and is left unchanged; malformed degenerate ranges
-     * (e.g. `[-1, -1]`, `['a', 'a']`, `[3.0, 3.0]`) keep failing the range check.
+     * (int or canonical digit string, so not '00'). Utils::is_a('range') only
+     * accepts strictly ascending ranges and is left unchanged; malformed
+     * degenerate ranges (e.g. `[-1, -1]`, `['a', 'a']`, `[3.0, 3.0]`, `['00', '00']`)
+     * keep failing the range check.
      */
     private function is_degenerate_length_range(mixed $range): bool
     {
@@ -659,7 +660,7 @@ class Validations
         }
 
         foreach ([$range[0], $range[1]] as $bound) {
-            if (!((is_int($bound) && $bound >= 0) || (is_string($bound) && ctype_digit($bound)))) {
+            if (!((is_int($bound) && $bound >= 0) || (is_string($bound) && ctype_digit($bound) && (string) (int) $bound === $bound))) {
                 return false;
             }
         }
