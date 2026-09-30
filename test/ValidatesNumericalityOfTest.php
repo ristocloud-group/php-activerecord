@@ -157,6 +157,35 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         $this->assert_invalid([2, 4], 'must be odd');
     }
 
+    public function test_odd_truncates_non_integer_values()
+    {
+        // Rails semantics (value.to_i.odd?): a non-integer is truncated toward
+        // zero before the parity check, without PHP's implicit float-to-int
+        // deprecation (#59).
+        BookNumericality::$validates_numericality_of[0] = ['numeric_test', 'odd' => true];
+
+        $this->assert_valid(['3.5', '-3.5']);
+        $this->assert_invalid(['4.5'], 'must be odd');
+    }
+
+    public function test_even_truncates_non_integer_values()
+    {
+        BookNumericality::$validates_numericality_of[0] = ['numeric_test', 'even' => true];
+
+        $this->assert_valid(['4.5']);
+        $this->assert_invalid(['3.5'], 'must be even');
+    }
+
+    public function test_odd_truncates_non_integer_decimal_column_value()
+    {
+        // A DECIMAL column hands the validator a native float.
+        BookNumericality::$validates_numericality_of[0] = ['special', 'odd' => true];
+
+        $book = new BookNumericality(['special' => 3.5]);
+        $this->assert_same(3.5, $book->special);
+        $this->assert_true($book->is_valid());
+    }
+
     public function test_custom_message()
     {
         BookNumericality::$validates_numericality_of = [

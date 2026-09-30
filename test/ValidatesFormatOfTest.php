@@ -105,4 +105,32 @@ class ValidatesFormatOfTest extends DatabaseTest
         $book->save();
         $this->assert_equals('is using a custom message.', $book->errors->on('name'));
     }
+
+    public function test_allow_blank_skips_empty_array()
+    {
+        BookFormat::$validates_format_of[0] = ['tags', 'with' => '/x/', 'allow_blank' => true];
+        $book = new BookFormat();
+        $book->assign_attribute('tags', []);
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_value_is_not_blank_checked_without_allow_blank()
+    {
+        BookFormat::$validates_format_of[0]['with'] = '/^x$/';
+        $name = new class {
+            public int $to_string_calls = 0;
+
+            public function __toString(): string
+            {
+                ++$this->to_string_calls;
+
+                return 'x';
+            }
+        };
+        $book = new BookFormat();
+        $book->name = $name;
+        $this->assert_true($book->is_valid());
+        // only preg_match() reads the value: no blank check without allow_blank
+        $this->assert_equals(1, $name->to_string_calls);
+    }
 };

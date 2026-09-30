@@ -299,7 +299,8 @@ class Validations
             }
 
             if (('inclusion' == $type && !in_array($var, $enum)) || ('exclusion' == $type && in_array($var, $enum))) {
-                $message = str_replace('%s', $var, $options['message']);
+                // null interpolates as '' (as before), without str_replace()'s null deprecation (#60)
+                $message = str_replace('%s', $var ?? '', $options['message']);
                 $this->record->add($attribute, $message);
             }
         }
@@ -649,7 +650,7 @@ class Validations
      */
     private function is_blank_with_option(mixed $var, array &$options): bool
     {
-        return (Utils::is_blank($var) && (isset($options['allow_blank']) && $options['allow_blank']));
+        return (isset($options['allow_blank']) && $options['allow_blank'] && Utils::is_blank($var));
     }
 }
 

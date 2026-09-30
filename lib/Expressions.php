@@ -164,7 +164,8 @@ class Expressions
 
                     $ch = $this->substitute($values, $substitute, $j++);
                 }
-            } elseif ($ch == '\'' && $i > 0 && $expressions[$i - 1] != '\\') {
+            } elseif ($ch == '\'' && ($i === 0 || $expressions[$i - 1] != '\\')) {
+                // a quote at index 0 opens a literal too; only a preceding backslash escapes it
                 ++$quotes;
             }
 

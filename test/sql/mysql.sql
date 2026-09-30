@@ -130,3 +130,11 @@ CREATE TABLE news_read_receipts (
   `story_id` INT NOT NULL,
   PRIMARY KEY(`user_id`, `story_id`)
 ) ENGINE=InnoDB;
+
+-- children of a composite-key has_many: (author_ref, parent_ref) -> authors (author_id, parent_author_id)
+CREATE TABLE composite_items (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `author_ref` INT,
+  `parent_ref` INT,
+  `title` VARCHAR(20)
+) ENGINE=InnoDB;

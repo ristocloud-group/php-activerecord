@@ -132,6 +132,16 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_same(false, AR\Utils::is_odd(0));
     }
 
+    public function test_is_odd_truncates_non_integer_floats()
+    {
+        // Truncation toward zero (Rails' to_i), with no implicit float-to-int
+        // deprecation (#59).
+        $this->assert_same(true, AR\Utils::is_odd(3.5));
+        $this->assert_same(false, AR\Utils::is_odd(4.5));
+        $this->assert_same(true, AR\Utils::is_odd(-3.5));
+        $this->assert_same(false, AR\Utils::is_odd(-0.5));
+    }
+
     public function test_wrap_strings_in_arrays()
     {
         $x = ['1',['2']];
@@ -184,6 +194,47 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_false(AR\Utils::is_blank('x'));
         // "0" is a real value, not blank
         $this->assert_false(AR\Utils::is_blank('0'));
+    }
+
+    public function test_is_blank_scalars_use_their_string_form()
+    {
+        $this->assert_false(AR\Utils::is_blank(0));
+        $this->assert_false(AR\Utils::is_blank(0.0));
+        $this->assert_false(AR\Utils::is_blank(1.5));
+        $this->assert_false(AR\Utils::is_blank(true));
+        // (string) false === ''
+        $this->assert_true(AR\Utils::is_blank(false));
+    }
+
+    public function test_is_blank_stringable_uses_its_string_form()
+    {
+        $this->assert_true(AR\Utils::is_blank(new class {
+            public function __toString(): string
+            {
+                return '';
+            }
+        }));
+        $this->assert_false(AR\Utils::is_blank(new AR\DateTime('2024-01-02 03:04:05')));
+    }
+
+    public function test_is_blank_array()
+    {
+        $this->assert_true(AR\Utils::is_blank([]));
+        $this->assert_false(AR\Utils::is_blank(['a']));
+        $this->assert_false(AR\Utils::is_blank(['']));
+    }
+
+    public function test_is_blank_non_stringable_object_is_not_blank()
+    {
+        $this->assert_false(AR\Utils::is_blank(new stdClass()));
+    }
+
+    public function test_is_blank_resource_is_not_blank()
+    {
+        $handle = fopen('php://memory', 'r');
+        $this->assert_false(AR\Utils::is_blank($handle));
+        fclose($handle);
+        $this->assert_false(AR\Utils::is_blank($handle));
     }
 
     public function test_pluralize_if()

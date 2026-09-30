@@ -129,3 +129,11 @@ CREATE TABLE news_read_receipts (
   story_id INTEGER NOT NULL,
   PRIMARY KEY(user_id, story_id)
 );
+
+-- children of a composite-key has_many: (author_ref, parent_ref) -> authors (author_id, parent_author_id)
+CREATE TABLE composite_items (
+  id INTEGER NOT NULL PRIMARY KEY,
+  author_ref INTEGER,
+  parent_ref INTEGER,
+  title VARCHAR(20)
+);
