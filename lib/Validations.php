@@ -517,7 +517,7 @@ class Validations
             if ($range_options[0] == 'within' || $range_options[0] == 'in') {
                 $range = $options[$range_options[0]];
 
-                if (!(Utils::is_a('range', $range))) {
+                if (!(Utils::is_a('range', $range) || $this->is_degenerate_length_range($range))) {
                     throw new ValidationsArgumentError("{$range_options[0]} must be an array composing a range of numbers with key [0] being less than key [1]");
                 }
                 $range_options = ['minimum', 'maximum'];
@@ -527,7 +527,7 @@ class Validations
             foreach ($range_options as $range_option) {
                 $option = $attr[$range_option];
 
-                if ((int) $option <= 0) {
+                if ((int) $option <= 0 && !$this->is_zero_length_bound($option)) {
                     throw new ValidationsArgumentError("$range_option value cannot use a signed integer.");
                 }
 
@@ -635,6 +635,36 @@ class Validations
                 $this->record->add($add_record, $options['message']);
             }
         }
+    }
+
+    /**
+     * A length bound of exactly zero (int 0 or the string '0'). Anything else
+     * that casts to 0 (null, '', 'abc', 0.0, ...) stays an invalid bound.
+     */
+    private function is_zero_length_bound(mixed $option): bool
+    {
+        return 0 === $option || '0' === $option;
+    }
+
+    /**
+     * An `[N, N]` within/in range (length exactly N), N a non-negative integer
+     * (int or digit string). Utils::is_a('range') only accepts strictly
+     * ascending ranges and is left unchanged; malformed degenerate ranges
+     * (e.g. `[-1, -1]`, `['a', 'a']`, `[3.0, 3.0]`) keep failing the range check.
+     */
+    private function is_degenerate_length_range(mixed $range): bool
+    {
+        if (!is_array($range) || !isset($range[0], $range[1])) {
+            return false;
+        }
+
+        foreach ([$range[0], $range[1]] as $bound) {
+            if (!((is_int($bound) && $bound >= 0) || (is_string($bound) && ctype_digit($bound)))) {
+                return false;
+            }
+        }
+
+        return (int) $range[0] === (int) $range[1];
     }
 
     /**
