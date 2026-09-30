@@ -151,10 +151,12 @@ cache it so that it does not make multiple calls to the database for a single sc
 
 ### Optional: strict mass assignment ###
 
-By default, mass assignment (`new Model($attributes)`, `set_attributes()`, `update_attributes()`, `create()`) silently
-drops every attribute blocked by a model's `$attr_accessible` / `$attr_protected` and logs a warning. Turn on strict mode
-to throw an `ActiveRecord\MassAssignmentException` instead — raised before anything is assigned, its message lists every
-blocked attribute. It is global and off by default; assigning a single attribute (`$model->name = …`) is not affected.
+By default, mass assignment (`new Model($attributes)`, `set_attributes()`, `update_attributes()`, `create()`) drops
+every attribute blocked by a model's `$attr_accessible` / `$attr_protected` and, if a logger is configured, logs a
+warning. Turn on strict mode to throw an `ActiveRecord\MassAssignmentException` instead — raised before anything is
+assigned, its message lists every blocked attribute. It is global and off by default; assigning a single attribute
+(`$model->name = …`) is not affected. The foreign key that association builders (`build_*` / `create_*`) inject is
+subject to the same guard, so list it in the associated model's `$attr_accessible`.
 
 ```php
 ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {

@@ -85,6 +85,51 @@ class StrictMassAssignmentTest extends DatabaseTest
         $this->assert_same("PklessItemAttrAccessible: mass assignment of attribute '' blocked by attr_accessible (passed as 'id')", $e->getMessage());
     }
 
+    public function test_create_throws_before_inserting()
+    {
+        $count = BookAttrProtected::count();
+
+        $e = $this->expect_blocked(fn() => BookAttrProtected::create(['author_id' => 1, 'name' => 'sneaky']));
+
+        $this->assert_same("BookAttrProtected: mass assignment of attribute 'name' blocked by attr_protected", $e->getMessage());
+        $this->assert_equals($count, BookAttrProtected::count());
+    }
+
+    /*
+     * Association builders inject the foreign key into a guarded mass assignment
+     * (HasMany::inject_foreign_key_for_new_association()), so an $attr_accessible
+     * that omits the fk drops it with strict off (pre-existing: the record gets a
+     * null fk) and throws with strict on. Pinned as is; list the fk in
+     * $attr_accessible to allow it.
+     */
+    public function test_association_builder_drops_injected_foreign_key_when_strict_is_off()
+    {
+        Config::instance()->set_strict_mass_assignment(false);
+        $author = AuthorWithGuardedBooks::find(1);
+
+        $built = $author->build_books(['name' => 'built']);
+        $this->assert_same('built', $built->name);
+        $this->assert_null($built->author_id);
+
+        $created = $author->create_books(['name' => 'created']);
+        $this->assert_false($created->is_new_record());
+        $this->assert_null(BookAttrAccessibleNameOnly::find($created->book_id)->author_id);
+    }
+
+    public function test_association_builder_throws_for_injected_foreign_key_when_strict_is_on()
+    {
+        $author = AuthorWithGuardedBooks::find(1);
+        $count = BookAttrAccessibleNameOnly::count();
+        $message = "BookAttrAccessibleNameOnly: mass assignment of attribute 'author_id' blocked by attr_accessible";
+
+        $e = $this->expect_blocked(fn() => $author->build_books(['name' => 'built']));
+        $this->assert_same($message, $e->getMessage());
+
+        $e = $this->expect_blocked(fn() => $author->create_books(['name' => 'created']));
+        $this->assert_same($message, $e->getMessage());
+        $this->assert_equals($count, BookAttrAccessibleNameOnly::count());
+    }
+
     public function test_mix_of_allowed_and_blocked_keys_lists_only_blocked_ones()
     {
         $e = $this->expect_blocked(fn() => new BookAttrProtected([

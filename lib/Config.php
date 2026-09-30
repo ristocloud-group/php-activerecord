@@ -205,10 +205,12 @@ class Config extends Singleton
      *
      * When off, attributes blocked by a model's attr_accessible/attr_protected
      * during mass assignment (new Model($attributes), set_attributes(),
-     * update_attributes(), create()) are dropped and a warning is logged. When on,
-     * a {@link MassAssignmentException} listing every blocked attribute is thrown
-     * instead, before any attribute is assigned. Assigning a single attribute
-     * ($model->name = ...) is never affected.
+     * update_attributes(), create()) are dropped and, if a logger is configured, a
+     * warning is logged. When on, a {@link MassAssignmentException} listing every
+     * blocked attribute is thrown instead, before any attribute is assigned.
+     * Assigning a single attribute ($model->name = ...) is never affected. The
+     * foreign key injected by association builders (build_* / create_*) is subject
+     * to the same guard: list it in the associated model's attr_accessible.
      *
      * <code>
      * ActiveRecord\Config::initialize(function($cfg) {
