@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
-foreach (['Author', 'Profile', 'Post', 'Comment', 'Tag', 'Tagging'] as $m) {
+foreach (['Author', 'Profile', 'Post', 'Comment', 'Tag', 'Tagging', 'Version'] as $m) {
     require_once __DIR__ . '/models/' . $m . '.php';
 }
 
@@ -76,6 +76,20 @@ try {
 
 // has_many
 out('post count: ' . count($ada->posts));
+
+// has_many with composite keys + declared conditions (Post::own_versions): a row
+// must match BOTH (post_id, author_id) = the post's (id, author_id) AND the
+// condition, one bound value per `?`. (Before the fix this lazy load threw
+// ExpressionsException: both key values were bound to the first key marker.)
+/** @var Post $p2 */
+$p2 = Post::first(['conditions' => ['title = ?', 'On Notes']]);
+Version::create(['post_id' => $p1->id, 'author_id' => $ada->id, 'body' => 'v1', 'status' => 'published']);
+Version::create(['post_id' => $p1->id, 'author_id' => $ada->id, 'body' => 'v2', 'status' => 'draft']);       // fails the condition
+Version::create(['post_id' => $p1->id, 'author_id' => null, 'body' => 'guest', 'status' => 'published']);    // other author_id
+Version::create(['post_id' => $p2->id, 'author_id' => $ada->id, 'body' => 'notes', 'status' => 'published']); // other post_id
+$own_versions = $p1->own_versions;
+out('own published versions: ' . implode(', ', ActiveRecord\collect($own_versions, 'body')));
+out('  SQL: ' . Version::table()->last_sql);
 
 // Note: this fork's has_many :through only supports the join-table shape (see
 // tags/taggings below) -- not a plain one-to-many chain like "comments through

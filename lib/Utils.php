@@ -278,12 +278,16 @@ class Utils
     }
 
     /**
+     * A non-integer is truncated toward zero first, like Rails' `to_i.odd?`
+     * (so 3.5 is odd). The cast is explicit to avoid PHP 8.1+'s implicit
+     * float-to-int deprecation.
+     *
      * @param int|float $number
      * @return bool
      */
     public static function is_odd($number)
     {
-        return ($number & 1) === 1;
+        return ((int) $number & 1) === 1;
     }
 
     /**
@@ -305,12 +309,28 @@ class Utils
     }
 
     /**
+     * Blank means null, an empty string or anything whose string form is empty
+     * (false, a Stringable returning ''), or an empty array. Non-empty arrays,
+     * other objects and resources are never blank.
+     *
      * @param mixed $var
      * @return bool
      */
     public static function is_blank($var)
     {
-        return is_null($var) || 0 === strlen($var);
+        if (is_null($var)) {
+            return true;
+        }
+
+        if (is_array($var)) {
+            return [] === $var;
+        }
+
+        if (is_scalar($var) || $var instanceof \Stringable) {
+            return '' === (string) $var;
+        }
+
+        return false;
     }
 
     /** @var array<string, string> */

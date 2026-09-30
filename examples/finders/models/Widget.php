@@ -6,6 +6,7 @@
  * @property string $category
  * @property float  $price
  * @property int    $in_stock
+ * @property string $description
  *
  * @method static Widget|null        find_by_name(string $name)
  * @method static array<int, Widget> find_all_by_category(string $category)

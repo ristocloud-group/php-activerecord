@@ -475,9 +475,27 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $options_conditions = [];
         }
 
-        $result = Utils::add_condition($options_conditions, $conditions);
-        /** @var array<int, mixed>|null $result */
-        return $result;
+        if ([] === $options_conditions || [] === $conditions) {
+            $result = Utils::add_condition($options_conditions, $conditions);
+            /** @var array<int, mixed>|null $result */
+            return $result;
+        }
+
+        # Merging into a declared condition: add_condition() would append ALL the
+        # key values as ONE nested array, so with composite keys the first key
+        # marker received every value (expanded to "?,?") and the next marker none
+        # (ExpressionsException). Append one bind per key marker instead, each in
+        # the one-element-array shape add_condition() gives a single key: the
+        # single-key result (and the Expressions path SQLBuilder takes for it) is
+        # unchanged, composite keys get one value per placeholder.
+        $options_conditions[0] .= ' AND ' . array_shift($conditions);
+
+        foreach ($conditions as $value) {
+            $options_conditions[] = array_flatten([$value]);
+        }
+
+        /** @var array<int, mixed> $options_conditions */
+        return $options_conditions;
     }
 
     /**
