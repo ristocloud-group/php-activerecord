@@ -716,7 +716,10 @@ class Table
         }
 
         if (!($this->sequence = $this->class->getStaticPropertyValue('sequence'))) {
-            $this->sequence = $this->connection()->get_sequence_name($this->table, $this->pk[0]);
+            // a table without a primary key has no pk column to name a sequence after
+            $this->sequence = isset($this->pk[0])
+                ? $this->connection()->get_sequence_name($this->table, $this->pk[0])
+                : null;
         }
     }
 

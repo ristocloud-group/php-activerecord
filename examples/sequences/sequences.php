@@ -20,6 +20,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Note.php';
 require_once __DIR__ . '/models/Event.php';
+require_once __DIR__ . '/models/EventLog.php';
 require_once __DIR__ . '/models/Ticket.php';
 
 $db = __DIR__ . '/sequences.db';
@@ -85,8 +86,8 @@ foreach ($statements as $statement) {
 out('');
 out('supports_sequences():              ' . var_export($pg->supports_sequences(), true));
 
-// Convention: a serial pk owns {table}_{pk}_seq, introspected automatically —
-// Event declares nothing sequence-related.
+// Convention: a serial pk owns {table}_{pk}_seq, and the library derives that
+// name from the table and pk — Event declares nothing sequence-related.
 out("get_sequence_name('events', 'id'): " . $pg->get_sequence_name('events', 'id'));
 out('Event::table()->sequence:          ' . (Event::table()->sequence ?? '(null)'));
 out("next_sequence_value(...):          " . ($pg->next_sequence_value('events_id_seq') ?? '(null)'));
@@ -96,6 +97,16 @@ out("next_sequence_value(...):          " . ($pg->next_sequence_value('events_id
 $event = Event::create(['title' => 'PHP Meetup']);
 out('created event id:                  ' . $event->id);
 out('  SQL: ' . Event::table()->last_sql);
+
+// No primary key, no convention sequence: event_logs has no pk column to name
+// a sequence after, so the model loads cleanly and Table::$sequence stays
+// null. (Before this was fixed, loading it raised "Undefined array key 0" and
+// invented a bogus "event_logs__seq".)
+/** @var EventLog $log */
+$log = EventLog::first();
+out('EventLog::table()->pk:             [' . implode(', ', EventLog::table()->pk) . ']');
+out('EventLog::table()->sequence:       ' . (EventLog::table()->sequence ?? '(null)'));
+out('EventLog::first()->message:        ' . $log->message);
 
 // Non-convention name: Ticket declares static $sequence = 'ticket_numbers'
 // (created with START 1000), so ids begin at 1000.

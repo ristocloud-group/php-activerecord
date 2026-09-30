@@ -4,6 +4,12 @@ use ActiveRecord\Column;
 
 require_once __DIR__ . '/../lib/adapters/PgsqlAdapter.php';
 
+class RmBldgExplicitSequence extends ActiveRecord\Model
+{
+    public static $table = 'rm-bldg';
+    public static $sequence = 'rm-bldg_explicit_seq';
+}
+
 class PgsqlAdapterTest extends AdapterTest
 {
     public function set_up($connection_name = null)
@@ -54,6 +60,23 @@ class PgsqlAdapterTest extends AdapterTest
         // native bools, not survive as (truthy) strings (GH-30)
         $this->assert_same(true, $columns['is_available']->default);
         $this->assert_same(false, $columns['is_retired']->default);
+    }
+
+    public function test_table_without_primary_key_infers_no_sequence()
+    {
+        // rm-bldg has no primary key, so there is no pk column to derive a
+        // sequence name from: loading its table must not read a missing
+        // $pk[0] (E_WARNING "Undefined array key 0") nor invent "rm-bldg__seq"
+        $table = RmBldg::table();
+
+        $this->assert_same([], $table->pk);
+        $this->assert_null($table->sequence);
+        $this->assert_equals('name', RmBldg::first()->rm_name);
+    }
+
+    public function test_table_without_primary_key_keeps_declared_sequence()
+    {
+        $this->assert_equals(RmBldgExplicitSequence::$sequence, RmBldgExplicitSequence::table()->sequence);
     }
 
     public function test_max_bind_params_default()
