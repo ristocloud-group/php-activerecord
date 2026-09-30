@@ -349,7 +349,9 @@ class Validations
 
             $numericalityOptions = array_intersect_key(self::$ALL_NUMERICALITY_CHECKS, $options);
 
-            if ($this->is_null_with_option($var, $options)) {
+            // allow_blank is checked first so that, without it, Utils::is_blank() never
+            // runs on the value (it rejects non-scalars) and the result is unchanged (#50)
+            if ($this->is_null_with_option($var, $options) || (!empty($options['allow_blank']) && $this->is_blank_with_option($var, $options))) {
                 continue;
             }
 
