@@ -20,6 +20,16 @@ function out(string $s): void
     echo $s . "\n";
 }
 
+// An optional numeric field: allow_blank skips a blank value ('' or null); anything else is
+// still validated. On a TEXT column '' reaches the validator as-is (an INTEGER column casts
+// it to 0). Before #50 numericality ignored allow_blank and rejected '' as "is not a number".
+require_once __DIR__ . '/models/Parcel.php';
+foreach (['', null, '2.5', '0', 'heavy'] as $weight) {
+    $parcel = new Parcel(['weight_kg' => $weight]);
+    out('weight_kg ' . var_export($weight, true) . ' valid? '
+        . ($parcel->is_valid() ? 'yes' : 'no (' . implode('; ', $parcel->errors->full_messages()) . ')'));
+}
+
 // A valid record saves.
 $ok = new User(['name' => 'Ada', 'email' => 'ada@example.com', 'age' => 36, 'role' => 'member']);
 out('valid saved? ' . ($ok->save() ? 'yes' : 'no'));
@@ -74,3 +84,17 @@ $dup = new User(['name' => 'admin', 'email' => 'taken@example.com', 'age' => 20,
 $dup->save();
 out('errors on name: ' . implode(', ', (array) ($dup->errors->on('name') ?? [])));
 out('errors on email: ' . implode(', ', (array) ($dup->errors->on('email') ?? [])));
+
+// Length ranges with a zero or an exact bound: 'within' => [0, N] makes a field
+// optional with a maximum length, [N, N] requires exactly N characters.
+// (Before #56 both threw ValidationsArgumentError instead of validating.)
+require_once __DIR__ . '/models/LengthRangeUser.php';
+foreach ([['ADA', ''], ['ADA', 'member'], ['AD', 'a-very-long-role']] as [$name, $role]) {
+    $u = new LengthRangeUser(['name' => $name, 'role' => $role]);
+    out(sprintf(
+        'length name=%s role=%s: %s',
+        var_export($name, true),
+        var_export($role, true),
+        $u->is_valid() ? 'valid' : implode('; ', $u->errors->full_messages()),
+    ));
+}

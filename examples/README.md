@@ -12,7 +12,7 @@ php examples/validations/validations.php
 | Example | Demonstrates |
 |---|---|
 | [`validations/`](validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object (`full_messages()`, `on()`), `is_valid()` |
-| [`relationships/`](relationships/) | `belongs_to`, `has_many`, `has_one`, `has_many … through` (incl. many-to-many), eager `include`, `create_*` builders, composite-key `has_many` (`foreign_key`/`primary_key` lists) with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner |
+| [`relationships/`](relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options and the unknown-option error), `has_many`, `has_one`, `has_many … through` (incl. many-to-many), eager `include`, `create_*` builders, composite-key `has_many` (`foreign_key`/`primary_key` lists) with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner |
 | [`callbacks/`](callbacks/) | Lifecycle hooks (`before_validation`, `before_save`, `after_create`, `before_update`, `before_destroy`) and halting a save |
 | [`attributes/`](attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible`, `$delegate`, dirty tracking (`is_dirty`, `dirty_attributes`) |
 | [`serialization/`](serialization/) | `to_json` / `to_xml` / `to_array` with `only` / `except` / `methods` / `include` |
@@ -21,4 +21,4 @@ php examples/validations/validations.php
 | [`simple/`](simple/) | The minimal model (`class Book extends Model {}`) and convention overrides (`$table_name`, `$primary_key`) |
 | [`orders/`](orders/) | A fuller app: `$validates_*`, a `before_validation_on_create` callback (applies tax), `belongs_to`/`has_many`, `has_many … through` with `select`/`conditions`, dynamic finders |
 | [`upsert/`](upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and automatically-managed timestamps |
-| [`sequences/`](sequences/) | Primary-key sequences: the Postgres `{table}_{pk}_seq` convention, explicit `static $sequence`, `supports_sequences()`, and why the declaration is harmlessly ignored on MySQL/SQLite. The Postgres half runs only when `PHPAR_PGSQL` points at a reachable server (this repo's Docker setup does) and is skipped otherwise |
+| [`sequences/`](sequences/) | Primary-key sequences: the Postgres `{table}_{pk}_seq` convention, no sequence for a table without a primary key, explicit `static $sequence`, `supports_sequences()`, and why the declaration is harmlessly ignored on MySQL/SQLite. The Postgres half runs only when `PHPAR_PGSQL` points at a reachable server (this repo's Docker setup does) and is skipped otherwise |

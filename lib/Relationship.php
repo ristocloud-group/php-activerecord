@@ -53,6 +53,11 @@ interface InterfaceRelationship
  *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
  *     through?: string, source?: string
  * }
+ * @phpstan-type BelongsToRelationship array{
+ *     0: string, class_name?: string, class?: string, namespace?: string,
+ *     foreign_key?: string|list<string>,
+ *     conditions?: mixed, select?: string, readonly?: bool
+ * }
  */
 abstract class AbstractRelationship implements InterfaceRelationship
 {
@@ -339,7 +344,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     protected function merge_association_options($options)
     {
-        $available_options = array_merge(self::$valid_association_options, static::$valid_association_options);
+        // BelongsTo does not redeclare the list (static:: is self::): keep each option once
+        $available_options = array_unique(array_merge(self::$valid_association_options, static::$valid_association_options));
 
         foreach ($options as $key => $ignored) {
             if (is_int($key)) {
@@ -956,7 +962,7 @@ class HasAndBelongsToMany extends AbstractRelationship
  *
  * class Person extends ActiveRecord\Model {
  *   static $belongs_to = array(
- *     array('school', 'primary_key' => 'school_id')
+ *     array('school', 'foreign_key' => 'school_id')
  *   );
  * }
  * </code>

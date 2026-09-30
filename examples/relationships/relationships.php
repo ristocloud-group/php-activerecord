@@ -39,6 +39,41 @@ Tagging::create(['post_id' => $p1->id, 'tag_id' => $php->id]);
 out('post author: ' . $p1->author->name);
 out('author bio (has_one): ' . $ada->profile->bio);
 
+// belongs_to options. The two models below are declared here to keep this demo
+// self-contained. A non-default association name needs class_name. The foreign
+// key is inferred from the class ("author_id" here); foreign_key states it
+// explicitly, and you need it whenever the column does not follow "<class>_id".
+// belongs_to supports only class_name, class, foreign_key, conditions, select,
+// readonly and namespace.
+/**
+ * @property-read Author $writer
+ */
+class PostWithWriter extends ActiveRecord\Model
+{
+    public static $table_name = 'posts';
+    public static $belongs_to = [['writer', 'class_name' => 'Author', 'foreign_key' => 'author_id']];
+}
+
+/** @var PostWithWriter $post */
+$post = PostWithWriter::find($p1->id);
+out('post writer (class_name + foreign_key): ' . $post->writer->name);
+
+// An unsupported option (here primary_key, which belongs_to does not implement)
+// is rejected when the model's table is loaded, i.e. on the first finder call,
+// with a RelationshipException that lists each valid option once. Before #39 the
+// list was printed twice, and the BelongsTo docblock itself suggested primary_key.
+class PostWithPrimaryKey extends ActiveRecord\Model
+{
+    public static $table_name = 'posts';
+    public static $belongs_to = [['author', 'primary_key' => 'id']];
+}
+
+try {
+    PostWithPrimaryKey::first();
+} catch (ActiveRecord\RelationshipException $e) {
+    out('unsupported belongs_to option: ' . $e->getMessage());
+}
+
 // has_many
 out('post count: ' . count($ada->posts));
 

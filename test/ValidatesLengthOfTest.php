@@ -42,6 +42,141 @@ class ValidatesLengthOfTest extends DatabaseTest
         $this->assert_equals(['Name is too long (maximum is 5 characters)'], $book->errors->full_messages());
     }
 
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function zero_minimum_range_option_provider(): array
+    {
+        return ['within' => ['within'], 'in' => ['in']];
+    }
+
+    #[PHPUnit\Framework\Attributes\DataProvider('zero_minimum_range_option_provider')]
+    public function test_range_with_zero_minimum(string $range_option)
+    {
+        BookLength::$validates_length_of[0][$range_option] = [0, 5];
+
+        $book = new BookLength(['name' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book->name = 'abc';
+        $this->assert_true($book->is_valid());
+
+        $book->name = '12345';
+        $this->assert_true($book->is_valid());
+
+        $book->name = '123456';
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is too long (maximum is 5 characters)'], $book->errors->full_messages());
+    }
+
+    public function test_within_degenerate_range_requires_exact_length()
+    {
+        BookLength::$validates_length_of[0]['within'] = [5, 5];
+
+        $book = new BookLength(['name' => '12345']);
+        $this->assert_true($book->is_valid());
+
+        $book->name = '1234';
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is too short (minimum is 5 characters)'], $book->errors->full_messages());
+
+        $book->name = '123456';
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is too long (maximum is 5 characters)'], $book->errors->full_messages());
+    }
+
+    public function test_within_zero_zero_range_allows_only_empty()
+    {
+        BookLength::$validates_length_of[0]['within'] = [0, 0];
+
+        $book = new BookLength(['name' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book->name = 'a';
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is too long (maximum is 0 characters)'], $book->errors->full_messages());
+    }
+
+    public function test_minimum_zero()
+    {
+        BookLength::$validates_length_of[0]['minimum'] = 0;
+
+        $book = new BookLength(['name' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book->name = 'abc';
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_maximum_zero_allows_only_empty()
+    {
+        BookLength::$validates_length_of[0]['maximum'] = 0;
+
+        $book = new BookLength(['name' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book->name = 'a';
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is too long (maximum is 0 characters)'], $book->errors->full_messages());
+    }
+
+    public function test_is_zero()
+    {
+        BookLength::$validates_length_of[0]['is'] = 0;
+
+        $book = new BookLength(['name' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book->name = 'a';
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is the wrong length (should be 0 characters)'], $book->errors->full_messages());
+    }
+
+    /**
+     * Configurations that are rejected today and must stay rejected with the
+     * same message (negative bounds, descending ranges, non-numeric bounds).
+     *
+     * @return array<string, array{0: string, 1: mixed, 2: string}>
+     */
+    public static function still_invalid_length_option_provider(): array
+    {
+        $range_message = ' must be an array composing a range of numbers with key [0] being less than key [1]';
+
+        return [
+            'within negative minimum'   => ['within', [-1, 3], 'minimum value cannot use a signed integer.'],
+            'within descending'         => ['within', [5, 3], 'within' . $range_message],
+            'in descending'             => ['in', [5, 3], 'in' . $range_message],
+            'within negative degenerate' => ['within', [-1, -1], 'within' . $range_message],
+            'within non-numeric equal'  => ['within', ['a', 'a'], 'within' . $range_message],
+            'within float degenerate'   => ['within', [3.0, 3.0], 'within' . $range_message],
+            'within bool degenerate'    => ['within', [true, true], 'within' . $range_message],
+            'within junk degenerate'    => ['within', ['5abc', '5abc'], 'within' . $range_message],
+            'within padded degenerate'  => ['within', ['00', '00'], 'within' . $range_message],
+            'within mixed zero padded'  => ['within', [0, '00'], 'within' . $range_message],
+            'within non-numeric min'    => ['within', ['a', 5], 'minimum value cannot use a signed integer.'],
+            'minimum negative'          => ['minimum', -1, 'minimum value cannot use a signed integer.'],
+            'maximum non-numeric'       => ['maximum', 'abc', 'maximum value cannot use a signed integer.'],
+            'maximum null'              => ['maximum', null, 'maximum value cannot use a signed integer.'],
+            'is float zero'             => ['is', 0.0, 'is value cannot use a signed integer.'],
+        ];
+    }
+
+    #[PHPUnit\Framework\Attributes\DataProvider('still_invalid_length_option_provider')]
+    public function test_invalid_length_options_still_throw(string $range_option, mixed $value, string $message)
+    {
+        BookLength::$validates_length_of[0][$range_option] = $value;
+
+        $book = new BookLength(['name' => '123']);
+        try {
+            $book->is_valid();
+        } catch (ActiveRecord\ValidationsArgumentError $e) {
+            $this->assert_equals($message, $e->getMessage());
+            return;
+        }
+
+        $this->fail('An expected exception has not be raised.');
+    }
+
     public function test_within_custom_error_message()
     {
         BookLength::$validates_length_of[0]['within'] = [2,5];

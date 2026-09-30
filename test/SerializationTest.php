@@ -236,6 +236,52 @@ class SerializationTest extends DatabaseTest
         $this->assert_equals($book_attributes, $array);
     }
 
+    public function test_to_json_does_not_change_a_rooted_to_array()
+    {
+        // GH-61: to_json() used to copy JsonSerializer::$include_root into
+        // ArraySerializer::$include_root, un-rooting every later to_array()
+        ActiveRecord\ArraySerializer::$include_root = true;
+        $book = Book::find(1);
+        $rooted = ['book' => $book->attributes()];
+
+        $this->assert_equals($rooted, $book->to_array());
+        $this->assert_equals($book->attributes(), (array) json_decode($book->to_json()));
+        $this->assert_equals($rooted, $book->to_array());
+        $this->assert_true(ActiveRecord\ArraySerializer::$include_root);
+        $this->assert_false(ActiveRecord\JsonSerializer::$include_root);
+    }
+
+    public function test_to_json_does_not_change_an_unrooted_to_array()
+    {
+        // GH-61: a rooted to_json() used to root every later to_array()
+        ActiveRecord\JsonSerializer::$include_root = true;
+        $book = Book::find(1);
+
+        $this->assert_equals($book->attributes(), $book->to_array());
+        $this->assert_equals($book->attributes(), (array) json_decode($book->to_json())->book);
+        $this->assert_equals($book->attributes(), $book->to_array());
+        $this->assert_false(ActiveRecord\ArraySerializer::$include_root);
+        $this->assert_true(ActiveRecord\JsonSerializer::$include_root);
+    }
+
+    public function test_failed_to_json_does_not_change_array_include_root()
+    {
+        // GH-61: the flag must survive a to_json() that throws, too
+        ActiveRecord\ArraySerializer::$include_root = true;
+        $book = Book::find(1);
+        $book->name = "\xB1\x31"; // invalid UTF-8: json_encode() fails
+
+        try {
+            $book->to_json();
+            $this->fail('expected to_json() to throw');
+        } catch (ActiveRecord\ActiveRecordException $e) {
+            $this->assert_string_contains_string('JSON encoding failed', $e->getMessage());
+        }
+
+        $this->assert_true(ActiveRecord\ArraySerializer::$include_root);
+        $this->assert_equals(['book'], array_keys($book->to_array()));
+    }
+
     public function test_to_array_except()
     {
         $book = Book::find(1);

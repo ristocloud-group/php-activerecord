@@ -335,6 +335,48 @@ class RelationshipTest extends DatabaseTest
         Event::first();
     }
 
+    public function test_belongs_to_unknown_option_message_lists_each_valid_option_once()
+    {
+        // GH-39: BelongsTo inherits the base $valid_association_options, so
+        // merging self:: with static:: used to list every option twice.
+        // 'primary_key' is the option the BelongsTo docblock used to advertise;
+        // it is not a BelongsTo option.
+        Event::$belongs_to[0]['primary_key'] = 'id';
+        $caught = null;
+
+        try {
+            Event::first();
+        } catch (ActiveRecord\RelationshipException $e) {
+            $caught = $e;
+        }
+
+        $this->assert_not_null($caught, 'An expected RelationshipException has not been raised.');
+        $this->assert_same(
+            "Unknown option 'primary_key' for relationship 'venue'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace.",
+            $caught->getMessage()
+        );
+    }
+
+    public function test_has_many_unknown_option_message_is_unchanged()
+    {
+        // GH-39 guard: the de-duplication must leave the HasMany (and HasOne)
+        // message byte-identical -- base options first, then the subclass ones.
+        Venue::$has_many[0]['bogus'] = true;
+        $caught = null;
+
+        try {
+            Venue::first();
+        } catch (ActiveRecord\RelationshipException $e) {
+            $caught = $e;
+        }
+
+        $this->assert_not_null($caught, 'An expected RelationshipException has not been raised.');
+        $this->assert_same(
+            "Unknown option 'bogus' for relationship 'events'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace, primary_key, order, group, having, limit, offset, through, source.",
+            $caught->getMessage()
+        );
+    }
+
     public function test_has_many_with_explicit_class_name()
     {
         Venue::$has_many = [['explicit_class_name', 'class_name' => 'Event', 'order' => 'id asc']];
