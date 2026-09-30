@@ -6,4 +6,5 @@ CREATE TABLE products (
   price REAL,
   secret_cost REAL
 );
+CREATE TABLE reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER, stars INTEGER);
 INSERT INTO categories (name) VALUES ('Tools');

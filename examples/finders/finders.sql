@@ -3,10 +3,11 @@ CREATE TABLE widgets (
   name TEXT,
   category TEXT,
   price REAL,
-  in_stock INTEGER
+  in_stock INTEGER,
+  description TEXT
 );
-INSERT INTO widgets (name, category, price, in_stock) VALUES
-  ('Alpha', 'gadgets', 9.99,  1),
-  ('Beta',  'gadgets', 19.99, 0),
-  ('Gamma', 'gizmos',  4.99,  1),
-  ('Delta', 'gizmos',  49.99, 1);
+INSERT INTO widgets (name, category, price, in_stock, description) VALUES
+  ('Alpha', 'gadgets', 9.99,  1, 'basic gadget'),
+  ('Beta',  'gadgets', 19.99, 0, 'deluxe gadget'),
+  ('Gamma', 'gizmos',  4.99,  1, 'compact gizmo'),
+  ('Delta', 'gizmos',  49.99, 1, 'industrial gizmo');

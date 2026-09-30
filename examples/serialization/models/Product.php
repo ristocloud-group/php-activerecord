@@ -8,10 +8,12 @@
  * @property float  $secret_cost
  * @property-read Category $category
  * @property-read float    $discounted_price
+ * @property-read array<int, \Examples\Serialization\Review> $reviews
  */
 class Product extends ActiveRecord\Model
 {
     public static $belongs_to = [['category']];
+    public static $has_many = [['reviews', 'class_name' => '\Examples\Serialization\Review']];
 
     // Exposed to serializers via the 'methods' option.
     public function discounted_price(): float
