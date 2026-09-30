@@ -61,6 +61,14 @@ class Config extends Singleton
     private $logger;
 
     /**
+     * Whether mass assignment throws instead of dropping attributes blocked by
+     * attr_accessible/attr_protected.
+     *
+     * @var bool
+     */
+    private $strict_mass_assignment = false;
+
+    /**
      * Allows config initialization using a closure.
      *
      * This method is just syntatic sugar.
@@ -190,6 +198,40 @@ class Config extends Singleton
     public function get_logger()
     {
         return $this->logger;
+    }
+
+    /**
+     * Turns strict mass assignment on or off (off by default).
+     *
+     * When off, attributes blocked by a model's attr_accessible/attr_protected
+     * during mass assignment (new Model($attributes), set_attributes(),
+     * update_attributes(), create()) are dropped and a warning is logged. When on,
+     * a {@link MassAssignmentException} listing every blocked attribute is thrown
+     * instead, before any attribute is assigned. Assigning a single attribute
+     * ($model->name = ...) is never affected.
+     *
+     * <code>
+     * ActiveRecord\Config::initialize(function($cfg) {
+     *   $cfg->set_strict_mass_assignment(true);
+     * });
+     * </code>
+     *
+     * @param bool $strict
+     * @return void
+     */
+    public function set_strict_mass_assignment(bool $strict = true): void
+    {
+        $this->strict_mass_assignment = $strict;
+    }
+
+    /**
+     * Returns whether strict mass assignment is on.
+     *
+     * @return bool
+     */
+    public function get_strict_mass_assignment(): bool
+    {
+        return $this->strict_mass_assignment;
     }
 
     /**

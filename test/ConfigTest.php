@@ -75,6 +75,20 @@ class ConfigTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals('test', $this->config->get_default_connection());
     }
 
+    public function test_strict_mass_assignment_defaults_to_false()
+    {
+        $this->assert_false($this->config->get_strict_mass_assignment());
+    }
+
+    public function test_set_strict_mass_assignment()
+    {
+        $this->config->set_strict_mass_assignment();
+        $this->assert_true($this->config->get_strict_mass_assignment());
+
+        $this->config->set_strict_mass_assignment(false);
+        $this->assert_false($this->config->get_strict_mass_assignment());
+    }
+
     public function test_initialize_closure()
     {
         $test = $this;

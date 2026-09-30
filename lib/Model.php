@@ -1261,8 +1261,19 @@ class Model
      *
      * Dropping silently is the guard's contract (untrusted input must be
      * filterable, not fatal); the warning only makes the drop observable.
+     * With strict mass assignment on, the guard throws instead (see
+     * {@link Config::set_strict_mass_assignment()}).
      */
     private function log_guarded_attribute_drop(string $given_name, string $resolved_name, string $guard): void
+    {
+        Config::instance()->get_logger()?->warning($this->guarded_attribute_message($given_name, $resolved_name, $guard));
+    }
+
+    /**
+     * Describes a mass-assigned attribute blocked by the guard: the text of the
+     * drop warning and of {@link MassAssignmentException}.
+     */
+    private function guarded_attribute_message(string $given_name, string $resolved_name, string $guard): string
     {
         $message = sprintf(
             "%s: mass assignment of attribute '%s' blocked by %s",
@@ -1275,13 +1286,76 @@ class Model
             $message .= sprintf(" (passed as '%s')", $given_name);
         }
 
-        Config::instance()->get_logger()?->warning($message);
+        return $message;
+    }
+
+    /**
+     * Returns [resolved attribute name, guard] when attr_accessible/attr_protected
+     * blocks mass-assigning $name (an already inflected key), or null when it
+     * does not.
+     *
+     * @return array{string, string}|null
+     */
+    private function guarded_attribute_block(string $name): ?array
+    {
+        // The guard must check the resolved attribute name, otherwise
+        // attr_accessible/attr_protected could be bypassed through an
+        // alias_attribute or the 'id' primary-key shortcut (issue #28).
+        $guarded_name = static::$alias_attribute[$name] ?? $name;
+        if ('id' === $guarded_name && !array_key_exists('id', $this->attributes)) {
+            // pk-less table: __set() writes the '' key
+            $guarded_name = $this->get_primary_key(true) ?? '';
+        }
+
+        if (!empty(static::$attr_accessible) && !in_array($guarded_name, static::$attr_accessible)) {
+            return [$guarded_name, 'attr_accessible'];
+        }
+
+        if (!empty(static::$attr_protected) && in_array($guarded_name, static::$attr_protected)) {
+            return [$guarded_name, 'attr_protected'];
+        }
+
+        return null;
+    }
+
+    /**
+     * With strict mass assignment on, throws when any of $attributes is blocked
+     * by the guard — before anything is assigned, so the model is never left
+     * partially assigned. The message lists every blocked attribute.
+     *
+     * @param array<string, mixed> $attributes
+     * @throws MassAssignmentException
+     */
+    private function check_strict_mass_assignment(array $attributes): void
+    {
+        if (!Config::instance()->get_strict_mass_assignment()) {
+            return;
+        }
+
+        $table = static::table();
+        $blocked = [];
+        foreach (array_keys($attributes) as $name) {
+            // resolve the key exactly like set_attributes_via_mass_assignment()
+            if (array_key_exists($name, $table->columns)) {
+                $name = $table->columns[$name]->inflected_name;
+            }
+
+            $block = $this->guarded_attribute_block($name);
+            if (null !== $block) {
+                $blocked[] = $this->guarded_attribute_message($name, ...$block);
+            }
+        }
+
+        if (!empty($blocked)) {
+            throw new MassAssignmentException(implode('; ', $blocked));
+        }
     }
 
     /**
      * Passing $guard_attributes as true will throw an exception if an attribute does not exist.
      *
      * @throws UndefinedPropertyException
+     * @throws MassAssignmentException if strict mass assignment is on and the guard blocks an attribute
      * @param array<string, mixed> $attributes An array in the form array(name => value, ...)
      * @param boolean $guard_attributes Flag of whether or not protected/non-accessible attributes should be guarded
      * @return void
@@ -1291,9 +1365,11 @@ class Model
         //access uninflected columns since that is what we would have in result set
         $table = static::table();
         $exceptions = [];
-        $use_attr_accessible = !empty(static::$attr_accessible);
-        $use_attr_protected = !empty(static::$attr_protected);
         $connection = static::connection();
+
+        if ($guard_attributes && (!empty(static::$attr_accessible) || !empty(static::$attr_protected))) {
+            $this->check_strict_mass_assignment($attributes);
+        }
 
         foreach ($attributes as $name => $value) {
             // is a normal field on the table
@@ -1303,22 +1379,9 @@ class Model
             }
 
             if ($guard_attributes) {
-                // The guard must check the resolved attribute name, otherwise
-                // attr_accessible/attr_protected could be bypassed through an
-                // alias_attribute or the 'id' primary-key shortcut (issue #28).
-                $guarded_name = static::$alias_attribute[$name] ?? $name;
-                if ('id' === $guarded_name && !array_key_exists('id', $this->attributes)) {
-                    // pk-less table: __set() writes the '' key
-                    $guarded_name = $this->get_primary_key(true) ?? '';
-                }
-
-                if ($use_attr_accessible && !in_array($guarded_name, static::$attr_accessible)) {
-                    $this->log_guarded_attribute_drop($name, $guarded_name, 'attr_accessible');
-                    continue;
-                }
-
-                if ($use_attr_protected && in_array($guarded_name, static::$attr_protected)) {
-                    $this->log_guarded_attribute_drop($name, $guarded_name, 'attr_protected');
+                $block = $this->guarded_attribute_block($name);
+                if (null !== $block) {
+                    $this->log_guarded_attribute_drop($name, ...$block);
                     continue;
                 }
 

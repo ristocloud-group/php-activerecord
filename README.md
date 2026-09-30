@@ -149,6 +149,19 @@ Once you have configured these settings you are done. ActiveRecord takes care of
 It does not require that you map your table schema to yaml/xml files. It will query the database for this information and
 cache it so that it does not make multiple calls to the database for a single schema.
 
+### Optional: strict mass assignment ###
+
+By default, mass assignment (`new Model($attributes)`, `set_attributes()`, `update_attributes()`, `create()`) silently
+drops every attribute blocked by a model's `$attr_accessible` / `$attr_protected` and logs a warning. Turn on strict mode
+to throw an `ActiveRecord\MassAssignmentException` instead — raised before anything is assigned, its message lists every
+blocked attribute. It is global and off by default; assigning a single attribute (`$model->name = …`) is not affected.
+
+```php
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_strict_mass_assignment(true);
+});
+```
+
 ### Optional: caching the schema ###
 
 php-activerecord introspects each table's schema (columns, types, primary key) from the database. Within a single request this is kept in memory, but PHP's shared-nothing model means it is re-introspected on every request. To persist it across requests, configure an external cache. Three backends are bundled:
