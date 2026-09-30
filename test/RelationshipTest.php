@@ -752,7 +752,7 @@ class RelationshipTest extends DatabaseTest
         Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ['length(title) = ?', 14]]];
         $venues = Venue::find([2, 6], ['include' => 'events']);
 
-        $this->assert_sql_has("WHERE length(title) = ? AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+        $this->assert_sql_has("WHERE (length(title) = ?) AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
         $this->assert_equals(1, count($venues[0]->events));
     }
 
@@ -765,7 +765,7 @@ class RelationshipTest extends DatabaseTest
         Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ["'Yeah Yeah Yeahs' = title"]]];
         $venues = Venue::find([2, 6], ['include' => 'events']);
 
-        $this->assert_sql_has("WHERE 'Yeah Yeah Yeahs' = title AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+        $this->assert_sql_has("WHERE ('Yeah Yeah Yeahs' = title) AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
         $this->assert_equals(['Yeah Yeah Yeahs'], array_map(fn($e) => $e->title, $venues[0]->events));
         $this->assert_equals([], $venues[1]->events);
     }
@@ -775,7 +775,7 @@ class RelationshipTest extends DatabaseTest
         Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ["'a?b' <> title"]]];
         $venues = Venue::find([2, 6], ['include' => 'events']);
 
-        $this->assert_sql_has("WHERE 'a?b' <> title AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+        $this->assert_sql_has("WHERE ('a?b' <> title) AND venue_id IN(?,?) ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
         $this->assert_equals([2, 3], array_map(fn($e) => $e->id, $venues[0]->events));
         $this->assert_equals([5], array_map(fn($e) => $e->id, $venues[1]->events));
     }
@@ -787,7 +787,7 @@ class RelationshipTest extends DatabaseTest
         Venue::$has_many = [['events', 'class_name' => 'Event', 'order' => 'id asc', 'conditions' => ["'a?b' <> title"]]];
 
         $this->assert_equals([2, 3], array_map(fn($e) => $e->id, Venue::find(2)->events));
-        $this->assert_sql_has("WHERE 'a?b' <> title AND venue_id=? ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
+        $this->assert_sql_has("WHERE ('a?b' <> title) AND venue_id=? ORDER BY id asc", ActiveRecord\Table::load('Event')->last_sql);
     }
 
     public function test_eager_loading_has_many_x()

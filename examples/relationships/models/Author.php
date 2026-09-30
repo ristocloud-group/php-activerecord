@@ -4,6 +4,7 @@
  * @property int    $id
  * @property string $name
  * @property-read array<int, Post> $posts
+ * @property-read array<int, Post> $featured_posts
  * @property-read Profile          $profile
  *
  * @method Profile create_profile(array<string, mixed> $attributes) has_one builder
@@ -17,6 +18,9 @@ class Author extends ActiveRecord\Model
     // not the reverse), so that association is intentionally not declared here.
     public static $has_many = [
         ['posts'],
+        // Declared `conditions` may use OR: they are grouped as "(...) AND author_id = ?",
+        // so they never match another author's posts.
+        ['featured_posts', 'class_name' => 'Post', 'order' => 'id asc', 'conditions' => ["title LIKE '%Engine%' OR title LIKE '%Notes%'"]],
     ];
 
     public static $has_one = [
