@@ -6,6 +6,7 @@
  * @property string $title
  * @property-read Author              $author
  * @property-read array<int, Comment> $comments
+ * @property-read array<int, Version> $own_versions
  * @property-read array<int, Tagging> $taggings
  * @property-read array<int, Tag>     $tags
  *
@@ -17,6 +18,9 @@ class Post extends ActiveRecord\Model
 
     public static $has_many = [
         ['comments'],
+        // composite keys: versions of THIS post saved by ITS author, published only
+        ['own_versions', 'class_name' => 'Version', 'foreign_key' => ['post_id', 'author_id'],
+            'primary_key' => ['id', 'author_id'], 'conditions' => ['status = ?', 'published']],
         ['taggings'],                          // the intermediate assoc that `through` walks
         ['tags', 'through' => 'taggings'],
     ];
