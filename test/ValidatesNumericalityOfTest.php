@@ -7,6 +7,12 @@ class BookNumericality extends ActiveRecord\Model
     public static $validates_numericality_of = [
         ['name'],
     ];
+
+    // a non-column attribute holding a non-scalar value
+    public function get_list_value()
+    {
+        return ['1'];
+    }
 }
 
 class ValidatesNumericalityOfTest extends DatabaseTest
@@ -91,6 +97,55 @@ class ValidatesNumericalityOfTest extends DatabaseTest
     {
         BookNumericality::$validates_numericality_of[0]['allow_null'] = true;
         $this->assert_valid([null]);
+    }
+
+    public function test_allow_blank_skips_empty_string()
+    {
+        // numeric_test is a string column, so '' reaches the validator as-is (#50)
+        BookNumericality::$validates_numericality_of[0]['allow_blank'] = true;
+        $this->assert_valid(['']);
+    }
+
+    public function test_allow_blank_with_allow_null_skips_empty_string()
+    {
+        BookNumericality::$validates_numericality_of[0]['allow_blank'] = true;
+        BookNumericality::$validates_numericality_of[0]['allow_null'] = true;
+        $this->assert_valid(['', null]);
+    }
+
+    public function test_allow_blank_alone_skips_null()
+    {
+        // null is blank, as for the other validators that honour allow_blank
+        BookNumericality::$validates_numericality_of[0]['allow_blank'] = true;
+        $this->assert_valid([null]);
+    }
+
+    public function test_allow_blank_still_rejects_non_numeric_values()
+    {
+        BookNumericality::$validates_numericality_of[0]['allow_blank'] = true;
+        $this->assert_invalid(['blah', '42 not a number'], 'is not a number');
+    }
+
+    public function test_allow_blank_still_applies_other_options()
+    {
+        BookNumericality::$validates_numericality_of[0]['allow_blank'] = true;
+        BookNumericality::$validates_numericality_of[0]['greater_than'] = 5;
+        $this->assert_valid(['', '6']);
+        $this->assert_invalid(['5'], 'must be greater than 5');
+    }
+
+    public function test_empty_string_without_allow_blank_stays_invalid()
+    {
+        BookNumericality::$validates_numericality_of[0]['allow_null'] = true;
+        $this->assert_invalid([''], 'is not a number');
+    }
+
+    public function test_non_scalar_value_without_allow_blank_stays_not_a_number()
+    {
+        BookNumericality::$validates_numericality_of = [['list_value']];
+        $book = new BookNumericality();
+        $this->assert_false($book->is_valid());
+        $this->assert_same('is not a number', $book->errors->on('list_value'));
     }
 
     public function test_only_integer()

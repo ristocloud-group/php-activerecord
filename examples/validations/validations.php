@@ -20,6 +20,16 @@ function out(string $s): void
     echo $s . "\n";
 }
 
+// An optional numeric field: allow_blank skips a blank value ('' or null); anything else is
+// still validated. On a TEXT column '' reaches the validator as-is (an INTEGER column casts
+// it to 0). Before #50 numericality ignored allow_blank and rejected '' as "is not a number".
+require_once __DIR__ . '/models/Parcel.php';
+foreach (['', null, '2.5', '0', 'heavy'] as $weight) {
+    $parcel = new Parcel(['weight_kg' => $weight]);
+    out('weight_kg ' . var_export($weight, true) . ' valid? '
+        . ($parcel->is_valid() ? 'yes' : 'no (' . implode('; ', $parcel->errors->full_messages()) . ')'));
+}
+
 // A valid record saves.
 $ok = new User(['name' => 'Ada', 'email' => 'ada@example.com', 'age' => 36, 'role' => 'member']);
 out('valid saved? ' . ($ok->save() ? 'yes' : 'no'));
