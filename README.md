@@ -230,6 +230,15 @@ across clock-skewed hosts can expire entries early or late.
 | **File** | none | Yes (since this fork) | On disk until expiry/flush | `namespace` prefix; `flush()` deletes files | Lock-free; atomic writes, lazy GC, local-FS assumption | Single host, no extra services |
 | **Redis / Valkey** | `predis/predis` package | Yes (server-side) | In-memory (optionally persisted by the server) | `namespace`-scoped `SCAN`/`DEL`, else `FLUSHDB` | Atomic server-side TTL | Shared/networked cache, HA |
 
+### Hash conditions ###
+
+In a conditions hash (`['conditions' => ['name' => 'Tito']]`, also for `update_all` / `delete_all`) every key is a
+column name, always quoted as an identifier and never spliced in as SQL. A key may name its table (`'books.name'`, e.g.
+with `joins`). An unqualified key that is not a column of the model's table is rejected before the query with an
+`ActiveRecord\DatabaseException` naming the model and the key. That includes an expression such as
+`'LOWER(name)' => 'tito'`: it is one (unknown) column name, not a function call. Write expressions as a positional
+condition instead: `['conditions' => ['LOWER(name) = ?', 'tito']]`.
+
 ## Examples ##
 
 Rather than inline snippets, every major feature is shown as a **runnable,
