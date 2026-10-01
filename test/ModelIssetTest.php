@@ -12,6 +12,8 @@ use ActiveRecord\UndefinedPropertyException;
  *   events: 1 -> venue 1 (state NY), host 1 "David Letterman"
  *           6 -> venue 500 (no such venue), host 4 "Funny Guy"
  *   composite_items: 5 (author_ref 3, parent_ref 1) "mirror"
+ *   books (no timestamp columns, nullable author_id): 1 -> author 1
+ *   venues have no updated_at/created_at; authors have both (null in the fixtures)
  */
 
 // authors keyed by (author_id, parent_author_id): 'id' maps to the first column
@@ -26,6 +28,45 @@ class IssetIdColumnItem extends ActiveRecord\Model
 {
     public static $table_name = 'composite_items';
     public static $primary_key = 'author_ref';
+}
+
+// alias, getter and relationship named `id` keep priority over the shortcut (pk author_id)
+class IssetAliasIdAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $alias_attribute = ['id' => 'name'];
+}
+
+class IssetGetterIdAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+
+    public function get_id()
+    {
+        return 'from getter';
+    }
+}
+
+class IssetRelationshipIdAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $belongs_to = [['id', 'class_name' => 'Author', 'foreign_key' => 'parent_author_id']];
+}
+
+// delegates named like the timestamps their own table lacks: set_timestamps() must
+// not write through them (venues have no timestamp columns, authors have both)
+class IssetTimestampDelegateEvent extends ActiveRecord\Model
+{
+    public static $table_name = 'events';
+    public static $belongs_to = [['venue']];
+    public static $delegate = [['updated_at', 'created_at', 'to' => 'venue']];
+}
+
+class IssetTimestampDelegateBook extends ActiveRecord\Model
+{
+    public static $table_name = 'books';
+    public static $belongs_to = [['author']];
+    public static $delegate = [['updated_at', 'created_at', 'to' => 'author']];
 }
 
 class ModelIssetTest extends DatabaseTest
@@ -96,11 +137,99 @@ class ModelIssetTest extends DatabaseTest
         $this->assert_same(5, $item->id ?? 'fallback');
     }
 
+    public function test_alias_getter_and_relationship_named_id_keep_priority_over_id_shortcut()
+    {
+        $alias = IssetAliasIdAuthor::find(1);
+        $this->assert_true(isset($alias->id));
+        $this->assert_same('Tito', $alias->id ?? 'fallback');
+
+        $getter = new IssetGetterIdAuthor();
+        $this->assert_true(isset($getter->id));
+        $this->assert_same('from getter', $getter->id ?? 'fallback');
+
+        $relationship = IssetRelationshipIdAuthor::find(1);
+        $this->assert_true(isset($relationship->id));
+        $this->assert_same(3, $relationship->id->author_id);
+        $this->assert_true(isset((new IssetRelationshipIdAuthor())->id));
+        $this->assert_same('fallback', (new IssetRelationshipIdAuthor())->id ?? 'fallback');
+    }
+
     public function test_id_shortcut_on_table_without_primary_key_stays_unset()
     {
         $this->assert_false(isset(PklessItem::first()->id));
         $this->assert_same('fallback', PklessItem::first()->id ?? 'fallback');
         $this->assert_false(isset((new PklessItem())->id));
+    }
+
+    public function test_id_shortcut_assigned_on_table_without_primary_key_reads_back_but_stays_unset()
+    {
+        // pinned legacy behavior, unchanged by #54: the write lands on the '' key
+        $item = new PklessItem();
+        $item->id = 5;
+
+        $this->assert_same(5, $item->id);
+        $this->assert_false(isset($item->id));
+    }
+
+    public function test_has_many_build_on_unsaved_parent_with_non_id_pk_gets_null_foreign_key()
+    {
+        // before #54 reading the parent's null pk through `id` threw UndefinedPropertyException
+        $book = (new Author())->build_books(['name' => 'built']);
+
+        $this->assert_true($book->is_new_record());
+        $this->assert_null($book->author_id);
+    }
+
+    public function test_has_many_create_on_unsaved_parent_with_non_id_pk_inserts_null_foreign_key()
+    {
+        $count = Book::count();
+
+        $book = (new Author())->create_books(['name' => 'created']);
+
+        $this->assert_false($book->is_new_record());
+        $this->assert_null($book->author_id);
+        $this->assert_equals($count + 1, Book::count());
+        $this->assert_null(Book::find($book->book_id)->author_id);
+    }
+
+    public function test_set_timestamps_skips_delegated_timestamps_when_target_is_null()
+    {
+        $event = IssetTimestampDelegateEvent::find(6);
+        $this->assert_null($event->venue);
+        $event->title = 'renamed';
+        $this->assert_true($event->save());
+        $this->assert_same('renamed', IssetTimestampDelegateEvent::find(6)->title);
+
+        $new = new IssetTimestampDelegateEvent(['venue_id' => 500, 'host_id' => 4, 'title' => 'new']);
+        $this->assert_true($new->save());
+        $this->assert_false($new->is_new_record());
+    }
+
+    public function test_set_timestamps_skips_delegated_timestamps_the_target_lacks()
+    {
+        $event = IssetTimestampDelegateEvent::find(1);
+        $this->assert_not_null($event->venue);
+        $event->title = 'renamed';
+
+        $this->assert_true($event->save());
+        $this->assert_false($event->venue->is_dirty());
+    }
+
+    public function test_set_timestamps_leaves_delegate_target_timestamps_untouched()
+    {
+        $book = IssetTimestampDelegateBook::find(1);
+        $author = $book->author;
+        $book->name = 'renamed';
+        $this->assert_true($book->save());
+        $this->assert_null($author->updated_at);
+        $this->assert_false($author->is_dirty());
+
+        $new = new IssetTimestampDelegateBook(['name' => 'new', 'author_id' => 1]);
+        $author = $new->author;
+        $this->assert_true($new->save());
+        $this->assert_null($author->created_at);
+        $this->assert_null($author->updated_at);
+        $this->assert_false($author->is_dirty());
     }
 
     public function test_delegate_is_set_when_target_present()

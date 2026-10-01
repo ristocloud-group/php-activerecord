@@ -372,20 +372,18 @@ class Model
     /**
      * Determines if an attribute exists for this {@link Model}.
      *
-     * Resolves the name as {@link __get()} does: an attribute, alias, getter,
-     * relationship, the 'id' primary-key shortcut or a {@link $delegate}. Like an
-     * attribute, a name that resolves is set even when its value is null.
+     * Checks names in the order {@link __get()} resolves them: an attribute, alias,
+     * getter, relationship, the 'id' primary-key shortcut, then a declared
+     * {@link $delegate}. Like an attribute, a name is set even when its value is
+     * null; a delegate is set because it is declared, without loading or checking
+     * its target.
      *
      * @param string $attribute_name
      * @return boolean
      */
     public function __isset($attribute_name)
     {
-        if (array_key_exists($attribute_name, $this->attributes)
-            || array_key_exists($attribute_name, static::$alias_attribute)
-            || method_exists($this, "get_{$attribute_name}")
-            || array_key_exists($attribute_name, $this->__relationships)
-            || static::table()->has_relationship($attribute_name)) {
+        if ($this->resolves_locally($attribute_name)) {
             return true;
         }
 
@@ -401,6 +399,20 @@ class Model
         }
 
         return false;
+    }
+
+    /**
+     * True when $name is an attribute, alias, getter or (loaded or declared)
+     * relationship of this model itself: what isset() checked before #54, without
+     * the 'id' shortcut and delegates.
+     */
+    private function resolves_locally(string $name): bool
+    {
+        return array_key_exists($name, $this->attributes)
+            || array_key_exists($name, static::$alias_attribute)
+            || method_exists($this, "get_{$name}")
+            || array_key_exists($name, $this->__relationships)
+            || static::table()->has_relationship($name);
     }
 
     /**
@@ -562,11 +574,15 @@ class Model
         }
 
         if ($name == 'id') {
-            // the pk attribute itself, null included; pk-less table: '' is what a null pk
-            // offset always mapped to, read only once set to a non-null value
             $pk = $this->get_primary_key(true);
-            if (null !== $pk ? array_key_exists($pk, $this->attributes) : isset($this->attributes[''])) {
-                return $this->attributes[$pk ?? ''];
+            if (null !== $pk) {
+                // the pk attribute itself, null included
+                if (array_key_exists($pk, $this->attributes)) {
+                    return $this->attributes[$pk];
+                }
+            } elseif (isset($this->attributes[''])) {
+                // pk-less table: '' is what a null pk offset always mapped to, read once set non-null
+                return $this->attributes[''];
             }
         }
 
@@ -1227,11 +1243,12 @@ class Model
     {
         $now = date('Y-m-d H:i:s');
 
-        if (isset($this->updated_at)) {
+        // isset() also sees a delegate of the same name (#54): only the model's own timestamps are set
+        if (isset($this->updated_at) && $this->resolves_locally('updated_at')) {
             $this->updated_at = $now;
         }
 
-        if (isset($this->created_at) && $this->is_new_record()) {
+        if (isset($this->created_at) && $this->resolves_locally('created_at') && $this->is_new_record()) {
             $this->created_at = $now;
         }
     }
