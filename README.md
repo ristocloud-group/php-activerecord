@@ -242,7 +242,7 @@ php examples/simple/simple.php
 
 | Example | Demonstrates |
 |---|---|
-| [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete), tables without a primary key, and convention overrides (`$table_name`, `$primary_key`) |
+| [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete), tables without a primary key, the never-saved-record update/delete guard, and convention overrides (`$table_name`, `$primary_key`) |
 | [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes |
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner |

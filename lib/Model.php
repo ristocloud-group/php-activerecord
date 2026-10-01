@@ -125,6 +125,15 @@ class Model
     private $__new_record = true;
 
     /**
+     * The primary key values (name => value) the row is stored under: those
+     * this record was loaded, inserted or reloaded with. Null on a new record.
+     * update()/delete() refuse a pk changed since then (#41).
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $__persisted_pk = null;
+
+    /**
      * Set to the name of the connection this {@link Model} should use.
      *
      * @var string
@@ -302,6 +311,10 @@ class Model
             $this->__dirty = [];
         }
 
+        if (!$new_record) {
+            $this->remember_persisted_pk();
+        }
+
         $this->invoke_callback('after_construct', false);
     }
 
@@ -470,6 +483,11 @@ class Model
     {
         // make sure the models Table instance gets initialized when waking up
         static::table();
+
+        // serialized before the pk was tracked: its current pk is the best record of the row
+        if (!$this->__new_record && null === $this->__persisted_pk) {
+            $this->remember_persisted_pk();
+        }
     }
 
     /**
@@ -924,6 +942,7 @@ class Model
         }
 
         $this->__new_record = false;
+        $this->remember_persisted_pk();
         $this->invoke_callback('after_create', false);
         return true;
     }
@@ -939,6 +958,11 @@ class Model
     {
         $this->verify_not_readonly('update');
 
+        // refused before validation, so no callback runs for a write that cannot land
+        if ($this->is_dirty()) {
+            $this->verify_pk_for_write('update');
+        }
+
         if ($validate && !$this->_validate()) {
             return false;
         }
@@ -950,12 +974,18 @@ class Model
                 throw new ActiveRecordException("Cannot update, no primary key defined for: " . get_called_class());
             }
 
+            // validation callbacks may have dirtied the record or touched its pk
+            $this->verify_pk_for_write('update');
+
             if (!$this->invoke_callback('before_update', false)) {
                 return false;
             }
 
             $dirty = $this->dirty_attributes();
             static::table()->update($dirty, $pk);
+            // the row is keyed on $pk, read before before_update: a pk that callback
+            // assigned was written by this UPDATE, so the row now lives under it
+            $this->remember_persisted_pk();
             $this->invoke_callback('after_update', false);
         }
 
@@ -1097,6 +1127,8 @@ class Model
             throw new ActiveRecordException("Cannot delete, no primary key defined for: " . get_called_class());
         }
 
+        $this->verify_pk_for_write('delete');
+
         if (!$this->invoke_callback('before_destroy', false)) {
             return false;
         }
@@ -1105,6 +1137,92 @@ class Model
         $this->invoke_callback('after_destroy', false);
 
         return true;
+    }
+
+    /**
+     * Refuses an UPDATE/DELETE whose WHERE, built from the current pk values,
+     * would miss this record's row (#41): a null pk value (`WHERE pk IS NULL`
+     * matches nothing) or, on a persisted record, a pk value changed since it
+     * was loaded/inserted/reloaded (the statement would target the row under
+     * the new value). Values are compared after the column cast, so 1 and '1'
+     * are the same key. A pk not loaded at all (a `select` without it) is left
+     * to values_for_pk(), which reports it as before.
+     *
+     * @param 'update'|'delete' $action
+     * @throws ActiveRecordException
+     */
+    private function verify_pk_for_write(string $action): void
+    {
+        $persisted = $this->__new_record ? [] : ($this->__persisted_pk ?? []);
+        $null = [];
+        $changed = [];
+
+        foreach (static::table()->pk as $name) {
+            if (!array_key_exists($name, $this->attributes)) {
+                continue;
+            }
+
+            if (null === $this->attributes[$name]) {
+                $null[] = $name;
+                continue;
+            }
+
+            if (!array_key_exists($name, $persisted)) {
+                continue;
+            }
+
+            $was = $this->cast_pk_value($name, $persisted[$name]);
+            $now = $this->cast_pk_value($name, $this->attributes[$name]);
+            $same = $was instanceof \DateTimeInterface && $now instanceof \DateTimeInterface ? $was == $now : $was === $now;
+
+            if (!$same) {
+                $changed[] = sprintf('%s: %s => %s', $name, self::describe_pk_value($was), self::describe_pk_value($now));
+            }
+        }
+
+        if (!empty($null)) {
+            throw new ActiveRecordException(sprintf('Cannot %s, primary key value is null for: %s (%s)', $action, static::class, implode(', ', $null)));
+        }
+
+        if (!empty($changed)) {
+            throw new ActiveRecordException(sprintf('Cannot %s, primary key changed for: %s (%s)', $action, static::class, implode(', ', $changed)));
+        }
+    }
+
+    /**
+     * Records the current pk values as the ones the row is stored under.
+     */
+    private function remember_persisted_pk(): void
+    {
+        $this->__persisted_pk = [];
+
+        foreach (static::table()->pk as $name) {
+            if (array_key_exists($name, $this->attributes)) {
+                $value = $this->attributes[$name];
+                // a DateTime is modified in place: keep a copy of the stored value
+                $this->__persisted_pk[$name] = is_object($value) ? clone $value : $value;
+            }
+        }
+    }
+
+    /**
+     * Casts a pk value the way assign_attribute() does.
+     */
+    private function cast_pk_value(string $name, mixed $value): mixed
+    {
+        $table = static::table();
+        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
+
+        return null === $column || is_object($value) ? $value : $column->cast($value, static::connection());
+    }
+
+    private static function describe_pk_value(mixed $value): string
+    {
+        return match (true) {
+            $value instanceof \DateTimeInterface => $value->format('Y-m-d H:i:s'),
+            null === $value || is_scalar($value) => var_export($value, true),
+            default => get_debug_type($value),
+        };
     }
 
     /**
@@ -1445,6 +1563,7 @@ class Model
 
         $this->set_attributes_via_mass_assignment($this->find($pk)->attributes, false);
         $this->reset_dirty();
+        $this->remember_persisted_pk();
 
         return $this;
     }

@@ -49,5 +49,24 @@ print_r(array_map(fn(ActiveRecord\Model $visit) => $visit->attributes(), SimpleP
 restore_error_handler();
 echo 'warnings raised: ' . count($warnings) . "\n\n";
 
+// A record that was never saved has a null primary key value: updating or
+// deleting it throws an ActiveRecordException before any SQL or callback runs.
+// (Up to 2.1.0 both ran "... WHERE id IS NULL", matched no row and returned
+// true; changing the key of a loaded record is refused the same way, since the
+// statement used to hit the row under the new key.)
+$unsaved = new Book(['name' => 'Never saved']);
+$writes = [
+    'update_attribute' => fn() => $unsaved->update_attribute('author', 'Nobody'),
+    'delete' => fn() => $unsaved->delete(),
+];
+foreach ($writes as $call => $write) {
+    try {
+        $write();
+    } catch (ActiveRecord\ActiveRecordException $e) {
+        echo "$call(): " . $e->getMessage() . "\n";
+    }
+}
+echo 'books in the table: ' . Book::count() . "\n\n";
+
 // Fetch the first row and dump its attributes.
 print_r(Book::first()->attributes());

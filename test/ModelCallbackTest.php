@@ -138,7 +138,8 @@ class ModelCallbackTest extends DatabaseTest
         $this->assert_fires(
             ['before_destroy','after_destroy'],
             function ($model) {
-                $model->delete();
+                // a persisted record: deleting a never-saved one is refused (#41)
+                Venue::first()->delete();
             }
         );
     }

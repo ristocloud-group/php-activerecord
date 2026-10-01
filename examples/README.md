@@ -18,7 +18,7 @@ php examples/validations/validations.php
 | [`serialization/`](serialization/) | `to_json` / `to_xml` / `to_array` with `only` / `except` / `methods` / `include` |
 | [`finders/`](finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` option set, `last()` (reversed `order`), `find_by_sql`, static scopes |
 | [`conditions/`](conditions/) | Condition semantics: `null` renders `IS NULL`, empty arrays return no rows (`1=0` / `IN(NULL)`), arrays containing `null` also match NULL rows, and the user-authored-fragment boundary |
-| [`simple/`](simple/) | The minimal model (`class Book extends Model {}`), a model on a table without a primary key (`create()` + read back), and convention overrides (`$table_name`, `$primary_key`) |
+| [`simple/`](simple/) | The minimal model (`class Book extends Model {}`), a model on a table without a primary key (`create()` + read back), the exception for updating/deleting a never-saved record, and convention overrides (`$table_name`, `$primary_key`) |
 | [`orders/`](orders/) | A fuller app: `$validates_*`, a `before_validation_on_create` callback (applies tax), `belongs_to`/`has_many`, `has_many … through` with `select`/`conditions`, dynamic finders |
 | [`upsert/`](upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and automatically-managed timestamps |
 | [`sequences/`](sequences/) | Primary-key sequences: the Postgres `{table}_{pk}_seq` convention, no sequence for a table without a primary key, explicit `static $sequence`, `supports_sequences()`, and why the declaration is harmlessly ignored on MySQL/SQLite. The Postgres half runs only when `PHPAR_PGSQL` points at a reachable server (this repo's Docker setup does) and is skipped otherwise |
