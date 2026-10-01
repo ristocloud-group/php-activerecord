@@ -544,6 +544,119 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals(0, Author::count(['conditions' => ['parent_author_id' => 99]]));
     }
 
+    public function test_hash_condition_with_table_qualified_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $authors = Author::all(['conditions' => ['authors.author_id' => 1]]);
+
+        $this->assert_equals(['Tito'], array_map(fn($author) => $author->name, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}author_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_hash_condition_with_qualified_key_of_joined_table()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $authors = Author::all(['joins' => ['books'], 'conditions' => ['books.name' => 'Another Book']]);
+
+        $this->assert_equals([2], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_hash_condition_with_qualified_base_table_key_and_joins()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // neither an unquoted nor a pre-quoted qualified key gets the base table prepended
+        $authors = Author::all(['joins' => ['books'], 'conditions' => [
+            'authors.name' => 'Tito',
+            "{$q}books{$q}.{$q}book_id{$q}" => 1,
+        ]]);
+
+        $this->assert_equals([1], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=? AND {$q}books{$q}.{$q}book_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_unqualified_hash_key_with_joins_still_gets_the_base_table()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // `name` exists in both tables: the base table is prepended, as before
+        $authors = Author::all(['joins' => ['books'], 'conditions' => ['name' => 'Tito']]);
+
+        $this->assert_equals([1], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_qualified_hash_key_in_list_with_null()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $authors = Author::all(['conditions' => ['authors.parent_author_id' => [3, null]]]);
+        $this->assert_equals([1], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE ({$q}authors{$q}.{$q}parent_author_id{$q} IN(?) OR {$q}authors{$q}.{$q}parent_author_id{$q} IS NULL)", Author::table()->last_sql);
+
+        $authors = Author::all(['joins' => ['books'], 'conditions' => ['books.name' => ['Another Book', null]]]);
+        $this->assert_equals([2], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE ({$q}books{$q}.{$q}name{$q} IN(?) OR {$q}books{$q}.{$q}name{$q} IS NULL)", Author::table()->last_sql);
+    }
+
+    public function test_relationship_hash_condition_with_qualified_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $condition = "{$q}authors{$q}.{$q}name{$q}=?";
+
+        // lazy load (create_conditions_from_keys)
+        $this->assert_equals('Tito', QualifiedConditionBook::find(1)->author->name);
+        $this->assert_sql_has_exact($condition, Author::table()->last_sql);
+        $this->assert_null(QualifiedConditionBook::find(2)->author);
+
+        // eager load (query_and_attach_related_models_eagerly)
+        $books = QualifiedConditionBook::all(['include' => ['author'], 'order' => 'book_id']);
+        $this->assert_equals('Tito', $books[0]->author->name);
+        $this->assert_null($books[1]->author);
+        $this->assert_sql_has_exact($condition, Author::table()->last_sql);
+    }
+
+    public function test_qualified_hash_key_parts_are_quoted_as_identifiers()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // each dot-separated part is one identifier, never raw SQL
+        $this->assert_hash_condition_fails(Author::class, ['conditions' => ['authors.author_id IS NOT NULL OR authors.author_id' => 999]]);
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}author_id IS NOT NULL OR authors{$q}.{$q}author_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_joins_prefix_only_unqualified_hash_keys()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $joins = 'INNER JOIN books ON(books.author_id = authors.author_id)';
+
+        $sql = new ActiveRecord\SQLBuilder($this->conn, "{$q}authors{$q}");
+        $sql->joins($joins);
+        $sql->where(['id' => 1, "{$q}name{$q}" => 2, "{$q}a.b{$q}" => 3, 'books.name' => 4, "{$q}books{$q}.{$q}book_id{$q}" => 5]);
+        $this->assert_equals(
+            "SELECT * FROM {$q}authors{$q} $joins WHERE {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}name{$q}=?"
+            . " AND {$q}authors{$q}.{$q}a.b{$q}=? AND {$q}books{$q}.{$q}name{$q}=? AND {$q}books{$q}.{$q}book_id{$q}=?",
+            $sql->to_s()
+        );
+
+        // a db-qualified base table is prefixed as before
+        $sql = new ActiveRecord\SQLBuilder($this->conn, "{$q}db{$q}.{$q}authors{$q}");
+        $sql->joins($joins);
+        $sql->where(['id' => 1]);
+        $this->assert_equals("SELECT * FROM {$q}db{$q}.{$q}authors{$q} $joins WHERE {$q}db{$q}.{$q}authors{$q}.{$q}id{$q}=?", $sql->to_s());
+    }
+
+    public function test_delete_all_with_table_qualified_hash_key()
+    {
+        Author::delete_all(['conditions' => ['authors.author_id' => 4]]);
+
+        $this->assert_equals(0, Author::count(['conditions' => ['author_id' => 4]]));
+        $this->assert_equals(3, Author::count());
+    }
+
     /**
      * Runs a finder that must fail at the database (unknown identifier) and
      * must never return rows.

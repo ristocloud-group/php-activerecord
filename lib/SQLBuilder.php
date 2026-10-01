@@ -418,7 +418,7 @@ class SQLBuilder
 
     /**
      * prepends table name to hash of field names to get around ambiguous fields when SQL builder
-     * has joins
+     * has joins. A key that is already table-qualified is kept as is (#35).
      *
      * @param array<string, mixed> $hash
      * @return array<string, mixed> $new
@@ -429,11 +429,36 @@ class SQLBuilder
         $table = $this->connection->quote_name($this->table ?? '');
 
         foreach ($hash as $key => $value) {
+            if ($this->is_qualified_key((string) $key)) {
+                $new[$key] = $value;
+                continue;
+            }
+
             $k = $this->connection->quote_name($key);
             $new[$table . '.' . $k] = $value;
         }
 
         return $new;
+    }
+
+    /**
+     * Whether a hash-condition key already names its table: an unquoted dotted
+     * key ('events.title', quoted part by part by Expressions), or two or more
+     * quoted identifiers joined by '.' (`events`.`title`). A single quoted
+     * identifier, even one containing a dot (`a.b`), is not qualified.
+     */
+    private function is_qualified_key(string $key): bool
+    {
+        $q = $this->connection::$QUOTE_CHARACTER;
+
+        if (!str_contains($key, $q)) {
+            return str_contains($key, '.');
+        }
+
+        // the identifier syntax quote_name() passes through unchanged
+        $identifier = sprintf('%1$s(?:[^%1$s]|%1$s%1$s)+%1$s', preg_quote($q, '/'));
+
+        return 1 === preg_match("/\\A{$identifier}(?:\\.{$identifier})+\\z/", $key);
     }
 
     /**
