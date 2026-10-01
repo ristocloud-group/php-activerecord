@@ -423,13 +423,148 @@ abstract class AdapterTest extends DatabaseTest
     {
         $c = $this->conn;
         $q = $c::$QUOTE_CHARACTER;
-        $qn = function ($s) use ($c) {
-            return $c->quote_name($s);
-        };
 
-        $this->assert_equals("{$q}string", $qn("{$q}string"));
-        $this->assert_equals("string{$q}", $qn("string{$q}"));
-        $this->assert_equals("{$q}string{$q}", $qn("{$q}string{$q}"));
+        // only a correctly quoted name passes through (#64); a half-quoted one
+        // is no longer trusted: it is wrapped, its quote char doubled
+        $this->assert_equals("{$q}string{$q}", $c->quote_name("{$q}string{$q}"));
+        $this->assert_equals("{$q}{$q}{$q}string{$q}", $c->quote_name("{$q}string"));
+        $this->assert_equals("{$q}string{$q}{$q}{$q}", $c->quote_name("string{$q}"));
+    }
+
+    public function test_quote_name_wraps_a_plain_name()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        $this->assert_equals("{$q}name{$q}", $c->quote_name('name'));
+        $this->assert_equals("{$q}with space{$q}", $c->quote_name('with space'));
+        // quote_name() never splits on dots (#35 splits hash-condition keys only)
+        $this->assert_equals("{$q}db.t{$q}", $c->quote_name('db.t'));
+    }
+
+    public function test_quote_name_keeps_dotted_quoted_names()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        foreach (["{$q}db{$q}.{$q}t{$q}", "{$q}db{$q}.{$q}t{$q}.{$q}c{$q}", "{$q}a.b{$q}"] as $name) {
+            $this->assert_equals($name, $c->quote_name($name));
+        }
+    }
+
+    public function test_quote_name_doubles_embedded_quote_chars()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        $this->assert_equals("{$q}evil{$q}{$q}name{$q}", $c->quote_name("evil{$q}name"));
+        $this->assert_equals("{$q}foo{$q}{$q}{$q}", $c->quote_name("foo{$q}"));
+        // not a quoted sequence: neither half of a "half-quoted" dotted name
+        // nor an inner-quoted one passes through
+        $this->assert_equals("{$q}{$q}{$q}db{$q}{$q}.t{$q}", $c->quote_name("{$q}db{$q}.t"));
+        $this->assert_equals("{$q}db{$q}{$q}.{$q}{$q}t{$q}", $c->quote_name("db{$q}.{$q}t"));
+    }
+
+    public function test_quote_name_keeps_doubled_quote_inside_quoted_identifier()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        foreach (["{$q}a{$q}{$q}b{$q}", "{$q}a{$q}{$q}b{$q}.{$q}c{$q}", "{$q}{$q}{$q}{$q}"] as $name) {
+            $this->assert_equals($name, $c->quote_name($name));
+        }
+    }
+
+    public function test_quote_name_of_empty_string_has_no_warning()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+        $warnings = [];
+
+        set_error_handler(function ($errno, $errstr) use (&$warnings) {
+            $warnings[] = $errstr;
+            return true;
+        });
+
+        try {
+            $quoted = $c->quote_name('');
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assert_equals([], $warnings);
+        $this->assert_equals("{$q}{$q}", $quoted);
+    }
+
+    public function test_identifier_containing_the_quote_char_works_end_to_end()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        foreach (["evil{$q}name", "foo{$q}", "{$q}foo"] as $alias) {
+            $row = $this->conn->query('SELECT 1 AS ' . $this->conn->quote_name($alias))->fetch(PDO::FETCH_ASSOC);
+            $this->assert_equals([$alias], array_keys($row));
+        }
+    }
+
+    public function test_hash_condition_key_cannot_inject_sql()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $key = "author_id{$q} IS NOT NULL OR {$q}author_id";
+
+        // used to render `author_id` IS NOT NULL OR `author_id`=? and return every author
+        $this->assert_hash_condition_fails(Author::class, ['conditions' => [$key => 999]]);
+        $this->assert_sql_has_exact("WHERE {$q}author_id{$q}{$q} IS NOT NULL OR {$q}{$q}author_id{$q}=?", Author::table()->last_sql);
+
+        // the joins path prefixes the base table to the key
+        $key = "parent_author_id{$q} IS NOT NULL OR {$q}parent_author_id";
+        $this->assert_hash_condition_fails(Author::class, ['joins' => ['books'], 'conditions' => [$key => 999]]);
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}parent_author_id{$q}{$q} IS NOT NULL OR {$q}{$q}parent_author_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_hash_condition_expression_key_is_a_single_identifier()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // an SQL expression wrapped in quote chars only ever worked through the
+        // bypass; it is now one (unknown) identifier, i.e. an error (#64)
+        $this->assert_hash_condition_fails(Author::class, ['conditions' => ["{$q}author_id{$q} + {$q}parent_author_id{$q}" => 4]]);
+        $this->assert_sql_has_exact("WHERE {$q}{$q}{$q}author_id{$q}{$q} + {$q}{$q}parent_author_id{$q}{$q}{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_update_all_set_key_cannot_inject_sql()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        try {
+            Author::update_all(['set' => ["parent_author_id{$q} = 99, {$q}name" => 'x'], 'conditions' => ['author_id' => 1]]);
+            $this->fail('the crafted set key must not reach the database as SQL');
+        } catch (ActiveRecord\DatabaseException) {
+        }
+
+        $this->assert_equals(0, Author::count(['conditions' => ['parent_author_id' => 99]]));
+    }
+
+    /**
+     * Runs a finder that must fail at the database (unknown identifier) and
+     * must never return rows.
+     *
+     * @param class-string<ActiveRecord\Model> $class
+     * @param array<string, mixed> $options
+     */
+    private function assert_hash_condition_fails(string $class, array $options): void
+    {
+        try {
+            $rows = $class::all($options);
+        } catch (ActiveRecord\DatabaseException) {
+            return;
+        }
+
+        $this->fail('expected a DatabaseException, the query returned ' . count($rows) . ' row(s): ' . $class::table()->last_sql);
+    }
+
+    private function assert_sql_has_exact(string $needle, ?string $sql): void
+    {
+        $this->assert_true(str_contains((string) $sql, $needle), "'$needle' not found in: $sql");
     }
 
     public function test_datetime_to_string()
