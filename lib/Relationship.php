@@ -699,6 +699,9 @@ class HasMany extends AbstractRelationship
     /** @var list<string>|null */
     protected $primary_key;
 
+    /** @var list<string> The declared `primary_key` option ([] when the table pk is inferred). */
+    private array $declared_primary_key = [];
+
     /** @var string|null */
     private $through;
 
@@ -728,13 +731,23 @@ class HasMany extends AbstractRelationship
         if (!$this->primary_key) {
             $pk = relationship_option_key_list($options['primary_key'] ?? null, (string) $options[0], 'primary_key');
             if ($pk) {
-                $this->primary_key = $pk;
+                $this->primary_key = $this->declared_primary_key = $pk;
             }
         }
 
         if (!$this->class_name) {
             $this->set_inferred_class_name();
         }
+    }
+
+    /**
+     * GH #40: a declared `primary_key` keys the eager load and the build_/create_ builders
+     * as it keys {@see load()}. Without one, both keep keying off the table pk as before; a
+     * `through` relationship is left as it was.
+     */
+    private function keys_off_declared_primary_key(): bool
+    {
+        return [] !== $this->declared_primary_key && null === $this->through;
     }
 
     /**
@@ -837,6 +850,27 @@ class HasMany extends AbstractRelationship
     private function inject_foreign_key_for_new_association(Model $model, array &$attributes): array
     {
         $this->set_keys(get_class($model));
+
+        if ($this->keys_off_declared_primary_key()) {
+            // GH #40: as in load(), each foreign key column takes the owner's value of the
+            // corresponding declared primary_key column; a value passed in still wins.
+            $inflector = Inflector::instance();
+
+            foreach ($this->foreign_key as $i => $foreign_key) {
+                if (!isset($this->declared_primary_key[$i])) {
+                    break;
+                }
+
+                $foreign_key = $inflector->variablize($foreign_key);
+
+                if (!isset($attributes[$foreign_key])) {
+                    $attributes[$foreign_key] = $model->read_attribute($inflector->variablize($this->declared_primary_key[$i]));
+                }
+            }
+
+            return $attributes;
+        }
+
         $primary_key = Inflector::instance()->variablize($this->foreign_key[0]);
 
         if (!isset($attributes[$primary_key])) {
@@ -875,7 +909,31 @@ class HasMany extends AbstractRelationship
     public function load_eagerly($models, $attributes, $includes, Table $table)
     {
         $this->set_keys($table->class->name);
-        $this->query_and_attach_related_models_eagerly($table, $models, $attributes, $includes, $this->foreign_key, $table->pk);
+
+        if (!$this->keys_off_declared_primary_key()) {
+            $this->query_and_attach_related_models_eagerly($table, $models, $attributes, $includes, $this->foreign_key, $table->pk);
+
+            return;
+        }
+
+        // GH #40: key off the declared primary_key, as load() does. load() finds nothing for an
+        // owner whose key is null, so leave such an owner out of the query: its null would be
+        // rendered as "fk IS NULL" and match it to every child that has no owner.
+        $key = Inflector::instance()->variablize($this->declared_primary_key[0]);
+        $keyed_models = $keyed_attributes = [];
+
+        foreach ($models as $i => $model) {
+            if (null === ($attributes[$i][$key] ?? null)) {
+                $model->set_relationship_from_eager_load(null, $this->attribute_name);
+            } else {
+                $keyed_models[] = $model;
+                $keyed_attributes[] = $attributes[$i];
+            }
+        }
+
+        if ([] !== $keyed_models) {
+            $this->query_and_attach_related_models_eagerly($table, $keyed_models, $keyed_attributes, $includes, $this->foreign_key, $this->declared_primary_key);
+        }
     }
 };
 
