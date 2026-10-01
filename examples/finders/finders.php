@@ -42,6 +42,7 @@ out('page names: ' . implode(', ', ActiveRecord\collect($page, 'name')));
 $none = Widget::all(['order' => 'id', 'limit' => 0]);
 out('limit 0: ' . count($none) . ' rows');
 out('  SQL: ' . Widget::table()->last_sql);
+out('count(limit 0): ' . Widget::count(['limit' => 0]));
 $rest = Widget::all(['order' => 'id', 'offset' => 2]);
 out('offset 2, no limit: ' . implode(', ', ActiveRecord\collect($rest, 'name')));
 out('  SQL: ' . Widget::table()->last_sql);
