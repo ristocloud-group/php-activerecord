@@ -102,6 +102,36 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_equals($this->conn->limit('SELECT * FROM authors', 1, 10), (string) $this->sql);
     }
 
+    public function test_gh34_limit_zero_renders_a_limit_of_zero()
+    {
+        $this->sql->limit(0);
+        $this->assert_equals($this->conn->limit('SELECT * FROM authors', null, 0), (string) $this->sql);
+
+        $sql = new SQLBuilder($this->conn, 'authors');
+        $sql->limit('0')->offset(0);
+        $this->assert_equals($this->conn->limit('SELECT * FROM authors', 0, 0), (string) $sql);
+    }
+
+    public function test_gh34_a_limit_other_than_an_explicit_zero_that_casts_to_zero_is_still_no_limit()
+    {
+        foreach ([null, '', false, 'abc'] as $limit) {
+            $sql = new SQLBuilder($this->conn, 'authors');
+            $this->assert_equals('SELECT * FROM authors', (string) $sql->limit($limit));
+        }
+    }
+
+    public function test_gh34_offset_without_limit()
+    {
+        $this->sql->offset('3');
+        $this->assert_equals($this->conn->offset_without_limit('SELECT * FROM authors', 3), (string) $this->sql);
+    }
+
+    public function test_gh34_a_negative_offset_without_limit_renders_as_before()
+    {
+        $this->sql->offset(-2);
+        $this->assert_equals($this->conn->limit('SELECT * FROM authors', -2, 0), (string) $this->sql);
+    }
+
     public function test_select()
     {
         $this->sql->select('id,name');
@@ -213,6 +243,21 @@ class SQLBuilderTest extends DatabaseTest
 
         $this->sql->delete(['id' => 1])->order('name asc')->limit(1);
         $this->assert_sql_has("DELETE FROM authors WHERE id=? ORDER BY name asc LIMIT 1", $this->sql->to_s());
+    }
+
+    public function test_gh34_update_and_delete_with_limit_zero()
+    {
+        $update = (new SQLBuilder($this->conn, 'authors'))->update(['id' => 1])->order('name asc')->limit(0);
+        $delete = (new SQLBuilder($this->conn, 'authors'))->delete(['id' => 1])->order('name asc')->limit('0');
+
+        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+            $this->assert_sql_has('UPDATE authors SET id=? ORDER BY name asc LIMIT 0', $update->to_s());
+            $this->assert_sql_has('DELETE FROM authors WHERE id=? ORDER BY name asc LIMIT 0', $delete->to_s());
+        } else {
+            // Postgres: no ORDER BY / LIMIT on UPDATE and DELETE, as before
+            $this->assert_sql_doesnt_has('LIMIT', $update->to_s());
+            $this->assert_sql_doesnt_has('LIMIT', $delete->to_s());
+        }
     }
 
     public function test_reverse_order()

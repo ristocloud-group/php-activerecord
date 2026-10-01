@@ -11,6 +11,16 @@ class MysqlAdapterTest extends AdapterTest
         parent::set_up('mysql');
     }
 
+    public function test_gh34_limit_zero_and_offset_without_limit_sql()
+    {
+        Author::all(['order' => 'author_id', 'limit' => 0]);
+        $this->assert_equals('SELECT * FROM `authors` ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+
+        // MySQL has no OFFSET without LIMIT: the documented "all rows" idiom is the largest row count
+        Author::all(['order' => 'author_id', 'offset' => 2]);
+        $this->assert_equals('SELECT * FROM `authors` ORDER BY author_id LIMIT 2, 18446744073709551615', Author::table()->last_sql);
+    }
+
     public function test_enum()
     {
         $author_columns = $this->conn->columns('authors');

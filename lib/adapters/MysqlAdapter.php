@@ -29,6 +29,12 @@ class MysqlAdapter extends Connection
         return "$sql LIMIT {$offset}$limit";
     }
 
+    public function offset_without_limit(string $sql, int $offset): string
+    {
+        // MySQL has no OFFSET without LIMIT; its documented idiom is the largest row count
+        return "$sql LIMIT $offset, 18446744073709551615";
+    }
+
     public function query_column_info($table)
     {
         return $this->query("SHOW COLUMNS FROM $table");

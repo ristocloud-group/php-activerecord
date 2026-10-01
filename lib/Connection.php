@@ -656,6 +656,22 @@ abstract class Connection
     abstract public function limit($sql, $offset, $limit);
 
     /**
+     * Adds an offset clause with no row limit: every row after the first $offset (#34).
+     *
+     * The default renders what SQLBuilder rendered before this hook existed,
+     * limit($sql, $offset, 0), so an adapter that does not override it is unchanged.
+     * The bundled adapters override it.
+     *
+     * @param string $sql The SQL statement.
+     * @param int $offset Number of rows to skip (positive).
+     * @return string The SQL query with the offset applied
+     */
+    public function offset_without_limit(string $sql, int $offset): string
+    {
+        return $this->limit($sql, $offset, 0);
+    }
+
+    /**
      * Query for column meta info and return statement handle.
      *
      * @param string $table Name of a table

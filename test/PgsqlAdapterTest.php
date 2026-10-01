@@ -17,6 +17,15 @@ class PgsqlAdapterTest extends AdapterTest
         parent::set_up('pgsql');
     }
 
+    public function test_gh34_limit_zero_and_offset_without_limit_sql()
+    {
+        Author::all(['order' => 'author_id', 'limit' => 0]);
+        $this->assert_equals('SELECT * FROM "authors" ORDER BY author_id LIMIT 0 OFFSET 0', Author::table()->last_sql);
+
+        Author::all(['order' => 'author_id', 'offset' => 2]);
+        $this->assert_equals('SELECT * FROM "authors" ORDER BY author_id OFFSET 2', Author::table()->last_sql);
+    }
+
     public function test_insert_id()
     {
         $this->conn->query("INSERT INTO authors(author_id,name) VALUES(nextval('authors_author_id_seq'),'name')");
