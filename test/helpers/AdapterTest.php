@@ -511,14 +511,18 @@ abstract class AdapterTest extends DatabaseTest
         $q = $this->conn::$QUOTE_CHARACTER;
         $key = "author_id{$q} IS NOT NULL OR {$q}author_id";
 
-        // used to render `author_id` IS NOT NULL OR `author_id`=? and return every author
-        $this->assert_hash_condition_fails(Author::class, ['conditions' => [$key => 999]]);
-        $this->assert_sql_has_exact("WHERE {$q}author_id{$q}{$q} IS NOT NULL OR {$q}{$q}author_id{$q}=?", Author::table()->last_sql);
+        // used to render `author_id` IS NOT NULL OR `author_id`=? and return every author;
+        // it is one identifier (#64), no column of authors, so it is rejected before the query
+        $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::all(['conditions' => [$key => 999]]));
+        $this->assert_sql_has_exact("WHERE {$q}author_id{$q}{$q} IS NOT NULL OR {$q}{$q}author_id{$q}=?", $this->hash_where_sql([$key => 999]));
 
         // the joins path prefixes the base table to the key
         $key = "parent_author_id{$q} IS NOT NULL OR {$q}parent_author_id";
-        $this->assert_hash_condition_fails(Author::class, ['joins' => ['books'], 'conditions' => [$key => 999]]);
-        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}parent_author_id{$q}{$q} IS NOT NULL OR {$q}{$q}parent_author_id{$q}=?", Author::table()->last_sql);
+        $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::all(['joins' => ['books'], 'conditions' => [$key => 999]]));
+        $this->assert_sql_has_exact(
+            "WHERE {$q}authors{$q}.{$q}parent_author_id{$q}{$q} IS NOT NULL OR {$q}{$q}parent_author_id{$q}=?",
+            $this->hash_where_sql([$key => 999], 'INNER JOIN books ON(books.author_id = authors.author_id)')
+        );
     }
 
     public function test_hash_condition_expression_key_is_a_single_identifier()
@@ -527,8 +531,9 @@ abstract class AdapterTest extends DatabaseTest
 
         // an SQL expression wrapped in quote chars only ever worked through the
         // bypass; it is now one (unknown) identifier, i.e. an error (#64)
-        $this->assert_hash_condition_fails(Author::class, ['conditions' => ["{$q}author_id{$q} + {$q}parent_author_id{$q}" => 4]]);
-        $this->assert_sql_has_exact("WHERE {$q}{$q}{$q}author_id{$q}{$q} + {$q}{$q}parent_author_id{$q}{$q}{$q}=?", Author::table()->last_sql);
+        $key = "{$q}author_id{$q} + {$q}parent_author_id{$q}";
+        $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::all(['conditions' => [$key => 4]]));
+        $this->assert_sql_has_exact("WHERE {$q}{$q}{$q}author_id{$q}{$q} + {$q}{$q}parent_author_id{$q}{$q}{$q}=?", $this->hash_where_sql([$key => 4]));
     }
 
     public function test_update_all_set_key_cannot_inject_sql()
@@ -709,6 +714,185 @@ abstract class AdapterTest extends DatabaseTest
             $sql->to_s()
         );
         $this->assert_equals([1, 'x', 2, 3, 4], $sql->bind_values());
+    }
+
+    public function test_unknown_hash_condition_key_is_rejected_before_the_query()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        foreach (['nope', "{$q}nope{$q}"] as $key) {
+            $conditions = [$key => 1];
+
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::all(['conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::find('all', ['conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::first(['conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::last(['conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::all(['joins' => ['books'], 'conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::count(['conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::count($conditions));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::exists($conditions));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::update_all(['set' => ['name' => 'x'], 'conditions' => $conditions]));
+            $this->assert_unknown_hash_key(Author::class, $key, fn() => Author::delete_all(['conditions' => $conditions]));
+        }
+
+        // a valid key next to the unknown one changes nothing; no row was touched
+        $this->assert_unknown_hash_key(Author::class, 'nope', fn() => Author::delete_all(['conditions' => ['author_id' => 1, 'nope' => 1]]));
+        $this->assert_equals(4, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'x']]));
+    }
+
+    public function test_function_call_hash_condition_key_is_an_unknown_column()
+    {
+        // a hash key is always an identifier: LOWER(name) is one (unknown) column name,
+        // never a call; write expressions as a positional condition instead
+        $this->assert_unknown_hash_key(Author::class, 'LOWER(name)', fn() => Author::all(['conditions' => ['LOWER(name)' => 'tito']]));
+        $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, Author::all(['conditions' => ['LOWER(name) = ?', 'tito']])));
+    }
+
+    public function test_hash_condition_keys_match_column_names_as_the_database_does()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
+            // a quoted identifier is case-sensitive
+            $this->assert_unknown_hash_key(Author::class, 'AUTHOR_ID', fn() => Author::all(['conditions' => ['AUTHOR_ID' => 1]]));
+            // system columns and the whole-row reference resolve too
+            $this->assert_equals([], Author::all(['conditions' => ['ctid' => null, 'tableoid' => null, 'xmin' => null]]));
+            $this->assert_equals([], Author::all(['conditions' => ['authors' => null]]));
+        } else {
+            // MySQL, MariaDB and SQLite compare column names case-insensitively
+            foreach (['AUTHOR_ID', "{$q}Author_Id{$q}"] as $key) {
+                $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, Author::all(['conditions' => [$key => 1]])), $key);
+            }
+
+            $this->assert_equals([1], array_map(fn($b) => $b->book_id, Book::all(['conditions' => ['AUTHOR_ID' => 1]])));
+            $pseudo = $this->conn instanceof ActiveRecord\SqliteAdapter ? ['rowid', 'OID', '_rowid_'] : ['_rowid', '_ROWID'];
+
+            foreach ($pseudo as $key) {
+                $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, Author::all(['conditions' => [$key => 1]])), $key);
+            }
+        }
+
+        // an alias_attribute name is mapped to its column by the finders
+        $this->assert_equals(1, count(Venue::all(['conditions' => ['marquee' => 'Warner Theatre']])));
+    }
+
+    public function test_qualified_hash_condition_keys_are_not_checked()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        foreach (['authors.nope', "{$q}authors{$q}.{$q}nope{$q}", 'books.nope'] as $key) {
+            Author::table()->last_sql = 'not run';
+
+            try {
+                Author::all(['conditions' => [$key => 1]]);
+                $this->fail("$key must fail at the database");
+            } catch (ActiveRecord\DatabaseException $e) {
+                // the database itself rejected it
+                $this->assert_not_equals('not run', Author::table()->last_sql, $key);
+                $this->assert_false(str_starts_with($e->getMessage(), 'Unknown column'), $e->getMessage());
+            }
+        }
+    }
+
+    public function test_hash_condition_keys_are_not_checked_with_from()
+    {
+        // `from` may name any table: the database decides
+        Author::table()->last_sql = 'not run';
+
+        try {
+            Author::all(['from' => 'authors', 'conditions' => ['nope' => 1]]);
+            $this->fail('nope must fail at the database');
+        } catch (ActiveRecord\DatabaseException) {
+            $this->assert_not_equals('not run', Author::table()->last_sql);
+        }
+
+        $this->assert_equals(1, count(Author::all(['from' => 'authors', 'conditions' => ['author_id' => 1]])));
+    }
+
+    public function test_hash_condition_key_naming_a_select_alias_on_sqlite()
+    {
+        $options = ['select' => 'name AS label', 'conditions' => ['label' => 'Tito']];
+
+        if (!($this->conn instanceof ActiveRecord\SqliteAdapter)) {
+            // MySQL, MariaDB and Postgres do not resolve select aliases in WHERE
+            $this->assert_unknown_hash_key(Author::class, 'label', fn() => Author::all($options));
+
+            return;
+        }
+
+        // SQLite resolves a select-list alias in WHERE: left to the database
+        $this->assert_equals(['Tito'], array_map(fn($a) => $a->label, Author::all($options)));
+    }
+
+    public function test_hash_condition_key_missing_from_a_stale_schema_cache_is_rechecked()
+    {
+        // a column added after the schema was cached (e.g. by a migration) is not rejected
+        $table = Author::table();
+        $columns = $table->columns;
+        unset($table->columns['name']);
+
+        try {
+            $authors = Author::all(['conditions' => ['name' => 'Tito']]);
+        } finally {
+            $table->columns = $columns;
+        }
+
+        $this->assert_equals([1], array_map(fn($a) => $a->author_id, $authors));
+    }
+
+    public function test_unknown_relationship_hash_condition_key_is_rejected()
+    {
+        // lazy load
+        $this->assert_unknown_hash_key(Author::class, 'nope', fn() => UnknownKeyConditionBook::find(1)->author);
+
+        // eager load
+        $this->assert_unknown_hash_key(Author::class, 'nope', fn() => UnknownKeyConditionBook::all(['include' => ['author']]));
+    }
+
+    public function test_through_relationship_hash_condition_key_may_name_a_middle_table_column()
+    {
+        // 'title' is events.title (the middle table), not a column of hosts
+        $this->assert_equals([3], array_map(fn($h) => $h->id, TitleScopedVenue::find(2)->hosts));
+
+        $venues = TitleScopedVenue::all(['conditions' => ['id' => [1, 2]], 'include' => ['hosts'], 'order' => 'id']);
+        $this->assert_equals([[], [3]], array_map(fn($v) => array_map(fn($h) => $h->id, $v->hosts), $venues));
+    }
+
+    /**
+     * Runs $finder, which must throw the "unknown column" DatabaseException for
+     * $key before any query reaches the database.
+     *
+     * @param class-string<ActiveRecord\Model> $class the model whose table is checked
+     */
+    private function assert_unknown_hash_key(string $class, string $key, callable $finder): void
+    {
+        $table = $class::table();
+        $table->last_sql = 'not run';
+
+        try {
+            $finder();
+        } catch (ActiveRecord\DatabaseException $e) {
+            $this->assert_equals("Unknown column '$key' in hash conditions for $class (table {$table->table})", $e->getMessage());
+            $this->assert_equals('not run', $table->last_sql);
+
+            return;
+        }
+
+        $this->fail("expected the unknown hash key '$key' to be rejected: " . $table->last_sql);
+    }
+
+    /**
+     * The WHERE rendering of a conditions hash on the authors table, without running it.
+     *
+     * @param array<string, mixed> $conditions
+     */
+    private function hash_where_sql(array $conditions, ?string $joins = null): string
+    {
+        $sql = new ActiveRecord\SQLBuilder($this->conn, Author::table()->get_fully_qualified_table_name());
+        $sql->joins($joins);
+
+        return $sql->where($conditions)->to_s();
     }
 
     /**

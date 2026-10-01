@@ -437,6 +437,13 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected function to_positional_conditions(Connection $conn, array $conditions)
     {
         if (is_hash($conditions)) {
+            // without `through` the query reads only the target table, so a key must name
+            // one of its columns; with it, an unqualified key may name a middle-table column
+            if (empty($this->options['through'])) {
+                $select = $this->options['select'] ?? null;
+                $this->get_table()->validate_condition_keys($conditions, is_string($select) ? $select : null);
+            }
+
             require_once 'Expressions.php';
             $expressions = new Expressions($conn, $conditions);
             return array_merge([$expressions->to_s()], array_flatten($expressions->values()));

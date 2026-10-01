@@ -78,10 +78,10 @@ out('  SQL: ' . Task::table()->last_sql);
 try {
     $rows = Task::all(['conditions' => ['flag` IS NOT NULL OR `flag' => 0]]);
     out('crafted hash key:       ' . names($rows));
-} catch (ActiveRecord\DatabaseException) {
-    out('crafted hash key:       rejected (unknown column), no rows returned');
+} catch (ActiveRecord\DatabaseException $e) {
+    out('crafted hash key:       rejected, no rows returned');
+    out('  ' . $e->getMessage());
 }
-out('  SQL: ' . Task::table()->last_sql);
 
 // 4c. Keys that name the same column ('flag', `flag`, `tasks`.`flag`) are all kept and
 //     ANDed with `joins`, exactly as without joins, so a caller's filter cannot replace a
@@ -93,6 +93,16 @@ $rows = Task::all([
 ]);
 out('scope + same column:    ' . names($rows) . '   <- both conditions apply');
 out('  SQL: ' . Task::table()->last_sql);
+
+// 4d. An unqualified hash key that names no column of the model's table (a typo, or a
+//     function call such as 'LOWER(name)' — hash keys are never expressions) is
+//     rejected before any query, naming the model and the key. It used to reach the
+//     database as an unknown column. A table-qualified key ('labels.name') is not checked.
+try {
+    Task::all(['conditions' => ['nmae' => 'cut release']]);
+} catch (ActiveRecord\DatabaseException $e) {
+    out('unknown hash key:       ' . $e->getMessage());
+}
 
 // 5. The boundary: a user-authored fragment is NOT rewritten — the null is
 //    bound as-is, and under SQL three-valued logic the NULL row is excluded.
