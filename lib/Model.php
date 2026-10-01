@@ -126,8 +126,10 @@ class Model
 
     /**
      * The primary key values (name => value) the row is stored under: those
-     * this record was loaded, inserted or reloaded with. Null on a new record.
-     * update()/delete() refuse a pk changed since then (#41).
+     * this record was loaded or reloaded with, or that its INSERT sent or read
+     * back. Null on a new record; a pk column missing here is untracked (e.g.
+     * filled by the database on insert). update()/delete() refuse a tracked pk
+     * changed since then (#41).
      *
      * @var array<string, mixed>|null
      */
@@ -312,7 +314,8 @@ class Model
         }
 
         if (!$new_record) {
-            $this->remember_persisted_pk();
+            // a find loads the row; built by hand, only the pk values passed in are known
+            $this->remember_persisted_pk($instantiating_via_find ? null : array_keys(array_filter($this->dirty_attributes() ?? [], fn($value) => null !== $value)));
         }
 
         $this->invoke_callback('after_construct', false);
@@ -930,6 +933,10 @@ class Model
             $table->insert($attributes);
         }
 
+        // the row is stored under the pk values this INSERT sent or reads back below; one
+        // the database filled itself (a column default, a trigger) is not known here
+        $stored = array_keys(array_filter($attributes, fn($value) => null !== $value));
+
         // if we've got an autoincrementing/sequenced pk set it
         // don't need this check until the day comes that we decide to support composite pks
         // if (count($pk) == 1)
@@ -938,11 +945,12 @@ class Model
 
             if (null !== $column && ($column->auto_increment || $use_sequence)) {
                 $this->attributes[$pk] = static::connection()->insert_id($table->sequence);
+                $stored[] = $pk;
             }
         }
 
         $this->__new_record = false;
-        $this->remember_persisted_pk();
+        $this->remember_persisted_pk($stored);
         $this->invoke_callback('after_create', false);
         return true;
     }
@@ -985,7 +993,9 @@ class Model
             static::table()->update($dirty, $pk);
             // the row is keyed on $pk, read before before_update: a pk that callback
             // assigned was written by this UPDATE, so the row now lives under it
-            $this->remember_persisted_pk();
+            if (null !== $this->__persisted_pk) {
+                $this->remember_persisted_pk(array_keys($this->__persisted_pk));
+            }
             $this->invoke_callback('after_update', false);
         }
 
@@ -1145,8 +1155,9 @@ class Model
      * matches nothing) or, on a persisted record, a pk value changed since it
      * was loaded/inserted/reloaded (the statement would target the row under
      * the new value). Values are compared after the column cast, so 1 and '1'
-     * are the same key. A pk not loaded at all (a `select` without it) is left
-     * to values_for_pk(), which reports it as before.
+     * (or a value object and its string) are the same key. An untracked pk
+     * column is only checked for null; one not loaded at all (a `select`
+     * without it) is left to values_for_pk(), which reports it as before.
      *
      * @param 'update'|'delete' $action
      * @throws ActiveRecordException
@@ -1191,25 +1202,42 @@ class Model
 
     /**
      * Records the current pk values as the ones the row is stored under.
+     *
+     * @param list<string>|null $stored only these pk columns (null: all), so a value
+     *   the row was never written or read with stays untracked
      */
-    private function remember_persisted_pk(): void
+    private function remember_persisted_pk(?array $stored = null): void
     {
         $this->__persisted_pk = [];
 
         foreach (static::table()->pk as $name) {
-            if (array_key_exists($name, $this->attributes)) {
+            if (array_key_exists($name, $this->attributes) && (null === $stored || in_array($name, $stored, true))) {
                 $value = $this->attributes[$name];
-                // a DateTime is modified in place: keep a copy of the stored value
-                $this->__persisted_pk[$name] = is_object($value) ? clone $value : $value;
+                $this->__persisted_pk[$name] = match (true) {
+                    // modified in place: keep a copy of the stored value
+                    $value instanceof \DateTimeInterface => clone $value,
+                    // a value object (e.g. a UUID) is bound as its string
+                    $value instanceof \Stringable => (string) $value,
+                    default => $value,
+                };
             }
         }
     }
 
     /**
-     * Casts a pk value the way assign_attribute() does.
+     * Casts a pk value the way it reaches the database: a DateTime as is, a value
+     * object as the string PDO binds, then the column cast assign_attribute() applies.
      */
     private function cast_pk_value(string $name, mixed $value): mixed
     {
+        if ($value instanceof \DateTimeInterface) {
+            return $value;
+        }
+
+        if ($value instanceof \Stringable) {
+            $value = (string) $value;
+        }
+
         $table = static::table();
         $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
 

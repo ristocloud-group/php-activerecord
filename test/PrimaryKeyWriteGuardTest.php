@@ -18,6 +18,35 @@ class PkGuardReadReceipt extends ActiveRecord\Model
     public static $table_name = 'news_read_receipts';
 }
 
+// a value object such as a UUID: assign_attribute() does not cast objects, PDO binds its string
+final class PkGuardCodeValue implements Stringable
+{
+    public function __construct(private string $value) {}
+
+    public function __toString(): string
+    {
+        return $this->value;
+    }
+}
+
+// string composite primary key (owner, code); the database fills `code` when it is not sent
+class PkGuardCodedItem extends ActiveRecord\Model
+{
+    public static $table_name = 'coded_items';
+}
+
+// assigns a value-object `code` in before_create, as a key generator would
+class PkGuardGeneratedCodeItem extends ActiveRecord\Model
+{
+    public static $table_name = 'coded_items';
+    public static $before_create = ['generate_code'];
+
+    public function generate_code(): void
+    {
+        $this->code = new PkGuardCodeValue('generated');
+    }
+}
+
 class PrimaryKeyWriteGuardTest extends DatabaseTest
 {
     /** @var list<string> */
@@ -48,6 +77,7 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
      */
     private function assert_refused(string $message, callable $write, string $class = Author::class): void
     {
+        $this->fired = [];
         $this->track_callbacks($class);
         $conn = $class::connection();
         $conn->last_query = 'no query';
@@ -62,6 +92,11 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
 
         $this->assert_same('no query', $conn->last_query);
         $this->assert_same([], $this->fired);
+    }
+
+    private function coded_item_name(string $owner, string $code): ?string
+    {
+        return PkGuardCodedItem::first(['conditions' => ['owner' => $owner, 'code' => $code]])?->name;
     }
 
     /**
@@ -432,5 +467,103 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         $this->assert_exception_message_contains('Undefined property: Author->author_id', fn() => $author->save());
         $this->assert_exception_message_contains('Undefined property: Author->author_id', fn() => $author->delete());
         $this->assert_same('Tito', Author::find(1)->name);
+    }
+
+    public function test_stringable_pk_assigned_in_before_create_updates_and_deletes()
+    {
+        $item = PkGuardGeneratedCodeItem::create(['owner' => 'acme', 'name' => 'new']);
+        $this->assert_instance_of(PkGuardCodeValue::class, $item->code);
+
+        $item->name = 'saved';
+        $this->assert_true($item->save());
+        $this->assert_true($item->update_attribute('name', 'updated'));
+        $this->assert_same('updated', $this->coded_item_name('acme', 'generated'));
+
+        $this->assert_true($item->delete());
+        $this->assert_null($this->coded_item_name('acme', 'generated'));
+    }
+
+    public function test_stringable_pk_assigned_by_hand_updates_normally()
+    {
+        $item = new PkGuardCodedItem();
+        $item->owner = 'acme';
+        $item->code = new PkGuardCodeValue('manual');
+        $item->name = 'new';
+        $this->assert_true($item->save());
+
+        $this->assert_true($item->update_attribute('name', 'updated'));
+        $this->assert_same('updated', $this->coded_item_name('acme', 'manual'));
+    }
+
+    public function test_equal_stringable_pk_on_a_loaded_record_is_not_a_change()
+    {
+        $item = PkGuardCodedItem::first(['conditions' => ['owner' => 'acme', 'code' => 'abc']]);
+        $item->code = new PkGuardCodeValue('abc');
+        $item->name = 'same';
+
+        $this->assert_true($item->save());
+        $this->assert_same('same', $this->coded_item_name('acme', 'abc'));
+    }
+
+    public function test_different_stringable_pk_is_a_change()
+    {
+        $item = PkGuardCodedItem::first(['conditions' => ['owner' => 'acme', 'code' => 'abc']]);
+        $item->code = new PkGuardCodeValue('def');
+        $item->name = 'overwrites def';
+
+        $this->assert_refused(
+            "Cannot update, primary key changed for: PkGuardCodedItem (code: 'abc' => 'def')",
+            fn() => $item->save(),
+            PkGuardCodedItem::class
+        );
+        $this->assert_same('one', $this->coded_item_name('acme', 'abc'));
+        $this->assert_same('two', $this->coded_item_name('acme', 'def'));
+    }
+
+    public function test_pk_filled_by_the_database_on_insert_is_not_tracked()
+    {
+        // `code` is not sent, so the database fills it; the attribute keeps the
+        // introspected default expression, which is not what the row is stored under
+        $item = PkGuardCodedItem::create(['owner' => 'db', 'name' => 'new']);
+
+        // the usual workaround: read the generated key back and assign it
+        $item->code = PkGuardCodedItem::first(['conditions' => ['owner' => 'db']])->code;
+        $item->name = 'updated';
+        $this->assert_true($item->save());
+        $this->assert_same('updated', PkGuardCodedItem::first(['conditions' => ['owner' => 'db']])->name);
+
+        // the column the INSERT sent is still tracked, and a null value is still refused
+        $item->owner = 'other';
+        $this->assert_refused(
+            "Cannot update, primary key changed for: PkGuardCodedItem (owner: 'db' => 'other')",
+            fn() => $item->save(),
+            PkGuardCodedItem::class
+        );
+
+        $item->owner = 'db';
+        $item->code = null;
+        $this->assert_refused(
+            'Cannot delete, primary key value is null for: PkGuardCodedItem (code)',
+            fn() => $item->delete(),
+            PkGuardCodedItem::class
+        );
+        $this->assert_equals(1, PkGuardCodedItem::count(['conditions' => ['owner' => 'db']]));
+    }
+
+    public function test_record_built_as_persisted_tracks_only_the_pk_values_passed_in()
+    {
+        // `code` is not passed: the attribute holds the column default, which is not
+        // what the row is stored under, so assigning the real key is not a change
+        $item = new PkGuardCodedItem(['owner' => 'acme', 'name' => 'renamed'], true, false, false);
+        $item->code = 'abc';
+        $this->assert_true($item->save());
+        $this->assert_same('renamed', $this->coded_item_name('acme', 'abc'));
+
+        $item->owner = 'other';
+        $this->assert_refused(
+            "Cannot update, primary key changed for: PkGuardCodedItem (owner: 'acme' => 'other')",
+            fn() => $item->save(),
+            PkGuardCodedItem::class
+        );
     }
 }

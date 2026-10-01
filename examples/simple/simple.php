@@ -61,9 +61,9 @@ $writes = [
 ];
 foreach ($writes as $call => $write) {
     try {
-        $write();
+        echo "$call() returned " . var_export($write(), true) . "\n";
     } catch (ActiveRecord\ActiveRecordException $e) {
-        echo "$call(): " . $e->getMessage() . "\n";
+        echo "$call() threw: " . $e->getMessage() . "\n";
     }
 }
 echo 'books in the table: ' . Book::count() . "\n\n";
