@@ -132,17 +132,42 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_cast(Column::INTEGER, 9223372036854774784, 9.2233720368547748E18);
     }
 
-    public function test_cast_integer_keeps_floats_outside_the_int_range()
+    public function test_cast_integer_turns_finite_floats_outside_the_int_range_into_exact_strings()
     {
-        // (int) would wrap these into an unrelated int (and PHP 8.5 warns)
-        $this->assert_cast(Column::INTEGER, 1.8446744073709552E19, 1.8446744073709552E19);
-        $this->assert_cast(Column::INTEGER, 9.2233720368547758E18, 9.2233720368547758E18);
-        $this->assert_cast(Column::INTEGER, -1.0E19, -1.0E19);
-        $this->assert_cast(Column::INTEGER, INF, INF);
-        $this->assert_cast(Column::INTEGER, -INF, -INF);
+        // (int) would wrap these into an unrelated int (and PHP 8.5 warns);
+        // binding the float itself would keep only 14 significant digits
+        $this->assert_cast(Column::INTEGER, '12345678901234567168', 1.2345678901234567E19);
+        $this->assert_cast(Column::INTEGER, '18446744073709551616', 1.8446744073709552E19);
+        $this->assert_cast(Column::INTEGER, '9223372036854775808', 9.2233720368547758E18);
+        $this->assert_cast(Column::INTEGER, '-9223372036854777856', -9.2233720368547778E18);
+        $this->assert_cast(Column::INTEGER, '-10000000000000000000', -1.0E19);
+    }
 
+    public function test_cast_integer_casts_nan_and_inf_as_before()
+    {
+        // (int) gives 0, as it always did; PHP 8.5 also warns that the float is
+        // not representable as an int, so capture warnings instead of letting
+        // them fail the suite
         $this->column->type = Column::INTEGER;
-        $this->assert_nan($this->column->cast(NAN, $this->conn));
+
+        foreach ([NAN, INF, -INF] as $value) {
+            $warnings = [];
+            set_error_handler(function (int $errno, string $errstr) use (&$warnings): bool {
+                $warnings[] = $errstr;
+                return true;
+            });
+
+            try {
+                $cast = $this->column->cast($value, $this->conn);
+            } finally {
+                restore_error_handler();
+            }
+
+            $this->assert_same(0, $cast);
+            foreach ($warnings as $warning) {
+                $this->assert_string_contains_string('is not representable as an int', $warning);
+            }
+        }
     }
 
     public function test_cast_boolean()

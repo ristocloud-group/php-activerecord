@@ -54,6 +54,19 @@ class MysqlBigintUnsignedTest extends DatabaseTest
         $this->assert_same(self::U64_MAX, $model->id);
     }
 
+    public function test_a_float_above_php_int_max_is_saved_as_its_exact_integer()
+    {
+        // bound as a float, PDO would write 1.2345678901235E+19 (14 digits)
+        $model = new BigId();
+        $model->id = 1.2345678901234567E19;
+        $model->note = 'from float';
+        $this->assert_same('12345678901234567168', $model->id);
+        $model->save();
+
+        $this->assert_same('from float', $this->rows()['12345678901234567168'] ?? null);
+        $this->assert_same('12345678901234567168', BigId::find_by_note('from float')->id);
+    }
+
     public function test_find_by_pk_tells_neighbouring_values_apart()
     {
         $this->assert_same('u64 max', BigId::find(self::U64_MAX)->note);
