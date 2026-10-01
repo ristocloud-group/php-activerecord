@@ -83,6 +83,17 @@ try {
 }
 out('  SQL: ' . Task::table()->last_sql);
 
+// 4c. Keys that name the same column ('flag', `flag`, `tasks`.`flag`) are all kept and
+//     ANDed with `joins`, exactly as without joins, so a caller's filter cannot replace a
+//     mandatory scope. (They used to collapse into the last key: 'review PR' came back.)
+$scope = ['flag' => 1];
+$rows = Task::all([
+    'joins' => 'JOIN labels ON (labels.task_id = tasks.id)',
+    'conditions' => $scope + ['`tasks`.`flag`' => 2],
+]);
+out('scope + same column:    ' . names($rows) . '   <- both conditions apply');
+out('  SQL: ' . Task::table()->last_sql);
+
 // 5. The boundary: a user-authored fragment is NOT rewritten — the null is
 //    bound as-is, and under SQL three-valued logic the NULL row is excluded.
 $rows = Task::all(['conditions' => ['flag IN(?)', [1, null]]]);

@@ -420,25 +420,34 @@ class SQLBuilder
      * prepends table name to hash of field names to get around ambiguous fields when SQL builder
      * has joins. A key that is already table-qualified is kept as is (#35).
      *
+     * Keys that end up naming the same column ('id' and `id` both become `t`.`id`) would
+     * overwrite each other in one hash, so a repeated key starts a new hash: every
+     * condition is kept, in order, and the caller ANDs the hashes. Without a repeated key
+     * there is a single hash, as before.
+     *
      * @param array<string, mixed> $hash
-     * @return array<string, mixed> $new
+     * @return non-empty-list<array<string, mixed>>
      */
     private function prepend_table_name_to_fields(array $hash = []): array
     {
+        $hashes = [];
         $new = [];
         $table = $this->connection->quote_name($this->table ?? '');
 
         foreach ($hash as $key => $value) {
-            if ($this->is_qualified_key((string) $key)) {
-                $new[$key] = $value;
-                continue;
+            $k = $this->is_qualified_key((string) $key) ? (string) $key : $table . '.' . $this->connection->quote_name($key);
+
+            if (array_key_exists($k, $new)) {
+                $hashes[] = $new;
+                $new = [];
             }
 
-            $k = $this->connection->quote_name($key);
-            $new[$table . '.' . $k] = $value;
+            $new[$k] = $value;
         }
 
-        return $new;
+        $hashes[] = $new;
+
+        return $hashes;
     }
 
     /**
@@ -470,10 +479,18 @@ class SQLBuilder
         $num_args = count($args);
 
         if ($num_args == 1 && is_hash($args[0])) {
-            $hash = is_null($this->joins) ? $args[0] : $this->prepend_table_name_to_fields($args[0]);
-            $e = new Expressions($this->connection, $hash);
-            $this->where = $e->to_s();
-            $this->where_values = array_flatten($e->values());
+            $hashes = is_null($this->joins) ? [$args[0]] : $this->prepend_table_name_to_fields($args[0]);
+            $where = [];
+            $values = [];
+
+            foreach ($hashes as $hash) {
+                $e = new Expressions($this->connection, $hash);
+                $where[] = $e->to_s();
+                $values[] = $e->values();
+            }
+
+            $this->where = implode(' AND ', $where);
+            $this->where_values = array_flatten($values);
         } elseif ($num_args > 0) {
             // if the values has a nested array then we'll need to use Expressions to expand the bind marker for us
             $values = array_slice($args, 1);

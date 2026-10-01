@@ -657,6 +657,60 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals(3, Author::count());
     }
 
+    public function test_joins_keep_every_hash_key_naming_the_same_column()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // a mandatory scope plus a second key on the same column, spelled another way:
+        // with joins both stay ANDed, exactly as without joins (they used to collapse
+        // into one key, the last one, so the scope was overridden)
+        foreach (["{$q}author_id{$q}", "{$q}books{$q}.{$q}author_id{$q}", 'books.author_id'] as $key) {
+            $conditions = ['author_id' => 1, $key => 2];
+
+            $this->assert_equals([], Book::all(['conditions' => $conditions]), $key);
+            $this->assert_equals([], Book::all(['joins' => ['author'], 'conditions' => $conditions]), $key);
+        }
+
+        Book::all(['joins' => ['author'], 'conditions' => ['author_id' => 1, "{$q}author_id{$q}" => 2]]);
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}author_id{$q}=?", Book::table()->last_sql);
+    }
+
+    public function test_joins_keep_bind_values_aligned_for_keys_naming_the_same_column()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $conditions = [
+            'author_id' => [1, 2],
+            "{$q}author_id{$q}" => 2,
+            'name' => 'Another Book',
+            "{$q}books{$q}.{$q}author_id{$q}" => [2, null],
+        ];
+
+        $this->assert_equals([2], array_map(fn($book) => $book->book_id, Book::all(['conditions' => $conditions])));
+        $this->assert_equals([2], array_map(fn($book) => $book->book_id, Book::all(['joins' => ['author'], 'conditions' => $conditions])));
+        $this->assert_sql_has_exact(
+            "WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?) AND {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}name{$q}=?"
+            . " AND ({$q}books{$q}.{$q}author_id{$q} IN(?) OR {$q}books{$q}.{$q}author_id{$q} IS NULL)",
+            Book::table()->last_sql
+        );
+    }
+
+    public function test_joins_render_keys_naming_the_same_column_in_order()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $joins = 'INNER JOIN books ON(books.author_id = authors.author_id)';
+
+        $sql = new ActiveRecord\SQLBuilder($this->conn, "{$q}authors{$q}");
+        $sql->joins($joins);
+        $sql->where(['id' => 1, 'name' => 'x', "{$q}id{$q}" => 2, "{$q}authors{$q}.{$q}id{$q}" => 3, 'authors.id' => 4]);
+
+        $this->assert_equals(
+            "SELECT * FROM {$q}authors{$q} $joins WHERE {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}name{$q}=?"
+            . " AND {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}id{$q}=?",
+            $sql->to_s()
+        );
+        $this->assert_equals([1, 'x', 2, 3, 4], $sql->bind_values());
+    }
+
     /**
      * Runs a finder that must fail at the database (unknown identifier) and
      * must never return rows.
