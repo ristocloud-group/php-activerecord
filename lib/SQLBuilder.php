@@ -185,7 +185,7 @@ class SQLBuilder
      */
     public function limit($limit)
     {
-        $this->limit = 0 === $limit || '0' === $limit ? 0 : (intval($limit) ?: null);
+        $this->limit = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
         return $this;
     }
 

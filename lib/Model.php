@@ -1631,7 +1631,8 @@ class Model
      * </code>
      *
      * @see find
-     * @return int|string Number of records that matched the query
+     * @return int|string Number of records that matched the query; 0 when the count query
+     *   returns no row (e.g. 'limit' => 0, or an 'offset' past its single row) (#34)
      */
     public static function count(/* ... */)
     {
@@ -1641,7 +1642,9 @@ class Model
         $table = static::table();
         $sql = $table->options_to_sql($options);
         $values = $sql->get_where_values();
-        return static::connection()->query_and_fetch_one($sql->to_s(), $values);
+        $row = static::connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
+
+        return false === $row ? 0 : $row[0];
     }
 
     /**

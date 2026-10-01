@@ -658,9 +658,11 @@ abstract class Connection
     /**
      * Adds an offset clause with no row limit: every row after the first $offset (#34).
      *
-     * The default renders what SQLBuilder rendered before this hook existed,
-     * limit($sql, $offset, 0), so an adapter that does not override it is unchanged.
-     * The bundled adapters override it.
+     * The default implementation returns NO rows: it renders limit($sql, $offset, 0),
+     * which is what SQLBuilder rendered for an offset without a limit before this hook
+     * existed, so an adapter that does not override it behaves as it always has. An
+     * adapter must override it to return every row after the offset; the bundled
+     * MySQL/MariaDB, Postgres and SQLite adapters do.
      *
      * @param string $sql The SQL statement.
      * @param int $offset Number of rows to skip (positive).
