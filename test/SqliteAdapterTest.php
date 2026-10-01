@@ -39,6 +39,16 @@ class SqliteAdapterTest extends AdapterTest
         $this->assert_true(strpos($this->conn->last_query, 'LIMIT 1') !== false);
     }
 
+    public function test_gh34_limit_zero_and_offset_without_limit_sql()
+    {
+        Author::all(['order' => 'author_id', 'limit' => 0]);
+        $this->assert_equals('SELECT * FROM `authors` ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+
+        // SQLite needs a LIMIT before OFFSET; a negative LIMIT means "no upper bound"
+        Author::all(['order' => 'author_id', 'offset' => 2]);
+        $this->assert_equals('SELECT * FROM `authors` ORDER BY author_id LIMIT -1 OFFSET 2', Author::table()->last_sql);
+    }
+
     public function test_gh183_sqliteadapter_autoincrement()
     {
         // defined in lowercase: id integer not null primary key

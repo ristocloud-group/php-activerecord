@@ -176,12 +176,16 @@ class SQLBuilder
     }
 
     /**
+     * An explicit zero (0 or '0') is a LIMIT 0 that returns/affects no rows (#34).
+     * Any other value is cast with intval(), and one that casts to 0 (null, '', ...)
+     * means no limit, as it always has.
+     *
      * @param int|string $limit
      * @return $this
      */
     public function limit($limit)
     {
-        $this->limit = intval($limit);
+        $this->limit = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
         return $this;
     }
 
@@ -482,7 +486,7 @@ class SQLBuilder
                 $sql .= " ORDER BY $this->order";
             }
 
-            if ($this->limit) {
+            if (null !== $this->limit) {
                 $sql = $this->connection->limit($sql, null, $this->limit);
             }
         }
@@ -557,8 +561,12 @@ class SQLBuilder
             $sql .= " ORDER BY $this->order";
         }
 
-        if ($this->limit || $this->offset) {
+        if (null !== $this->limit || ($this->offset ?? 0) < 0) {
+            // a limit (0 included, #34); a negative offset without one renders as it always has
             $sql = $this->connection->limit($sql, $this->offset, $this->limit ?? 0);
+        } elseif ($this->offset) {
+            // an offset without a limit: every row after the offset (#34)
+            $sql = $this->connection->offset_without_limit($sql, $this->offset);
         }
 
         return $sql;
@@ -583,7 +591,7 @@ class SQLBuilder
                 $sql .= " ORDER BY $this->order";
             }
 
-            if ($this->limit) {
+            if (null !== $this->limit) {
                 $sql = $this->connection->limit($sql, null, $this->limit);
             }
         }
