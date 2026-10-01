@@ -80,6 +80,12 @@ CREATE TABLE pkless_items(
     name VARCHAR(10)
 );
 
+-- BIGINT UNSIGNED pk: values above PHP_INT_MAX must stay exact strings (#44)
+CREATE TABLE big_ids(
+    id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    note VARCHAR(20)
+);
+
 CREATE TABLE awesome_people(
 	id int not null primary key auto_increment,
 	author_id int,

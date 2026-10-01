@@ -98,6 +98,53 @@ class ColumnTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_cast(Column::STRING, 'bubble tea', 'bubble tea');
     }
 
+    public function test_cast_integer_keeps_integer_strings_beyond_the_int_range()
+    {
+        // (int) would clamp these to PHP_INT_MAX / PHP_INT_MIN (#44): e.g. a
+        // MySQL BIGINT UNSIGNED above PHP_INT_MAX, which PDO returns as a string
+        $this->assert_cast(Column::INTEGER, '18446744073709551615', '18446744073709551615');
+        $this->assert_cast(Column::INTEGER, '9223372036854775808', '9223372036854775808');
+        $this->assert_cast(Column::INTEGER, '-9223372036854775809', '-9223372036854775809');
+        $this->assert_cast(Column::INTEGER, '+18446744073709551615', '+18446744073709551615');
+        $this->assert_cast(Column::INTEGER, '00018446744073709551615', '00018446744073709551615');
+        $this->assert_cast(Column::INTEGER, ' 18446744073709551615 ', ' 18446744073709551615 ');
+    }
+
+    public function test_cast_integer_casts_values_within_the_int_range_as_before()
+    {
+        $this->assert_cast(Column::INTEGER, PHP_INT_MAX, '9223372036854775807');
+        $this->assert_cast(Column::INTEGER, PHP_INT_MIN, '-9223372036854775808');
+        $this->assert_cast(Column::INTEGER, PHP_INT_MAX, '0009223372036854775807');
+        $this->assert_cast(Column::INTEGER, PHP_INT_MAX, PHP_INT_MAX);
+        $this->assert_cast(Column::INTEGER, 7, '007');
+        $this->assert_cast(Column::INTEGER, 12, ' 12 ');
+        $this->assert_cast(Column::INTEGER, 5, '+5');
+        $this->assert_cast(Column::INTEGER, -5, '-5');
+        $this->assert_cast(Column::INTEGER, 1000, '1e3');
+        $this->assert_cast(Column::INTEGER, 12, '12abc');
+        $this->assert_cast(Column::INTEGER, 0, 'abc');
+        $this->assert_cast(Column::INTEGER, 0, '');
+        $this->assert_cast(Column::INTEGER, 1, true);
+        $this->assert_cast(Column::INTEGER, 0, false);
+        $this->assert_cast(Column::INTEGER, 1, 1.9);
+        $this->assert_cast(Column::INTEGER, -1, -1.9);
+        $this->assert_cast(Column::INTEGER, PHP_INT_MIN, (float) PHP_INT_MIN);
+        $this->assert_cast(Column::INTEGER, 9223372036854774784, 9.2233720368547748E18);
+    }
+
+    public function test_cast_integer_keeps_floats_outside_the_int_range()
+    {
+        // (int) would wrap these into an unrelated int (and PHP 8.5 warns)
+        $this->assert_cast(Column::INTEGER, 1.8446744073709552E19, 1.8446744073709552E19);
+        $this->assert_cast(Column::INTEGER, 9.2233720368547758E18, 9.2233720368547758E18);
+        $this->assert_cast(Column::INTEGER, -1.0E19, -1.0E19);
+        $this->assert_cast(Column::INTEGER, INF, INF);
+        $this->assert_cast(Column::INTEGER, -INF, -INF);
+
+        $this->column->type = Column::INTEGER;
+        $this->assert_nan($this->column->cast(NAN, $this->conn));
+    }
+
     public function test_cast_boolean()
     {
         // PHP bools and numeric forms

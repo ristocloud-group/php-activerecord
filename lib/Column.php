@@ -126,7 +126,25 @@ class Column
 
         switch ($this->type) {
             case self::STRING:	return (string) $value;
-            case self::INTEGER:	return (int) $value;
+            case self::INTEGER:
+                // (int) would clamp an integer string beyond the int range to
+                // PHP_INT_MAX/PHP_INT_MIN (e.g. a MySQL BIGINT UNSIGNED above
+                // PHP_INT_MAX, which PDO returns as a string) and wrap a float
+                // outside it into an unrelated int (PHP 8.5 also warns): keep
+                // such values unchanged, so a model never holds, nor queries
+                // by, a wrong integer (#44). Values that fit cast as before.
+                if (is_string($value) && is_numeric($value) && false === strpbrk($value, '.eE') && is_float($value + 0)) {
+                    // an integer numeric string PHP cannot fit in an int (+ 0 yields a float)
+                    return $value;
+                }
+
+                // NAN, ±INF and floats outside [PHP_INT_MIN, PHP_INT_MAX]
+                // (PHP_INT_MAX + 1 is computed exactly as a float: 2**63 on 64-bit)
+                if (is_float($value) && !($value >= PHP_INT_MIN && $value < PHP_INT_MAX + 1)) {
+                    return $value;
+                }
+
+                return (int) $value;
             case self::DECIMAL:	return (float) $value;
             case self::BOOLEAN:
                 // Native PHP bool. Textual forms need explicit handling:

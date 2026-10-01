@@ -79,6 +79,12 @@ CREATE TABLE pkless_items(
     name VARCHAR(10)
 );
 
+-- bigint pk: signed here, so the above-PHP_INT_MAX case (#44) is MySQL-only
+CREATE TABLE big_ids(
+    id INTEGER NOT NULL PRIMARY KEY,
+    note VARCHAR(20)
+);
+
 CREATE TABLE awesome_people(
 	id integer not null primary key,
 	author_id int,
