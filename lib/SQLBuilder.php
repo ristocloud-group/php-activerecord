@@ -360,17 +360,27 @@ class SQLBuilder
      * name that itself contains _and_ or _or_ stays one column (#53). For the same names it builds
      * the same conditions: same SQL, same values.
      *
+     * @internal Serves the library's own dynamic finders and relationship key conditions; not a
+     *   supported API.
      * @param list<string> $columns Column names, in order
      * @param array<int, mixed> $values Array of values for the columns. This is used
      *   to determine what kind of bind marker to use: =?, IN(?), IS NULL
      * @param array<string, string>|null $map A hash of "mapped_column_name" => "real_column_name"
-     * @param list<string> $separators What joins each column to the next, spelled like the separators
-     *   of an underscored string: '_or_' (in any case) for OR; anything else, or no entry, for AND
+     * @param list<string> $separators The underscored separators of a dynamic finder name, '_and_' or
+     *   '_or_' in any case: $separators[$i] joins $columns[$i] and $columns[$i + 1], with OR for '_or_'
+     *   and AND for '_and_'. A missing entry means '_and_'; entries past the last column are ignored.
      * @return list<mixed>|null A conditions array in the form array(sql_string, value1, value2,...),
      *   or null for no columns or a single empty name (like an empty underscored string)
+     * @throws ActiveRecordException if a separator is not '_and_' or '_or_'
      */
     public static function create_conditions_from_columns(Connection $connection, array $columns, array $values = [], ?array $map = null, array $separators = []): ?array
     {
+        foreach ($separators as $separator) {
+            if (!preg_match('/\A(_and_|_or_)\z/i', $separator)) {
+                throw new ActiveRecordException("Invalid separator '$separator': expected '_and_' or '_or_'");
+            }
+        }
+
         if ([] === $columns || (1 === count($columns) && !$columns[0])) {
             return null;
         }
@@ -381,6 +391,7 @@ class SQLBuilder
     /**
      * Like create_hash_from_underscored_string() but takes the attribute names as a list (#53).
      *
+     * @internal Serves the library's own find_or_create_by dynamic finder; not a supported API.
      * @param list<string> $columns Attribute names, in order
      * @param array<int, mixed> $values Array of values for each attribute in $columns
      * @param array<string, string>|null $map A hash of "mapped_column_name" => "real_column_name"

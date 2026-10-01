@@ -1520,18 +1520,6 @@ class Model
         $create = false;
 
         if (substr($method, 0, 17) == 'find_or_create_by') {
-            $attributes = substr($method, 17);
-
-            // can't take any finders with OR in it when doing a find_or_create_by
-            // (an _or_ inside the name of a real attribute is not an OR, #53)
-            if (strpos($attributes, '_or_') !== false) {
-                $split = self::split_dynamic_finder_attributes(substr($attributes, 1), count($args));
-
-                if (null === $split || in_array('_or_', $split[1], true)) {
-                    throw new ActiveRecordException("Cannot use OR'd attributes in find_or_create_by");
-                }
-            }
-
             $create = true;
             $method = 'find_by' . substr($method, 17);
         }
@@ -1544,11 +1532,18 @@ class Model
 
         if (substr($method, 0, 7) === 'find_by') {
             $attributes = substr($method, 8);
-            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+
+            // can't take any finders with OR in it when doing a find_or_create_by
+            // (substr($method, 7) is what followed "find_or_create_by"; an _or_ inside
+            // the name of a real attribute is not an OR, #53)
+            if ($create && strpos(substr($method, 7), '_or_') !== false && (null === $split || in_array('_or_', $split[1], true))) {
+                throw new ActiveRecordException("Cannot use OR'd attributes in find_or_create_by");
+            }
+
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
 
             if (!($ret = static::find('first', $options)) && $create) {
-                $split = self::split_dynamic_finder_attributes($attributes, count($args));
-
                 return static::create(null === $split
                     ? SQLBuilder::create_hash_from_underscored_string($attributes, $args, $alias_attribute_map)
                     : SQLBuilder::create_hash_from_columns($split[0], $args, $alias_attribute_map));
@@ -1556,10 +1551,14 @@ class Model
 
             return $ret;
         } elseif (substr($method, 0, 11) === 'find_all_by') {
-            $options['conditions'] = self::dynamic_finder_conditions(substr($method, 12), $args, $alias_attribute_map);
+            $attributes = substr($method, 12);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
             return static::find('all', $options);
         } elseif (substr($method, 0, 8) === 'count_by') {
-            $options['conditions'] = self::dynamic_finder_conditions(substr($method, 9), $args, $alias_attribute_map);
+            $attributes = substr($method, 9);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
             return static::count($options);
         }
 
@@ -1567,17 +1566,16 @@ class Model
     }
 
     /**
-     * The conditions of a dynamic finder: split where split_dynamic_finder_attributes() says,
-     * else at every separator as create_conditions_from_underscored_string() does.
+     * The conditions of a dynamic finder: split as split_dynamic_finder_attributes() said ($split),
+     * or at every separator as create_conditions_from_underscored_string() does when it said null.
      *
      * @param list<mixed> $args
      * @param array<string, string>|null $map
+     * @param array{list<string>, list<string>}|null $split
      * @return list<mixed>|null
      */
-    private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map): ?array
+    private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map, ?array $split): ?array
     {
-        $split = self::split_dynamic_finder_attributes($attributes, count($args));
-
         return null === $split
             ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $map)
             : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $map, $split[1]);

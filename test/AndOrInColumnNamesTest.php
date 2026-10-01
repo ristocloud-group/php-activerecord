@@ -165,6 +165,22 @@ class AndOrInColumnNamesTest extends DatabaseTest
         $this->assert_sql_has('WHERE black=? AND white=?', $this->last_sql());
     }
 
+    public function test_a_joined_name_matches_a_column_in_exact_case_only()
+    {
+        // black_AND_white is not black_and_white (names match exactly, like attributes): even
+        // with one value the name keeps the split at every separator, as before #53
+        $this->assert_equals([], $this->titles(Swatch::find_all_by_black_AND_white(7)));
+        $this->assert_sql_has('WHERE black=? AND white IS NULL', $this->last_sql());
+
+        try {
+            $this->assert_equals([], $this->titles(Swatch::find_all_by_BLACK_AND_WHITE(7)));
+        } catch (ActiveRecord\DatabaseException $e) {
+            // Postgres: the quoted "BLACK" is not the column black (as before #53)
+            $this->assert_equals('pgsql', $this->conn->protocol);
+        }
+        $this->assert_sql_has('WHERE BLACK=? AND WHITE IS NULL', $this->last_sql());
+    }
+
     public function test_an_alias_attribute_whose_name_contains_and()
     {
         $this->assert_equals(['B match', 'E match'], $this->titles(SwatchAliased::find_all_by_tone_and_shade(7, ['order' => 'title'])));
@@ -306,6 +322,15 @@ class AndOrInColumnNamesTest extends DatabaseTest
 
         $this->assert_null(SQLBuilder::create_conditions_from_columns($this->conn, []));
         $this->assert_null(SQLBuilder::create_conditions_from_columns($this->conn, [''], [1]));
+    }
+
+    public function test_create_conditions_from_columns_accepts_only_underscored_separators()
+    {
+        foreach (['OR', 'or', ' OR ', 'and', '', '_xor_', '_or_x'] as $separator) {
+            $this->assert_exception_message_contains("Invalid separator '$separator'", function () use ($separator) {
+                SQLBuilder::create_conditions_from_columns($this->conn, ['a', 'b'], [1, 2], null, [$separator]);
+            }, ActiveRecordException::class);
+        }
     }
 
     public function test_create_hash_from_columns()
