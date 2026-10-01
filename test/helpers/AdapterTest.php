@@ -859,6 +859,38 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals([[], [3]], array_map(fn($v) => array_map(fn($h) => $h->id, $v->hosts), $venues));
     }
 
+    public function test_reverse_fk_through_qualifies_the_owner_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $ids = fn(array $people) => array_map(fn($p) => $p->id, $people);
+
+        // awesome_people (the target) has its own author_id: the unqualified owner key used
+        // to be ambiguous. Make it differ from the book's author, so that only books.author_id
+        // gives these results.
+        AwesomePerson::update_all(['set' => ['author_id' => 3], 'conditions' => ['id' => 1]]);
+
+        $this->assert_equals([1], $ids(ThroughFkAuthor::find(1)->awesome_people));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=?", AwesomePerson::table()->last_sql);
+        $this->assert_equals([], ThroughFkAuthor::find(3)->awesome_people);
+
+        $authors = ThroughFkAuthor::all(['include' => ['awesome_people'], 'order' => 'author_id']);
+        $this->assert_equals([[1], [2], [], []], array_map(fn($a) => $ids($a->awesome_people), $authors));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?,?,?)", AwesomePerson::table()->last_sql);
+    }
+
+    public function test_reverse_fk_has_one_through_with_conditions_qualifies_the_owner_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // the declared condition names books.name (the middle table) unqualified
+        $this->assert_equals(1, ThroughFkAuthor::find(1)->awesome_person->id);
+        $this->assert_sql_has_exact("WHERE ({$q}name{$q}=?) AND {$q}books{$q}.{$q}author_id{$q}=?", AwesomePerson::table()->last_sql);
+        $this->assert_null(ThroughFkAuthor::find(2)->awesome_person);
+
+        $authors = ThroughFkAuthor::all(['include' => ['awesome_person'], 'order' => 'author_id']);
+        $this->assert_equals([1, null], [$authors[0]->awesome_person?->id, $authors[1]->awesome_person?->id]);
+    }
+
     /**
      * Runs $finder, which must throw the "unknown column" DatabaseException for
      * $key before any query reaches the database.

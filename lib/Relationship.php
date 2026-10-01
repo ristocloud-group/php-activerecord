@@ -90,6 +90,15 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected $options = [];
 
     /**
+     * Key columns that the key conditions must name table-qualified, as key => quoted
+     * `table`.`column`: the owner key of a reverse-FK `through` lives on the middle table,
+     * and the target table may have a column of the same name.
+     *
+     * @var array<string, string>
+     */
+    protected $qualified_keys = [];
+
+    /**
      * Is the relationship single or multi.
      *
      * @var boolean
@@ -194,22 +203,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if (null === $conn) {
             throw new DatabaseException('No database connection established for ' . $table->class->getName());
         }
-        $conditions = SQLBuilder::create_conditions_from_underscored_string($conn, $query_key, $values) ?? [];
-
-        // Accept the hash form (GH #13): normalize it to the positional shape
-        // before merging so the branch below (and add_condition) can consume it.
-        if (isset($options['conditions'])) {
-            $options['conditions'] = $this->to_positional_conditions($conn, $options['conditions']);
-        }
-
-        if (isset($options['conditions']) && strlen($options['conditions'][0]) > 1) {
-            // Group the declared fragment so its own OR cannot swallow the key
-            // condition ("a OR b AND fk IN(?)" would match "a" for any owner).
-            $options['conditions'][0] = '(' . $options['conditions'][0] . ')';
-            Utils::add_condition($options['conditions'], $conditions);
-        } else {
-            $options['conditions'] = $conditions;
-        }
+        $qualified_keys = [];
 
         if (!empty($includes)) {
             $options['include'] = $includes;
@@ -227,11 +221,14 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 // Reverse-FK chain (issue #22): join the middle table and expose
                 // its owner FK (e.g. books.author_id) aliased onto every target
                 // row so the matching loop below can partition per owner. The
-                // owner FK stays as $query_key (already the owner FK here).
+                // owner FK stays as $query_key (already the owner FK here); its
+                // key condition names it qualified, as the target table may have
+                // a column of the same name.
                 $options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
                 $target_name = $this->get_table()->get_fully_qualified_table_name();
                 $middle_name = $through_table->get_fully_qualified_table_name();
                 $options['select'] = "$target_name.*, $middle_name.$query_key AS $query_key";
+                $qualified_keys = [$query_key => "$middle_name." . $conn->quote_name($query_key)];
             } else {
                 // Historical join-table / belongs_to shape.
                 $pk = $this->primary_key;
@@ -256,6 +253,23 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $this->primary_key = $pk;
                 $this->foreign_key = $fk;
             }
+        }
+
+        $conditions = SQLBuilder::create_conditions_from_underscored_string($conn, $query_key, $values, $qualified_keys) ?? [];
+
+        // Accept the hash form (GH #13): normalize it to the positional shape
+        // before merging so the branch below (and add_condition) can consume it.
+        if (isset($options['conditions'])) {
+            $options['conditions'] = $this->to_positional_conditions($conn, $options['conditions']);
+        }
+
+        if (isset($options['conditions']) && strlen($options['conditions'][0]) > 1) {
+            // Group the declared fragment so its own OR cannot swallow the key
+            // condition ("a OR b AND fk IN(?)" would match "a" for any owner).
+            $options['conditions'][0] = '(' . $options['conditions'][0] . ')';
+            Utils::add_condition($options['conditions'], $conditions);
+        } else {
+            $options['conditions'] = $conditions;
         }
 
         $options = $this->unset_non_finder_options($options);
@@ -472,7 +486,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if (null === $model_conn) {
             throw new DatabaseException('No database connection established for ' . $model_table->class->getName());
         }
-        $conditions = SQLBuilder::create_conditions_from_underscored_string($model_conn, $condition_string, $condition_values) ?? [];
+        $qualified_keys = $this->qualified_keys;
+        $conditions = SQLBuilder::create_conditions_from_underscored_string($model_conn, $condition_string, $condition_values, $qualified_keys) ?? [];
 
         # add_condition() mutates its first argument by reference, so we must merge
         # into a *local* copy — never $this->options['conditions'] directly, or the
@@ -789,10 +804,9 @@ class HasMany extends AbstractRelationship
                     // Reverse-FK chain (issue #22): the middle model has_many the
                     // target, so hop target.<source_fk> = middle.<source_pk> and
                     // filter by the through model's own owner FK on the middle
-                    // table. The owner FK column (e.g. books.author_id) is left
-                    // unqualified in the condition: it is unambiguous because the
-                    // target table does not carry it, and qualifying it would be
-                    // mangled by quote_name().
+                    // table. The owner FK column (e.g. books.author_id) is named
+                    // qualified in the key condition: the target table may have a
+                    // column of the same name, which made it ambiguous.
                     $through_table = $through_relationship->get_table();
                     $this->options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
 
@@ -800,8 +814,10 @@ class HasMany extends AbstractRelationship
                     if (null === $through_relationship->primary_key) {
                         throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
                     }
-                    $this->foreign_key = [$through_relationship->foreign_key[0]];
+                    $owner_key = $through_relationship->foreign_key[0];
+                    $this->foreign_key = [$owner_key];
                     $this->primary_key = $through_relationship->primary_key;
+                    $this->qualified_keys = [$owner_key => $through_table->get_fully_qualified_table_name() . '.' . $model::connection()->quote_name($owner_key)];
                 } else {
                     // save old keys as we will be reseting them below for inner join convenience
                     $pk = $this->primary_key;
