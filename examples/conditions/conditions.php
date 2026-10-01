@@ -60,6 +60,29 @@ $rows = Task::all(['conditions' => ['flag' => [1, null]]]);
 out('flag => [1, null]:      ' . names($rows));
 out('  SQL: ' . Task::table()->last_sql);
 
+// 4b. A hash key may name its table: 'labels.name' is quoted part by part, so
+//     with `joins` it reaches the joined table, while an unqualified key still
+//     gets the model's table ('flag' -> tasks.flag). Before #35 the dotted key
+//     was one unknown column, `labels.name`. (Labels: 'urgent' on 'review PR'
+//     and on 'cut release'.)
+$rows = Task::all([
+    'joins' => 'JOIN labels ON (labels.task_id = tasks.id)',
+    'conditions' => ['labels.name' => 'urgent', 'flag' => 1],
+]);
+out('labels.name + joins:    ' . names($rows));
+out('  SQL: ' . Task::table()->last_sql);
+
+//     Hash keys are always quoted as identifiers, never spliced in as SQL
+//     (#64): a crafted key is one unknown column, not an OR that matches every
+//     row. Write expressions as a fragment instead: ['flag + 1 = ?', 2].
+try {
+    $rows = Task::all(['conditions' => ['flag` IS NOT NULL OR `flag' => 0]]);
+    out('crafted hash key:       ' . names($rows));
+} catch (ActiveRecord\DatabaseException) {
+    out('crafted hash key:       rejected (unknown column), no rows returned');
+}
+out('  SQL: ' . Task::table()->last_sql);
+
 // 5. The boundary: a user-authored fragment is NOT rewritten — the null is
 //    bound as-is, and under SQL three-valued logic the NULL row is excluded.
 $rows = Task::all(['conditions' => ['flag IN(?)', [1, null]]]);
