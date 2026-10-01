@@ -53,6 +53,21 @@ class ParentKeyedCompositeAuthor extends ActiveRecord\Model
         'primary_key' => ['author_id', 'parent_author_id'], 'order' => 'id asc']];
 }
 
+// guarded composite child: attr_accessible allows the first foreign key column but not the second
+class PrimaryKeyGuardedCompositeItem extends ActiveRecord\Model
+{
+    public static $table_name = 'composite_items';
+    public static $attr_accessible = ['author_ref', 'title'];
+}
+
+class ParentKeyedGuardedCompositeAuthor extends ActiveRecord\Model
+{
+    public static $pk = 'author_id';
+    public static $table_name = 'authors';
+    public static $has_many = [['items', 'class_name' => 'PrimaryKeyGuardedCompositeItem', 'foreign_key' => ['author_ref', 'parent_ref'],
+        'primary_key' => ['author_id', 'parent_author_id'], 'order' => 'id asc']];
+}
+
 class RelationshipPrimaryKeyTest extends DatabaseTest
 {
     /**
@@ -202,5 +217,75 @@ class RelationshipPrimaryKeyTest extends DatabaseTest
         $created = $author->create_items(['title' => 'created']);
         $this->assert_equals([1, 3], [$created->author_ref, $created->parent_ref]);
         $this->assert_contains((int) $created->id, $this->ids(ParentKeyedCompositeAuthor::find(1)->items, 'id'));
+    }
+
+    public function test_builders_on_an_unsaved_owner_inject_the_declared_key_value()
+    {
+        // the authors pk is author_id, so $owner->id (what the builders used to read) throws
+        // UndefinedPropertyException on a fresh record; the declared column is read instead
+        $owner = new ParentKeyedAuthor(['name' => 'unsaved']);
+        $this->assert_null($owner->build_books(['name' => 'built'])->author_id);
+
+        $count = Book::count();
+        $created = $owner->create_books(['name' => 'created']);
+        $this->assert_false($created->is_new_record());
+        $this->assert_null(Book::find($created->book_id)->author_id);
+        $this->assert_equals($count + 1, Book::count());
+
+        $keyed = new ParentKeyedAuthor(['name' => 'unsaved', 'parent_author_id' => 2]);
+        $this->assert_equals(2, $keyed->build_books(['name' => 'built'])->author_id);
+    }
+
+    public function test_builders_throw_when_the_owner_was_loaded_without_the_declared_key()
+    {
+        $count = Book::count();
+
+        foreach (['build_books', 'create_books'] as $builder) {
+            $owner = ParentKeyedAuthor::find(1, ['select' => 'author_id, name']);
+
+            try {
+                $owner->$builder(['name' => 'orphan']);
+                $this->fail("expected $builder to throw ActiveRecord\\UndefinedPropertyException");
+            } catch (ActiveRecord\UndefinedPropertyException $e) {
+                $this->assert_string_contains_string('Undefined property: ParentKeyedAuthor->parent_author_id', $e->getMessage());
+            }
+        }
+
+        $this->assert_equals($count, Book::count());
+    }
+
+    public function test_composite_builders_go_through_the_child_attr_accessible()
+    {
+        $strict = ActiveRecord\Config::instance()->get_strict_mass_assignment();
+        $author = ParentKeyedGuardedCompositeAuthor::find(1); // (author_id 1, parent_author_id 3)
+        $count = PrimaryKeyGuardedCompositeItem::count();
+
+        try {
+            // strict off: the guarded second key column is dropped, as a guarded first one always was
+            ActiveRecord\Config::instance()->set_strict_mass_assignment(false);
+            $built = $author->build_items(['title' => 'built']);
+            $this->assert_equals([1, null], [$built->author_ref, $built->parent_ref]);
+
+            $created = $author->create_items(['title' => 'created']);
+            $stored = PrimaryKeyGuardedCompositeItem::find($created->id);
+            $this->assert_equals([1, null], [$stored->author_ref, $stored->parent_ref]);
+
+            // strict on: the second key column is named and nothing is inserted
+            ActiveRecord\Config::instance()->set_strict_mass_assignment(true);
+            $message = "PrimaryKeyGuardedCompositeItem: mass assignment of attribute 'parent_ref' blocked by attr_accessible";
+
+            foreach (['build_items', 'create_items'] as $builder) {
+                try {
+                    $author->$builder(['title' => 'blocked']);
+                    $this->fail("expected $builder to throw ActiveRecord\\MassAssignmentException");
+                } catch (ActiveRecord\MassAssignmentException $e) {
+                    $this->assert_same($message, $e->getMessage());
+                }
+            }
+
+            $this->assert_equals($count + 1, PrimaryKeyGuardedCompositeItem::count());
+        } finally {
+            ActiveRecord\Config::instance()->set_strict_mass_assignment($strict);
+        }
     }
 }
