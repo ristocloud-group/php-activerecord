@@ -372,17 +372,35 @@ class Model
     /**
      * Determines if an attribute exists for this {@link Model}.
      *
+     * Resolves the name as {@link __get()} does: an attribute, alias, getter,
+     * relationship, the 'id' primary-key shortcut or a {@link $delegate}. Like an
+     * attribute, a name that resolves is set even when its value is null.
+     *
      * @param string $attribute_name
      * @return boolean
      */
     public function __isset($attribute_name)
     {
-        return
-            array_key_exists($attribute_name, $this->attributes)
+        if (array_key_exists($attribute_name, $this->attributes)
             || array_key_exists($attribute_name, static::$alias_attribute)
-        || method_exists($this, "get_{$attribute_name}")
-      || array_key_exists($attribute_name, $this->__relationships)
-        || static::table()->has_relationship($attribute_name);
+            || method_exists($this, "get_{$attribute_name}")
+            || array_key_exists($attribute_name, $this->__relationships)
+            || static::table()->has_relationship($attribute_name)) {
+            return true;
+        }
+
+        // the 'id' shortcut reads the pk attribute, null included (a pk-less table never resolves it here)
+        if ('id' === $attribute_name && null !== ($pk = $this->get_primary_key(true)) && array_key_exists($pk, $this->attributes)) {
+            return true;
+        }
+
+        foreach (static::$delegate as &$item) {
+            if ($this->is_delegated($attribute_name, $item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -544,10 +562,11 @@ class Model
         }
 
         if ($name == 'id') {
-            // pk-less table: '' is what a null pk offset always mapped to
-            $pk = $this->get_primary_key(true) ?? '';
-            if (isset($this->attributes[$pk])) {
-                return $this->attributes[$pk];
+            // the pk attribute itself, null included; pk-less table: '' is what a null pk
+            // offset always mapped to, read only once set to a non-null value
+            $pk = $this->get_primary_key(true);
+            if (null !== $pk ? array_key_exists($pk, $this->attributes) : isset($this->attributes[''])) {
+                return $this->attributes[$pk ?? ''];
             }
         }
 
