@@ -36,6 +36,16 @@ $page = Widget::all([
 ]);
 out('page names: ' . implode(', ', ActiveRecord\collect($page, 'name')));
 
+// 'limit' => 0 is a real LIMIT 0 (a page of size 0 has no rows), and an 'offset'
+// without a 'limit' returns every row after the offset. (Before #34 the first
+// returned ALL rows and the second NONE: it rendered "LIMIT 2,0".)
+$none = Widget::all(['order' => 'id', 'limit' => 0]);
+out('limit 0: ' . count($none) . ' rows');
+out('  SQL: ' . Widget::table()->last_sql);
+$rest = Widget::all(['order' => 'id', 'offset' => 2]);
+out('offset 2, no limit: ' . implode(', ', ActiveRecord\collect($rest, 'name')));
+out('  SQL: ' . Widget::table()->last_sql);
+
 // last() reverses the order: only each item's own trailing asc/desc is flipped
 // (an item without one gets DESC), so a column like "description" is left
 // intact. (Before #37 it became "ASCription" and the query failed.)
