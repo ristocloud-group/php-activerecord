@@ -69,6 +69,23 @@ class ParityPairKeyedAuthor extends ActiveRecord\Model
     public static $has_many = [['items', 'class_name' => 'ParityCompositeItem', 'foreign_key' => ['author_ref', 'parent_ref'], 'order' => 'id asc']];
 }
 
+// (c) has_one with several children; (e) declared limit/offset
+class ParityVenue extends ActiveRecord\Model
+{
+    public static $table_name = 'venues';
+    public static $has_many = [
+        ['limited_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'limit' => 1],
+        ['offset_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 1],
+        ['no_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'limit' => 0],
+        ['window_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id desc', 'limit' => '1', 'offset' => 1],
+    ];
+    public static $has_one = [
+        ['first_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc'],
+        ['latest_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id desc'],
+        ['offset_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 1, 'limit' => 0],
+    ];
+}
+
 class RelationshipEagerLazyParityTest extends DatabaseTest
 {
     /**
@@ -192,5 +209,46 @@ class RelationshipEagerLazyParityTest extends DatabaseTest
         $eager = $this->load('ParityCompositeAuthor', 'items', true, 'author_id asc', 'author_id');
         $this->assert_same([$null_part], $eager[$owner->author_id]);
         $this->assert_same([1, 2], $eager[1]);
+    }
+
+    // ---- (c) has_one keeps the first match ----
+
+    public function test_eager_has_one_keeps_the_first_match_in_the_declared_order()
+    {
+        $this->assert_parity([1 => 1, 2 => 2, 6 => 5, 7 => null, 8 => null, 9 => 7], 'ParityVenue', 'first_event');
+        $this->assert_parity([1 => 1, 2 => 3, 6 => 5, 7 => null, 8 => null, 9 => 7], 'ParityVenue', 'latest_event');
+    }
+
+    // ---- (e) declared limit / offset apply per owner ----
+
+    public function test_eager_limit_applies_per_owner()
+    {
+        $sql = $this->assert_parity([1 => [1], 2 => [2], 6 => [5], 7 => [], 8 => [], 9 => [7]], 'ParityVenue', 'limited_events');
+        $this->assert_sql_doesnt_has('LIMIT', $sql);
+    }
+
+    public function test_eager_offset_without_limit_applies_per_owner()
+    {
+        $this->assert_parity([1 => [], 2 => [3], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'offset_events');
+    }
+
+    public function test_eager_limit_zero_gives_every_owner_no_children()
+    {
+        $this->assert_parity([1 => [], 2 => [], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'no_events');
+    }
+
+    public function test_eager_limit_and_offset_window_applies_per_owner()
+    {
+        Event::create(['venue_id' => 2, 'host_id' => 1, 'title' => 'third', 'type' => 'Music']);
+
+        // venue 2 by id desc: [new, 3, 2] -> skip 1, take 1
+        $this->assert_parity([1 => [], 2 => [3], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'window_events');
+    }
+
+    public function test_eager_has_one_ignores_a_declared_limit_and_offset_like_the_lazy_load()
+    {
+        $sql = $this->assert_parity([1 => 1, 2 => 2, 6 => 5, 7 => null, 8 => null, 9 => 7], 'ParityVenue', 'offset_event');
+        $this->assert_sql_doesnt_has('LIMIT', $sql);
+        $this->assert_sql_doesnt_has('OFFSET', $sql);
     }
 }

@@ -271,6 +271,16 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $options = $this->unset_non_finder_options($options);
 
         $class = $this->class_name;
+        [$skip, $take] = $this->eager_window($options);
+
+        if (0 === $take) {
+            // limit 0: no owner gets a child (#34), no query needed
+            foreach ($models as $model) {
+                $model->set_relationship_from_eager_load(null, $this->attribute_name);
+            }
+
+            return;
+        }
 
         $related_models = $class::find('all', $options);
         $used_models = [];
@@ -284,7 +294,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $key_matches = self::eager_key_matcher();
 
         foreach ($models as $model) {
-            $matches = 0;
+            $matches = $skipped = 0;
             $key_to_match = $model->$model_values_key;
 
             foreach ($related_models as $related) {
@@ -297,6 +307,15 @@ abstract class AbstractRelationship implements InterfaceRelationship
                         }
                     }
 
+                    if ($skipped < $skip) {
+                        ++$skipped;
+                        continue;
+                    }
+
+                    if (null !== $take && $matches >= $take) {
+                        break;
+                    }
+
                     $hash = spl_object_hash($related);
 
                     if (in_array($hash, $used_models)) {
@@ -307,6 +326,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
                     $used_models[] = $hash;
                     $matches++;
+
+                    if ($this instanceof HasOne) {
+                        break; // GH #40: the first match in the declared order, as load()'s find('first')
+                    }
                 }
             }
 
@@ -350,6 +373,38 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
         // no owner key at all (HasMany::load_eagerly() does not get here): match nothing
         return array_merge(['(' . ([] === $groups ? '1 = 0' : implode(' OR ', $groups)) . ')'], $binds);
+    }
+
+    /**
+     * GH #40: a declared limit/offset applies to each owner's children in the eager load, as
+     * it does in load(): it is taken off the query here and returned as [rows to skip, rows to
+     * take] for the matching. A has_one ignores both, as load()'s find('first') does. A
+     * negative limit or offset stays on the query, as before.
+     *
+     * @param array<string, mixed> $options
+     * @param-out array<string, mixed> $options
+     * @return array{int, int|null}
+     */
+    private function eager_window(array &$options): array
+    {
+        if (!($this instanceof HasMany) || (!array_key_exists('limit', $options) && !array_key_exists('offset', $options))) {
+            return [0, null];
+        }
+
+        // read like SQLBuilder::limit() / offset() (#34): 0 is LIMIT 0, null no limit
+        $limit = $options['limit'] ?? null;
+        $take = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
+        $skip = intval($options['offset'] ?? 0);
+
+        if ($this instanceof HasOne) {
+            [$skip, $take] = [0, null];
+        } elseif ($skip < 0 || $take < 0) {
+            return [0, null];
+        }
+
+        unset($options['limit'], $options['offset']);
+
+        return [$skip, $take];
     }
 
     /**
