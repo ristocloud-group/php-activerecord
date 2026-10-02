@@ -156,8 +156,10 @@ every attribute blocked by a model's `$attr_accessible` / `$attr_protected` and,
 warning. Turn on strict mode to throw an `ActiveRecord\MassAssignmentException` instead — raised before anything is
 assigned, its message lists every blocked attribute. It is global and off by default; assigning a single attribute
 (`$model->name = …`) is not affected. The foreign key that association builders (`build_*` / `create_*`) inject is
-assigned directly, like Rails: it needs no `$attr_accessible` entry and is never dropped or reported. The other
-attributes passed to a builder are guarded as usual.
+assigned directly, like Rails: it needs no `$attr_accessible` entry and is never dropped or reported. The attributes
+passed to a builder are guarded as usual, and that includes a foreign key passed there with a value: the builder then
+injects nothing for it, so a blocked one is dropped (the record gets no foreign key) or, in strict mode, throws. A
+foreign key passed as `null` counts as not passed and is replaced by the injected value.
 
 ```php
 ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {

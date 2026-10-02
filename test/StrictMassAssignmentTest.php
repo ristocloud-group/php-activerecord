@@ -43,6 +43,37 @@ class AuthorWithTrackedBooks extends ActiveRecord\Model
     public static $has_many = [['books', 'class_name' => 'BookTrackingForeignKey', 'foreign_key' => 'author_id']];
 }
 
+// a static create() override, with the author_id foreign key blocked / allowed
+class BookCreateOverrideGuarded extends ActiveRecord\Model
+{
+    public static $pk = 'book_id';
+    public static $table_name = 'books';
+    public static $attr_accessible = ['name'];
+    /** @var list<string> */
+    public static array $calls = [];
+
+    public static function create($attributes, $validate = true)
+    {
+        self::$calls[] = static::class;
+        return parent::create($attributes, $validate);
+    }
+}
+
+class BookCreateOverrideOpen extends BookCreateOverrideGuarded
+{
+    public static $attr_accessible = ['name', 'author_id'];
+}
+
+class AuthorWithCreateOverrideBooks extends ActiveRecord\Model
+{
+    public static $pk = 'author_id';
+    public static $table_name = 'authors';
+    public static $has_many = [
+        ['guarded_books', 'class_name' => 'BookCreateOverrideGuarded', 'foreign_key' => 'author_id'],
+        ['open_books', 'class_name' => 'BookCreateOverrideOpen', 'foreign_key' => 'author_id'],
+    ];
+}
+
 class StrictMassAssignmentTest extends DatabaseTest
 {
     private bool $original_strict;
@@ -193,6 +224,9 @@ class StrictMassAssignmentTest extends DatabaseTest
         $e = $this->expect_blocked(fn() => $author->build_books(['author_id' => 4]));
         $this->assert_same("BookAttrAccessibleNameOnly: mass assignment of attribute 'author_id' blocked by attr_accessible", $e->getMessage());
 
+        // a null one counts as not passed: the owner's key is injected (and assigned directly)
+        $this->assert_equals(1, $author->build_books(['author_id' => null, 'name' => 'null key'])->author_id);
+
         Config::instance()->set_strict_mass_assignment(false);
         $this->assert_null($author->build_books(['author_id' => 4])->author_id);
     }
@@ -207,6 +241,22 @@ class StrictMassAssignmentTest extends DatabaseTest
         $this->assert_equals(1, $author->build_books(['name' => 'built'])->author_id);
         $this->assert_not_empty(BookTrackingForeignKey::$seen);
         $this->assert_same([1], array_values(array_unique(BookTrackingForeignKey::$seen)));
+    }
+
+    public function test_association_create_skips_a_static_create_override_only_when_the_foreign_key_is_blocked()
+    {
+        $author = AuthorWithCreateOverrideBooks::find(1);
+        BookCreateOverrideGuarded::$calls = [];
+
+        // blocked foreign key: create_* builds, assigns the key and saves the record itself
+        $guarded = $author->create_guarded_books(['name' => 'guarded']);
+        $this->assert_same([], BookCreateOverrideGuarded::$calls);
+        $this->assert_equals(1, BookCreateOverrideGuarded::find($guarded->book_id)->author_id);
+
+        // allowed foreign key: create_* goes through the child's create(), as before
+        $open = $author->create_open_books(['name' => 'open']);
+        $this->assert_same(['BookCreateOverrideOpen'], BookCreateOverrideGuarded::$calls);
+        $this->assert_equals(1, BookCreateOverrideOpen::find($open->book_id)->author_id);
     }
 
     public function test_mix_of_allowed_and_blocked_keys_lists_only_blocked_ones()
