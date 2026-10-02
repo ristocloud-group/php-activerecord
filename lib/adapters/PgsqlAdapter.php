@@ -53,6 +53,17 @@ class PgsqlAdapter extends Connection
 
     public function query_column_info($table)
     {
+        // A model with `$db` passes its schema quoted ("public".authors): look the table up
+        // in that schema, by its bare name, instead of matching no relname at all.
+        $schema = null;
+        $in_schema = '';
+
+        if (1 === preg_match('/\A"((?:[^"]|"")+)"\.(.+)\z/s', $table, $m)) {
+            $schema = str_replace('""', '"', $m[1]);
+            $table = $m[2];
+            $in_schema = ' AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ?)';
+        }
+
         $sql = <<<SQL
             SELECT
                   a.attname AS field,
@@ -71,13 +82,18 @@ class PgsqlAdapter extends Connection
                     AND pg_attrdef.adnum=a.attnum
                   ),'::[a-z_ ]+',''),'''$',''),'^''','') AS default
             FROM pg_attribute a, pg_class c, pg_type t
-            WHERE c.relname = ?
+            WHERE c.relname = ?{$in_schema}
                   AND a.attnum > 0
                   AND a.attrelid = c.oid
                   AND a.atttypid = t.oid
             ORDER BY a.attnum
             SQL;
         $values = [$table];
+
+        if (null !== $schema) {
+            $values[] = $schema;
+        }
+
         return $this->query($sql, $values);
     }
 

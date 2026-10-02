@@ -71,23 +71,51 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_same(false, $columns['is_retired']->default);
     }
 
+    public function test_db_qualified_model_introspects_the_same_columns()
+    {
+        // `$db` ("public".authors) used to introspect no column at all
+        $plain = Author::table();
+        $qualified = PublicSchemaAuthor::table();
+        $this->assert_equals(array_keys($plain->columns), array_keys($qualified->columns));
+        $this->assert_equals(
+            array_map(fn($c) => [$c->raw_type, $c->type, $c->pk, $c->nullable], $plain->columns),
+            array_map(fn($c) => [$c->raw_type, $c->type, $c->pk, $c->nullable], $qualified->columns)
+        );
+
+        // the primary key is inferred, the sequence named, attributes typed and writable
+        $this->assert_equals(['book_id'], PublicSchemaBook::table()->pk);
+        $this->assert_equals('books_book_id_seq', PublicSchemaBook::table()->sequence);
+        $this->assert_equals('Ancient Art of Main Tanking', PublicSchemaBook::find(1)->name);
+        $book = PublicSchemaBook::create(['name' => 'Schema Book', 'author_id' => 1]);
+        $this->assert_false($book->is_new_record());
+        $this->assert_equals('Schema Book', PublicSchemaBook::find($book->book_id)->name);
+
+        // hash keys are checked against those columns
+        $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, PublicSchemaAuthor::all(['conditions' => ['name' => 'Tito']])));
+        $this->assert_exception_message_contains("Unknown column 'nope' in hash conditions for PublicSchemaAuthor", function () {
+            PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
+        }, ActiveRecord\DatabaseException::class);
+    }
+
     public function test_hash_condition_keys_are_left_to_the_database_when_the_schema_is_unknown()
     {
-        // `$db` makes the column introspection come back empty on Postgres: with no
-        // known column, no key is rejected (find by pk included)
-        $this->assert_equals([], PublicSchemaAuthor::table()->columns);
-        $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, PublicSchemaAuthor::all(['conditions' => ['name' => 'Tito']])));
-        $this->assert_equals(1, PublicSchemaAuthor::count(['conditions' => ['name' => 'Tito']]));
-        $this->assert_true(PublicSchemaAuthor::exists(['author_id' => 1]));
-        $this->assert_equals('Tito', PublicSchemaAuthor::find(1)->name);
-        $this->assert_equals(0, PublicSchemaAuthor::delete_all(['conditions' => ['name' => 'nobody']]));
+        // a table whose columns could not be introspected: no key is rejected
+        $table = PublicSchemaAuthor::table();
+        $columns = $table->columns;
+        $table->columns = [];
 
-        // an unknown key still fails, at the database
         try {
-            PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
-            $this->fail('nope must fail at the database');
-        } catch (ActiveRecord\DatabaseException $e) {
-            $this->assert_false(str_starts_with($e->getMessage(), 'Unknown column'), $e->getMessage());
+            $this->assert_equals(1, PublicSchemaAuthor::count(['conditions' => ['name' => 'Tito']]));
+            $this->assert_equals('Tito', PublicSchemaAuthor::find(1)->name);
+
+            try {
+                PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
+                $this->fail('nope must fail at the database');
+            } catch (ActiveRecord\DatabaseException $e) {
+                $this->assert_false(str_starts_with($e->getMessage(), 'Unknown column'), $e->getMessage());
+            }
+        } finally {
+            $table->columns = $columns;
         }
     }
 
