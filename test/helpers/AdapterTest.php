@@ -876,6 +876,47 @@ abstract class AdapterTest extends DatabaseTest
         $authors = ThroughFkAuthor::all(['include' => ['awesome_people'], 'order' => 'author_id']);
         $this->assert_equals([[1], [2], [], []], array_map(fn($a) => $ids($a->awesome_people), $authors));
         $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?,?,?)", AwesomePerson::table()->last_sql);
+
+        // the target keeps its own author_id when eager loaded, as when lazy loaded
+        $this->assert_equals(3, ThroughFkAuthor::find(1)->awesome_people[0]->author_id);
+        $this->assert_equals(3, $authors[0]->awesome_people[0]->author_id);
+    }
+
+    public function test_reverse_fk_through_without_a_colliding_target_column_keeps_its_select()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        Book::$has_many = [['book_reviews']];
+        Author::$has_many = [['books'], ['book_reviews', 'through' => 'books', 'order' => 'book_reviews.id asc']];
+        ActiveRecord\Table::clear_cache();
+
+        try {
+            $authors = Author::all(['include' => ['book_reviews'], 'order' => 'author_id']);
+            $sql = BookReview::table()->last_sql;
+        } finally {
+            Book::$has_many = [];
+            Author::$has_many = ['books'];
+            ActiveRecord\Table::clear_cache();
+        }
+
+        // book_reviews has no author_id: the middle key is still exposed under its own name
+        $this->assert_sql_has_exact("SELECT {$q}book_reviews{$q}.*, {$q}books{$q}.author_id AS author_id FROM", $sql);
+        $this->assert_equals([1, 1], array_map(fn($r) => $r->author_id, $authors[0]->book_reviews));
+    }
+
+    public function test_belongs_to_shaped_through_qualifies_the_owner_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $ids = fn(array $authors) => array_map(fn($a) => $a->author_id, $authors);
+
+        // books.author_id is the owner key; the target (authors) has an author_id of its own
+        $this->assert_equals([2], $ids(CoauthoredAuthor::find(1)->secondary_authors));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=?", SecondaryAuthor::table()->last_sql);
+        $this->assert_equals([], CoauthoredAuthor::find(3)->secondary_authors);
+
+        // eager: same rows, and each target keeps its own author_id
+        $owners = CoauthoredAuthor::all(['include' => ['secondary_authors'], 'order' => 'author_id']);
+        $this->assert_equals([[2], [2], [], []], array_map(fn($o) => $ids($o->secondary_authors), $owners));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?,?,?)", SecondaryAuthor::table()->last_sql);
     }
 
     public function test_reverse_fk_has_one_through_with_conditions_qualifies_the_owner_key()

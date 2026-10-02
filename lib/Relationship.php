@@ -204,6 +204,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
             throw new DatabaseException('No database connection established for ' . $table->class->getName());
         }
         $qualified_keys = [];
+        $match_key = null;
 
         if (!empty($includes)) {
             $options['include'] = $includes;
@@ -227,8 +228,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
                 $target_name = $this->get_table()->get_fully_qualified_table_name();
                 $middle_name = $through_table->get_fully_qualified_table_name();
-                $options['select'] = "$target_name.*, $middle_name.$query_key AS $query_key";
-                $qualified_keys = [$query_key => "$middle_name." . $conn->quote_name($query_key)];
+                $match_key = $this->middle_key_alias($query_key);
+                $options['select'] = "$target_name.*, $middle_name.$query_key AS $match_key";
+                $qualified_keys = [$query_key => $this->qualified_column($through_table, $query_key)];
             } else {
                 // Historical join-table / belongs_to shape.
                 $pk = $this->primary_key;
@@ -247,7 +249,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $select = isset($options['select']) && is_string($options['select'])
                     ? $options['select']
                     : "$target_name.*";
-                $options['select'] = "$select, $middle_name.$query_key AS $query_key";
+                $match_key = $this->middle_key_alias($query_key);
+                $options['select'] = "$select, $middle_name.$query_key AS $match_key";
+                // the key is the middle table's (selected from it above): name it qualified
+                $qualified_keys = [$query_key => $this->qualified_column($through_table, $query_key)];
 
                 // reset keys
                 $this->primary_key = $pk;
@@ -279,7 +284,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $related_models = $class::find('all', $options);
         $used_models = [];
         $model_values_key = $inflector->variablize($model_values_key);
-        $query_key = $inflector->variablize($query_key);
+        $query_key = $inflector->variablize($match_key ?? $query_key);
 
         foreach ($models as $model) {
             $matches = 0;
@@ -611,6 +616,46 @@ abstract class AbstractRelationship implements InterfaceRelationship
     }
 
     /**
+     * `table`.`column`, quoted with that table's own connection.
+     */
+    protected function qualified_column(Table $table, string $column): string
+    {
+        $conn = $table->conn;
+        if (null === $conn) {
+            throw new DatabaseException('No database connection established for ' . $table->class->getName());
+        }
+
+        return $table->get_fully_qualified_table_name() . '.' . $conn->quote_name($column);
+    }
+
+    /**
+     * Whether $table has a column named $column: exactly on Postgres (quoted names are
+     * case-sensitive), ignoring ASCII case elsewhere.
+     */
+    protected static function table_has_column(Table $table, string $column): bool
+    {
+        foreach (array_keys($table->columns) as $name) {
+            $name = (string) $name;
+
+            if ($name === $column || (!($table->conn instanceof PgsqlAdapter) && 0 === strcasecmp($name, $column))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The name the eager `through` query selects the middle table's key under. It is the
+     * key itself, unless the target table has a column of that name: the alias would
+     * overwrite it on every target row, so a private alias is used for the matching.
+     */
+    protected function middle_key_alias(string $key): string
+    {
+        return self::table_has_column($this->get_table(), $key) ? "ar_through_$key" : $key;
+    }
+
+    /**
      * Builds the INNER JOIN that hops from this relationship's target table to
      * the `through` (middle) table for the reverse-FK (has_many→has_many) chain:
      *
@@ -817,7 +862,7 @@ class HasMany extends AbstractRelationship
                     $owner_key = $through_relationship->foreign_key[0];
                     $this->foreign_key = [$owner_key];
                     $this->primary_key = $through_relationship->primary_key;
-                    $this->qualified_keys = [$owner_key => $through_table->get_fully_qualified_table_name() . '.' . $model::connection()->quote_name($owner_key)];
+                    $this->qualified_keys = [$owner_key => $this->qualified_column($through_table, $owner_key)];
                 } else {
                     // save old keys as we will be reseting them below for inner join convenience
                     $pk = $this->primary_key;
@@ -831,6 +876,14 @@ class HasMany extends AbstractRelationship
                     // reset keys
                     $this->primary_key = $pk;
                     $this->foreign_key = $fk;
+
+                    // a key column of the middle table is named qualified: the target
+                    // table may have a column of the same name (else left as it was)
+                    foreach ($this->foreign_key as $key) {
+                        if (self::table_has_column($through_table, $key)) {
+                            $this->qualified_keys[$key] = $this->qualified_column($through_table, $key);
+                        }
+                    }
                 }
             }
 
