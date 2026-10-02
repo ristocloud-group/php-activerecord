@@ -184,8 +184,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $inflector = Inflector::instance();
         $query_key = $query_keys[0];
         $model_values_key = $model_values_keys[0];
+        // GH #40: composite keys are queried and matched on every pair, as load() does
+        $pairs = $this instanceof HasMany && empty($options['through']) ? min(count($query_keys), count($model_values_keys)) : 1;
 
-        foreach ($attributes as $column => $value) {
+        foreach (1 === $pairs ? $attributes : [] as $column => $value) {
             $values[] = $value[$inflector->variablize($model_values_key)];
         }
 
@@ -194,7 +196,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if (null === $conn) {
             throw new DatabaseException('No database connection established for ' . $table->class->getName());
         }
-        $conditions = SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values) ?? [];
+        $conditions = 1 === $pairs
+            ? SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values) ?? []
+            : $this->create_eager_conditions_from_pairs($conn, array_slice($query_keys, 0, $pairs), array_slice($model_values_keys, 0, $pairs), $attributes);
 
         // Accept the hash form (GH #13): normalize it to the positional shape
         // before merging so the branch below (and add_condition) can consume it.
@@ -206,7 +210,13 @@ abstract class AbstractRelationship implements InterfaceRelationship
             // Group the declared fragment so its own OR cannot swallow the key
             // condition ("a OR b AND fk IN(?)" would match "a" for any owner).
             $options['conditions'][0] = '(' . $options['conditions'][0] . ')';
-            Utils::add_condition($options['conditions'], $conditions);
+            if (1 === $pairs) {
+                Utils::add_condition($options['conditions'], $conditions);
+            } else {
+                // one bind per placeholder: add_condition() would nest them all in one
+                $options['conditions'][0] .= ' AND ' . array_shift($conditions);
+                array_push($options['conditions'], ...$conditions);
+            }
         } else {
             $options['conditions'] = $conditions;
         }
@@ -267,13 +277,26 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $model_values_key = $inflector->variablize($model_values_key);
         $query_key = $inflector->variablize($query_key);
 
+        $pair_keys = [];
+        for ($i = 1; $i < $pairs; ++$i) {
+            $pair_keys[$inflector->variablize($query_keys[$i])] = $inflector->variablize($model_values_keys[$i]);
+        }
+        $key_matches = self::eager_key_matcher();
+
         foreach ($models as $model) {
             $matches = 0;
             $key_to_match = $model->$model_values_key;
 
             foreach ($related_models as $related) {
                 /** @var Model $related */
-                if (empty($query_key) || $related->$query_key == $key_to_match) {
+                if (empty($query_key) || $key_matches($related->$query_key, $key_to_match, $pairs > 1)) {
+                    foreach ($pair_keys as $related_key => $owner_key) {
+                        // the owner value the key condition was built from
+                        if (!$key_matches($related->$related_key, $model->attributes()[$owner_key] ?? null, true)) {
+                            continue 2;
+                        }
+                    }
+
                     $hash = spl_object_hash($related);
 
                     if (in_array($hash, $used_models)) {
@@ -291,6 +314,60 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $model->set_relationship_from_eager_load(null, $this->attribute_name);
             }
         }
+    }
+
+    /**
+     * GH #40: the eager key conditions for composite keys, one "(fk1 = ? AND fk2 = ?)" group
+     * per distinct owner key, OR'ed: every pair is queried as load() queries it (a null part
+     * as IS NULL). An owner whose key values are all null is left out, as load() finds
+     * nothing for it.
+     *
+     * @param list<string> $query_keys
+     * @param list<string> $model_values_keys
+     * @param list<array<string, mixed>> $attributes
+     * @return list<mixed>
+     */
+    private function create_eager_conditions_from_pairs(Connection $conn, array $query_keys, array $model_values_keys, array $attributes): array
+    {
+        $inflector = Inflector::instance();
+        $groups = $binds = [];
+
+        foreach ($attributes as $owner) {
+            $key = [];
+            foreach ($model_values_keys as $model_values_key) {
+                $key[] = $owner[$inflector->variablize($model_values_key)] ?? null;
+            }
+
+            $signature = serialize($key);
+            if (all(null, $key) || isset($groups[$signature])) {
+                continue;
+            }
+
+            $condition = SQLBuilder::create_conditions_from_columns($conn, $query_keys, $key) ?? [''];
+            $groups[$signature] = '(' . array_shift($condition) . ')';
+            array_push($binds, ...$condition);
+        }
+
+        // no owner key at all (HasMany::load_eagerly() does not get here): match nothing
+        return array_merge(['(' . ([] === $groups ? '1 = 0' : implode(' OR ', $groups)) . ')'], $binds);
+    }
+
+    /**
+     * GH #40: compares a child's key with an owner's in the eager load, as the database did
+     * when it found the child: PHP ==, as always. For a part of a composite key ($strict_null)
+     * null matches only null, as IS NULL.
+     *
+     * @return \Closure(mixed, mixed, bool): bool
+     */
+    private static function eager_key_matcher(): \Closure
+    {
+        return function (mixed $related_key, mixed $owner_key, bool $strict_null): bool {
+            if ($strict_null && (null === $related_key || null === $owner_key)) {
+                return $related_key === $owner_key;
+            }
+
+            return $related_key == $owner_key;
+        };
     }
 
     /**
@@ -947,8 +1024,8 @@ class HasMany extends AbstractRelationship
 
     /**
      * GH #40: the owner columns the eager load keys off, as load() does: the declared
-     * primary_key; on a reverse-FK `through` the middle relationship's declared primary_key.
-     * Null: the table pk, as before.
+     * primary_key; on a reverse-FK `through` the middle relationship's declared primary_key;
+     * a composite table pk for a composite foreign key. Null: the table pk, as before.
      *
      * @return list<string>|null
      */
@@ -963,7 +1040,11 @@ class HasMany extends AbstractRelationship
             return [] !== $declared ? $declared : null;
         }
 
-        return [] !== $this->declared_primary_key ? $this->declared_primary_key : null;
+        if ([] !== $this->declared_primary_key) {
+            return $this->declared_primary_key;
+        }
+
+        return count($this->foreign_key) > 1 && count($table->pk) > 1 ? $table->pk : null;
     }
 };
 

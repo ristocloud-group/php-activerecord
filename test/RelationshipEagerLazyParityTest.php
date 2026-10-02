@@ -44,6 +44,31 @@ class ParityParentKeyedAuthor extends ActiveRecord\Model
     ];
 }
 
+// (b) composite keys: declared, declared + conditions, and a composite table pk
+class ParityCompositeItem extends ActiveRecord\Model
+{
+    public static $table_name = 'composite_items';
+}
+
+class ParityCompositeAuthor extends ActiveRecord\Model
+{
+    public static $pk = 'author_id';
+    public static $table_name = 'authors';
+    public static $has_many = [
+        ['items', 'class_name' => 'ParityCompositeItem', 'foreign_key' => ['author_ref', 'parent_ref'],
+            'primary_key' => ['author_id', 'parent_author_id'], 'order' => 'id asc'],
+        ['kept_items', 'class_name' => 'ParityCompositeItem', 'foreign_key' => ['author_ref', 'parent_ref'],
+            'primary_key' => ['author_id', 'parent_author_id'], 'conditions' => ['title <> ?', 'x'], 'order' => 'id desc'],
+    ];
+}
+
+class ParityPairKeyedAuthor extends ActiveRecord\Model
+{
+    public static $pk = ['author_id', 'parent_author_id'];
+    public static $table_name = 'authors';
+    public static $has_many = [['items', 'class_name' => 'ParityCompositeItem', 'foreign_key' => ['author_ref', 'parent_ref'], 'order' => 'id asc']];
+}
+
 class RelationshipEagerLazyParityTest extends DatabaseTest
 {
     /**
@@ -133,5 +158,39 @@ class RelationshipEagerLazyParityTest extends DatabaseTest
 
         $eager = $this->load('ParityTierVenue', 'hosts_by_tier', true);
         $this->assert_same([1 => [2, 3], 2 => [], 6 => [], 7 => [], 8 => [], 9 => []], $eager);
+    }
+
+    // ---- (b) composite keys ----
+
+    public function test_eager_composite_keys_query_and_match_every_pair()
+    {
+        $sql = $this->assert_parity([1 => [1, 2], 2 => [], 3 => [5, 6], 4 => []], 'ParityCompositeAuthor', 'items', 'author_id asc', 'author_id');
+        $this->assert_sql_has('WHERE ((author_ref=? AND parent_ref=?) OR (author_ref=? AND parent_ref=?) OR (author_ref=? AND parent_ref=?) OR (author_ref=? AND parent_ref=?)) ORDER BY id asc', $sql);
+    }
+
+    public function test_eager_composite_keys_keep_declared_conditions_and_order()
+    {
+        $sql = $this->assert_parity([1 => [1], 2 => [], 3 => [5], 4 => []], 'ParityCompositeAuthor', 'kept_items', 'author_id asc', 'author_id');
+        $this->assert_sql_has('WHERE (title <> ?) AND ((author_ref=? AND parent_ref=?) OR', $sql);
+    }
+
+    public function test_eager_composite_table_primary_key_matches_every_pair()
+    {
+        $this->assert_parity([1 => [1, 2], 2 => [], 3 => [5, 6], 4 => []], 'ParityPairKeyedAuthor', 'items', 'author_id asc', 'author_id');
+    }
+
+    public function test_eager_composite_key_with_a_null_part_matches_like_the_lazy_load()
+    {
+        $owner = ParityCompositeAuthor::create(['name' => 'no parent']);
+        $null_part = (int) ParityCompositeItem::create(['author_ref' => $owner->author_id, 'title' => 'null part'])->id;
+        ParityCompositeItem::create(['author_ref' => $owner->author_id, 'parent_ref' => 0, 'title' => 'zero part']);
+        ParityCompositeItem::create(['author_ref' => $owner->author_id, 'parent_ref' => 3, 'title' => 'other part']);
+
+        // lazy: author_ref = ? AND parent_ref IS NULL
+        $this->assert_same([$null_part], $this->ids(ParityCompositeAuthor::find($owner->author_id)->items, 'id'));
+
+        $eager = $this->load('ParityCompositeAuthor', 'items', true, 'author_id asc', 'author_id');
+        $this->assert_same([$null_part], $eager[$owner->author_id]);
+        $this->assert_same([1, 2], $eager[1]);
     }
 }
