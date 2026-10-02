@@ -53,7 +53,7 @@ class ParentKeyedCompositeAuthor extends ActiveRecord\Model
         'primary_key' => ['author_id', 'parent_author_id'], 'order' => 'id asc']];
 }
 
-// guarded composite child: attr_accessible allows the first foreign key column but not the second
+// guarded composite child: attr_accessible lists the first foreign key column but not the second
 class PrimaryKeyGuardedCompositeItem extends ActiveRecord\Model
 {
     public static $table_name = 'composite_items';
@@ -262,36 +262,25 @@ class RelationshipPrimaryKeyTest extends DatabaseTest
         $this->assert_equals($count, Book::count());
     }
 
-    public function test_composite_builders_go_through_the_child_attr_accessible()
+    public function test_composite_builders_assign_every_foreign_key_past_the_child_attr_accessible()
     {
         $strict = ActiveRecord\Config::instance()->get_strict_mass_assignment();
         $author = ParentKeyedGuardedCompositeAuthor::find(1); // (author_id 1, parent_author_id 3)
         $count = PrimaryKeyGuardedCompositeItem::count();
 
         try {
-            // strict off: the guarded second key column is dropped, as a guarded first one always was
-            ActiveRecord\Config::instance()->set_strict_mass_assignment(false);
-            $built = $author->build_items(['title' => 'built']);
-            $this->assert_equals([1, null], [$built->author_ref, $built->parent_ref]);
+            // the foreign key columns are assigned directly, whether attr_accessible lists them or not
+            foreach ([false, true] as $on) {
+                ActiveRecord\Config::instance()->set_strict_mass_assignment($on);
+                $built = $author->build_items(['title' => 'built']);
+                $this->assert_equals([1, 3], [$built->author_ref, $built->parent_ref]);
 
-            $created = $author->create_items(['title' => 'created']);
-            $stored = PrimaryKeyGuardedCompositeItem::find($created->id);
-            $this->assert_equals([1, null], [$stored->author_ref, $stored->parent_ref]);
-
-            // strict on: the second key column is named and nothing is inserted
-            ActiveRecord\Config::instance()->set_strict_mass_assignment(true);
-            $message = "PrimaryKeyGuardedCompositeItem: mass assignment of attribute 'parent_ref' blocked by attr_accessible";
-
-            foreach (['build_items', 'create_items'] as $builder) {
-                try {
-                    $author->$builder(['title' => 'blocked']);
-                    $this->fail("expected $builder to throw ActiveRecord\\MassAssignmentException");
-                } catch (ActiveRecord\MassAssignmentException $e) {
-                    $this->assert_same($message, $e->getMessage());
-                }
+                $created = $author->create_items(['title' => 'created']);
+                $stored = PrimaryKeyGuardedCompositeItem::find($created->id);
+                $this->assert_equals([1, 3, 'created'], [$stored->author_ref, $stored->parent_ref, $stored->title]);
             }
 
-            $this->assert_equals($count + 1, PrimaryKeyGuardedCompositeItem::count());
+            $this->assert_equals($count + 2, PrimaryKeyGuardedCompositeItem::count());
         } finally {
             ActiveRecord\Config::instance()->set_strict_mass_assignment($strict);
         }

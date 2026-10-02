@@ -4,6 +4,45 @@ use ActiveRecord\Config;
 use ActiveRecord\MassAssignmentException;
 use ActiveRecord\UndefinedPropertyException;
 
+// attr_protected lists the author_id foreign key
+class BookAttrProtectedForeignKey extends ActiveRecord\Model
+{
+    public static $pk = 'book_id';
+    public static $table_name = 'books';
+    public static $attr_protected = ['author_id'];
+}
+
+class AuthorWithProtectedForeignKeyBooks extends ActiveRecord\Model
+{
+    public static $pk = 'author_id';
+    public static $table_name = 'authors';
+    public static $has_many = [['books', 'class_name' => 'BookAttrProtectedForeignKey', 'foreign_key' => 'author_id']];
+    public static $has_one = [['book', 'class_name' => 'BookAttrProtectedForeignKey', 'foreign_key' => 'author_id']];
+}
+
+// attr_accessible allows the foreign key; after_construct records the value it sees
+class BookTrackingForeignKey extends ActiveRecord\Model
+{
+    public static $pk = 'book_id';
+    public static $table_name = 'books';
+    public static $attr_accessible = ['name', 'author_id'];
+    public static $after_construct = ['track'];
+    /** @var list<mixed> */
+    public static array $seen = [];
+
+    public function track(): void
+    {
+        self::$seen[] = $this->author_id;
+    }
+}
+
+class AuthorWithTrackedBooks extends ActiveRecord\Model
+{
+    public static $pk = 'author_id';
+    public static $table_name = 'authors';
+    public static $has_many = [['books', 'class_name' => 'BookTrackingForeignKey', 'foreign_key' => 'author_id']];
+}
+
 class StrictMassAssignmentTest extends DatabaseTest
 {
     private bool $original_strict;
@@ -96,38 +135,78 @@ class StrictMassAssignmentTest extends DatabaseTest
     }
 
     /*
-     * Association builders inject the foreign key into a guarded mass assignment
-     * (HasMany::inject_foreign_key_for_new_association()), so an $attr_accessible
-     * that omits the fk drops it with strict off (pre-existing: the record gets a
-     * null fk) and throws with strict on. Pinned as is; list the fk in
-     * $attr_accessible to allow it.
+     * Association builders (build_* / create_*) assign the foreign key they inject
+     * directly, like Rails: the associated model's $attr_accessible /
+     * $attr_protected and strict mass assignment do not apply to it (it used to be
+     * dropped, leaving an orphan record, or to throw). The attributes passed to the
+     * builder stay guarded.
      */
-    public function test_association_builder_drops_injected_foreign_key_when_strict_is_off()
+    public function test_association_builder_assigns_injected_foreign_key_when_strict_is_off()
     {
         Config::instance()->set_strict_mass_assignment(false);
         $author = AuthorWithGuardedBooks::find(1);
 
         $built = $author->build_books(['name' => 'built']);
         $this->assert_same('built', $built->name);
-        $this->assert_null($built->author_id);
+        $this->assert_equals(1, $built->author_id);
 
         $created = $author->create_books(['name' => 'created']);
         $this->assert_false($created->is_new_record());
-        $this->assert_null(BookAttrAccessibleNameOnly::find($created->book_id)->author_id);
+        $this->assert_equals(1, BookAttrAccessibleNameOnly::find($created->book_id)->author_id);
     }
 
-    public function test_association_builder_throws_for_injected_foreign_key_when_strict_is_on()
+    public function test_association_builder_assigns_injected_foreign_key_when_strict_is_on()
     {
         $author = AuthorWithGuardedBooks::find(1);
         $count = BookAttrAccessibleNameOnly::count();
-        $message = "BookAttrAccessibleNameOnly: mass assignment of attribute 'author_id' blocked by attr_accessible";
 
-        $e = $this->expect_blocked(fn() => $author->build_books(['name' => 'built']));
-        $this->assert_same($message, $e->getMessage());
+        $this->assert_equals(1, $author->build_books(['name' => 'built'])->author_id);
 
-        $e = $this->expect_blocked(fn() => $author->create_books(['name' => 'created']));
-        $this->assert_same($message, $e->getMessage());
+        $created = $author->create_books(['name' => 'created']);
+        $this->assert_equals(1, BookAttrAccessibleNameOnly::find($created->book_id)->author_id);
+        $this->assert_equals($count + 1, BookAttrAccessibleNameOnly::count());
+    }
+
+    public function test_association_builder_assigns_foreign_key_listed_in_attr_protected()
+    {
+        $author = AuthorWithProtectedForeignKeyBooks::find(2);
+
+        $this->assert_equals(2, $author->build_books(['name' => 'built'])->author_id);
+        $this->assert_equals(2, $author->build_book(['name' => 'built one'])->author_id);
+
+        $created = $author->create_book(['name' => 'created']);
+        $this->assert_equals(2, BookAttrProtectedForeignKey::find($created->book_id)->author_id);
+        $this->assert_same('created', $created->name);
+    }
+
+    public function test_association_builder_still_guards_the_attributes_passed_to_it()
+    {
+        $author = AuthorWithGuardedBooks::find(1);
+        $count = BookAttrAccessibleNameOnly::count();
+
+        // only the attribute passed in is reported, not the injected foreign key
+        $e = $this->expect_blocked(fn() => $author->create_books(['name' => 'created', 'secondary_author_id' => 2]));
+        $this->assert_same("BookAttrAccessibleNameOnly: mass assignment of attribute 'secondary_author_id' blocked by attr_accessible", $e->getMessage());
         $this->assert_equals($count, BookAttrAccessibleNameOnly::count());
+
+        // a foreign key passed in is an attribute like any other: guarded, and not replaced
+        $e = $this->expect_blocked(fn() => $author->build_books(['author_id' => 4]));
+        $this->assert_same("BookAttrAccessibleNameOnly: mass assignment of attribute 'author_id' blocked by attr_accessible", $e->getMessage());
+
+        Config::instance()->set_strict_mass_assignment(false);
+        $this->assert_null($author->build_books(['author_id' => 4])->author_id);
+    }
+
+    public function test_association_builder_passes_an_allowed_foreign_key_through_mass_assignment()
+    {
+        // an allowed foreign key is still mass-assigned with the other attributes, so
+        // after_construct already sees it
+        BookTrackingForeignKey::$seen = [];
+        $author = AuthorWithTrackedBooks::find(1);
+
+        $this->assert_equals(1, $author->build_books(['name' => 'built'])->author_id);
+        $this->assert_not_empty(BookTrackingForeignKey::$seen);
+        $this->assert_same([1], array_values(array_unique(BookTrackingForeignKey::$seen)));
     }
 
     public function test_mix_of_allowed_and_blocked_keys_lists_only_blocked_ones()

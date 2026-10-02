@@ -1029,13 +1029,58 @@ class HasMany extends AbstractRelationship
     }
 
     /**
+     * GH #40: takes the foreign keys inject_foreign_key_for_new_association() added out of
+     * $attributes when the associated model's attr_accessible / attr_protected would block them
+     * (Model::guarded_attribute_block()), and returns them for the builders to assign directly,
+     * like Rails. An allowed one stays in the mass assignment, as before; the attributes passed
+     * to the builder ($passed) stay guarded.
+     *
+     * @param array<int|string, mixed> $passed
+     * @param array<int|string, mixed> $attributes
+     * @param-out array<int|string, mixed> $attributes
+     * @return array<string, mixed>
+     */
+    private function take_out_guarded_foreign_keys(array $passed, array &$attributes): array
+    {
+        /** @var class-string<Model> $class_name */
+        $class_name = $this->class_name;
+        $direct = [];
+
+        foreach ($this->foreign_key as $foreign_key) {
+            $foreign_key = Inflector::instance()->variablize($foreign_key);
+
+            if (isset($passed[$foreign_key]) || !array_key_exists($foreign_key, $attributes)) {
+                continue; // passed in, or not injected
+            }
+
+            $name = $class_name::$alias_attribute[$foreign_key] ?? $foreign_key;
+
+            if ((!empty($class_name::$attr_accessible) && !in_array($name, $class_name::$attr_accessible))
+                || (!empty($class_name::$attr_protected) && in_array($name, $class_name::$attr_protected))) {
+                $direct[$foreign_key] = $attributes[$foreign_key];
+                unset($attributes[$foreign_key]);
+            }
+        }
+
+        return $direct;
+    }
+
+    /**
      * @param array<int|string, mixed> $attributes
      * @return Model
      */
     public function build_association(Model $model, $attributes = [])
     {
+        $passed = $attributes;
         $attributes = $this->inject_foreign_key_for_new_association($model, $attributes);
-        return parent::build_association($model, $attributes);
+        $direct = $this->take_out_guarded_foreign_keys($passed, $attributes);
+        $record = parent::build_association($model, $attributes);
+
+        foreach ($direct as $name => $value) {
+            $record->$name = $value;
+        }
+
+        return $record;
     }
 
     /**
@@ -1044,8 +1089,26 @@ class HasMany extends AbstractRelationship
      */
     public function create_association(Model $model, $attributes = [])
     {
+        $passed = $attributes;
         $attributes = $this->inject_foreign_key_for_new_association($model, $attributes);
-        return parent::create_association($model, $attributes);
+        $direct = $this->take_out_guarded_foreign_keys($passed, $attributes);
+
+        if ([] === $direct) {
+            return parent::create_association($model, $attributes);
+        }
+
+        // as Model::create(), with the guarded foreign keys assigned before the save
+        $class_name = $this->class_name;
+        /** @var Model $record */
+        $record = new $class_name($attributes);
+
+        foreach ($direct as $name => $value) {
+            $record->$name = $value;
+        }
+
+        $record->save();
+
+        return $this->append_record_to_associate($model, $record);
     }
 
     /**
