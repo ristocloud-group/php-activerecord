@@ -157,6 +157,7 @@ CREATE TABLE dated_counts (
   day date NOT NULL,
   at timestamp NOT NULL,
   hits int,
+  seen_at timestamp,
   PRIMARY KEY(day, at)
 );
 

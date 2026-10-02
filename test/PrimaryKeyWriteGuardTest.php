@@ -622,6 +622,50 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         $this->assert_same([2], $this->dated_hits());
     }
 
+    private function seen_at(string $day): ?string
+    {
+        return PkGuardDatedCount::first(['conditions' => ['day' => $day]])?->seen_at?->format('Y-m-d H:i:s');
+    }
+
+    public function test_datetime_immutable_values_are_bound_in_an_insert()
+    {
+        // process_data() formatted only \DateTime: any other DateTimeInterface reached PDO
+        // as an object ("could not be converted to string"). Assigned one by one: mass
+        // assignment casts a date column's value and does not accept a DateTimeImmutable
+        $count = new PkGuardDatedCount();
+        $count->day = new \DateTimeImmutable('2026-03-01');
+        $count->at = new \DateTimeImmutable('2026-03-01 08:00:00');
+        $count->seen_at = new \DateTimeImmutable('2026-03-01 09:30:00');
+        $count->hits = 3;
+        $this->assert_true($count->save());
+        $this->assert_same([1, 2, 3], $this->dated_hits());
+        $this->assert_same('2026-03-01 09:30:00', $this->seen_at('2026-03-01'));
+    }
+
+    public function test_datetime_immutable_value_is_bound_in_an_update_set()
+    {
+        $count = PkGuardDatedCount::first(['conditions' => ['hits' => 2]]);
+        $count->seen_at = new \DateTimeImmutable('2026-03-02 11:00:00');
+        $this->assert_true($count->save());
+        $this->assert_same('2026-03-02 11:00:00', $this->seen_at('2026-01-02'));
+    }
+
+    public function test_datetime_immutable_values_are_bound_in_finders()
+    {
+        $found = PkGuardDatedCount::first(['conditions' => ['at' => new \DateTimeImmutable('2026-01-02 10:00:00')]]);
+        $this->assert_equals(2, $found?->hits);
+
+        $found = PkGuardDatedCount::find_by_sql('SELECT * FROM dated_counts WHERE at = ?', [new \DateTimeImmutable('2026-01-01 10:00:00')]);
+        $this->assert_same([1], array_map(fn(PkGuardDatedCount $c) => (int) $c->hits, $found));
+    }
+
+    public function test_datetime_immutable_values_are_bound_in_an_upsert()
+    {
+        PkGuardDatedCount::upsert([['day' => new \DateTimeImmutable('2026-01-01'),
+            'at' => new \DateTimeImmutable('2026-01-01 10:00:00'), 'hits' => 7]], ['day', 'at']);
+        $this->assert_same([7, 2], $this->dated_hits());
+    }
+
     public function test_reload_of_a_composite_pk_record_reloads_its_row()
     {
         // reload() found by the first pk column with every pk value ("owner IN ('acme', 'def')"):

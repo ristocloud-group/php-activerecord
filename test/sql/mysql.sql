@@ -155,6 +155,7 @@ CREATE TABLE dated_counts (
   `day` DATE NOT NULL,
   `at` DATETIME NOT NULL,
   `hits` INT,
+  `seen_at` DATETIME,
   PRIMARY KEY(`day`, `at`)
 ) ENGINE=InnoDB;
 
