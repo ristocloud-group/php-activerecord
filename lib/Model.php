@@ -2176,6 +2176,8 @@ class Model
 
         if ($results != ($expected = is_array($values) ? count($values) : 1)) {
             $class = get_called_class();
+            // a \DateTime or \DateTimeImmutable has no string form (ActiveRecord\DateTime keeps its own)
+            $values = is_array($values) ? array_map(self::describe_find_value(...), $values) : self::describe_find_value($values);
 
             if ($expected == 1) {
                 if (!is_array($values)) {
@@ -2191,15 +2193,21 @@ class Model
         return $expected == 1 ? $list[0] : $list;
     }
 
+    private static function describe_find_value(mixed $value): mixed
+    {
+        return $value instanceof \DateTimeInterface && !$value instanceof \Stringable ? $value->format('Y-m-d H:i:s') : $value;
+    }
+
     /**
-     * A DateTime at midnight for a DATE pk column, as the date the column stores. A finder
-     * binds its values positionally in the datetime format ('2026-01-02 00:00:00'), which
-     * SQLite compares as text with the stored '2026-01-02'. Any other value, including a
-     * DateTime with a time of day, is returned as is, so it binds as before.
+     * A DateTime for a DATE pk column, as the date the column stores (like process_data()
+     * does for an update/delete). A finder binds its values positionally, in the datetime
+     * format ('2026-01-02 00:00:00' or '2026-01-02 14:00:00'), which SQLite compares as
+     * text with the stored '2026-01-02' and MySQL/MariaDB compare as a datetime. Any other
+     * value, or a DateTime for another column type, is returned as is.
      */
     private static function date_pk_finder_value(string $name, mixed $value): mixed
     {
-        if (!$value instanceof \DateTimeInterface || '00:00:00.000000' !== $value->format('H:i:s.u')) {
+        if (!$value instanceof \DateTimeInterface) {
             return $value;
         }
 

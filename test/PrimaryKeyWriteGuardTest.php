@@ -923,4 +923,126 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         $this->assert_true($inner->update_attribute('name', 'inner'));
         $this->assert_same(['1=OUTER', '2=George W. Bush', '3=INNER', '4=Uncle Bob'], $this->author_rows());
     }
+
+    public function test_date_pk_created_with_a_time_of_day_is_found_and_reloaded()
+    {
+        // the DATE column stores 2026-05-05; a find by pk and reload() bound the
+        // value's time too and missed the row (RecordNotFound, or an Error from the message)
+        $day = PkGuardDatedDay::create(['day' => new \DateTime('2026-05-05 14:00:00'), 'at' => '2026-05-05 14:00:00', 'hits' => 5]);
+
+        $this->assert_same($day, $day->reload());
+        $this->assert_equals(5, $day->hits);
+        $this->assert_equals(5, PkGuardDatedDay::find(new \DateTime('2026-05-05 14:00:00'))->hits);
+        $this->assert_equals(5, PkGuardDatedDay::find(new \DateTimeImmutable('2026-05-05 23:59:59'))->hits);
+        $this->assert_true($day->update_attribute('hits', 6));
+        $this->assert_same([1, 2, 6], $this->dated_hits());
+    }
+
+    public function test_find_by_pk_not_found_message_formats_date_values()
+    {
+        $messages = [];
+
+        foreach ([new \DateTime('2030-01-01'), new \DateTimeImmutable('2030-01-01'), new ActiveRecord\DateTime('2030-01-01'), [new \DateTime('2026-01-01'), new \DateTime('2030-01-01')]] as $value) {
+            try {
+                PkGuardDatedDay::find($value);
+                $this->fail('expected RecordNotFound');
+            } catch (RecordNotFound $e) {
+                $messages[] = $e->getMessage();
+            }
+        }
+
+        $this->assert_same([
+            "Couldn't find PkGuardDatedDay with ID=2030-01-01 00:00:00",
+            "Couldn't find PkGuardDatedDay with ID=2030-01-01 00:00:00",
+            // ActiveRecord\DateTime is Stringable: its text is unchanged
+            "Couldn't find PkGuardDatedDay with ID=" . new ActiveRecord\DateTime('2030-01-01'),
+            "Couldn't find all PkGuardDatedDay with IDs (2026-01-01 00:00:00,2030-01-01 00:00:00) (found 1, but was looking for 2)",
+        ], $messages);
+    }
+
+    public function test_datetime_immutable_values_are_accepted_by_mass_assignment()
+    {
+        // Column::cast() turned only a \DateTime into an ActiveRecord\DateTime and passed a
+        // DateTimeImmutable to date_create(): TypeError
+        $rome = new \DateTimeZone('Europe/Rome');
+        $count = PkGuardDatedCount::create(['day' => new \DateTimeImmutable('2026-03-01'),
+            'at' => new \DateTimeImmutable('2026-03-01 08:00:00'), 'hits' => 3,
+            'seen_at' => new \DateTimeImmutable('2026-03-01 09:30:00', $rome)]);
+        $this->assert_instance_of(ActiveRecord\DateTime::class, $count->seen_at);
+        $this->assert_same('2026-03-01 09:30:00 CET', $count->seen_at->format('Y-m-d H:i:s T'));
+        $this->assert_same([1, 2, 3], $this->dated_hits());
+        $this->assert_same('2026-03-01 09:30:00', $this->seen_at('2026-03-01'));
+
+        $built = new PkGuardDatedCount(['day' => new \DateTimeImmutable('2026-04-01'), 'at' => new \DateTimeImmutable('2026-04-01 08:00:00'), 'hits' => 4]);
+        $this->assert_instance_of(ActiveRecord\DateTime::class, $built->day);
+        $this->assert_true($built->save());
+
+        $this->assert_true($count->update_attributes(['seen_at' => new \DateTimeImmutable('2026-03-02 10:00:00')]));
+        $this->assert_same('2026-03-02 10:00:00', $this->seen_at('2026-03-01'));
+        $this->assert_same([1, 2, 3, 4], $this->dated_hits());
+    }
+
+    public function test_delete_of_another_model_in_a_rolled_back_scope_is_undone()
+    {
+        // same connection, other class: the scope is the connection's
+        $book = Book::find(1);
+        $this->assert_false(Author::transaction(function () use ($book) {
+            $book->delete();
+
+            return false;
+        }));
+
+        $this->assert_true($book->update_attribute('name', 'kept'));
+        $this->assert_same('kept', Book::find(1)->name);
+    }
+
+    public function test_inner_exception_caught_by_a_committed_outer_scope_restores_only_the_inner_record()
+    {
+        [$outer, $inner] = [Author::find(1), Author::find(3)];
+
+        $this->assert_true(Author::transaction(function () use ($outer, $inner) {
+            $outer->delete();
+
+            try {
+                Author::transaction(function () use ($inner) {
+                    $inner->delete();
+
+                    throw new RuntimeException('inner');
+                });
+            } catch (RuntimeException $e) {
+                $this->assert_same('inner', $e->getMessage());
+            }
+        }));
+
+        $this->assert_same(['2=George W. Bush', '3=Bill Clinton', '4=Uncle Bob'], $this->author_rows());
+        $this->assert_true($inner->update_attribute('name', 'inner'));
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $outer->update_attribute('name', 'ghost'));
+    }
+
+    public function test_after_destroy_throwing_inside_a_transaction_restores_the_record()
+    {
+        Author::table()->callback->register('after_destroy', function () {
+            throw new RuntimeException('after_destroy failed');
+        });
+        $author = Author::find(1);
+
+        try {
+            Author::transaction(fn() => $author->delete());
+            $this->fail('expected RuntimeException');
+        } catch (RuntimeException $e) {
+            $this->assert_same('after_destroy failed', $e->getMessage());
+        }
+
+        $this->assert_true(Author::exists(1));
+        $this->assert_true($author->update_attribute('name', 'kept'));
+
+        // outside a transaction the DELETE stands: the record stays deleted
+        try {
+            $author->delete();
+            $this->fail('expected RuntimeException');
+        } catch (RuntimeException $e) {
+        }
+        $this->assert_false(Author::exists(1));
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $author->update_attribute('name', 'ghost'));
+    }
 }

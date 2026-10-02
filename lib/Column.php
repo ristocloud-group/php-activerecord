@@ -153,7 +153,8 @@ class Column
                     return $value;
                 }
 
-                if ($value instanceof \DateTime) {
+                // any DateTimeInterface (a \DateTimeImmutable too), in its own timezone
+                if ($value instanceof \DateTimeInterface) {
                     return new DateTime($value->format('Y-m-d H:i:s T'));
                 }
 
