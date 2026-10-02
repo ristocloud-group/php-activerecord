@@ -182,8 +182,18 @@ class SqliteAdapter extends Connection
         $name = strtolower($name);
 
         return in_array($name, ['rowid', 'oid', '_rowid_'], true)
-            || in_array($name, array_map('strtolower', $columns), true)
+            || parent::resolves_column_name($name, $table, $columns, $select)
             || (null !== $select && '' !== $name && str_contains(strtolower($select), $name));
+    }
+
+    /**
+     * Equal ignoring ASCII case, as SQLite compares identifiers.
+     *
+     * @internal
+     */
+    public function column_name_matches(string $name, string $column): ?bool
+    {
+        return 0 === strcasecmp($name, $column);
     }
 
     /**

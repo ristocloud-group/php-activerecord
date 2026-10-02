@@ -122,15 +122,23 @@ class MysqlAdapter extends Connection
      */
     public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
     {
-        foreach ([$name, ...$columns] as $n) {
-            if (1 === preg_match('/[^\x00-\x7F]/', $n)) {
-                return true;
-            }
+        return 1 === preg_match('/[^\x00-\x7F]/', $name)
+            || '_rowid' === strtolower($name)
+            || parent::resolves_column_name($name, $table, $columns, $select);
+    }
+
+    /**
+     * Equal ignoring ASCII case; otherwise undecided when either name is not ASCII.
+     *
+     * @internal
+     */
+    public function column_name_matches(string $name, string $column): ?bool
+    {
+        if (0 === strcasecmp($name, $column)) {
+            return true;
         }
 
-        $name = strtolower($name);
-
-        return '_rowid' === $name || in_array($name, array_map('strtolower', $columns), true);
+        return 1 === preg_match('/[^\x00-\x7F]/', $name . $column) ? null : false;
     }
 
     /**

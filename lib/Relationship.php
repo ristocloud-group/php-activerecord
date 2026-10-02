@@ -645,15 +645,18 @@ abstract class AbstractRelationship implements InterfaceRelationship
     }
 
     /**
-     * Whether $table has a column named $column: exactly on Postgres (quoted names are
-     * case-sensitive), ignoring ASCII case elsewhere.
+     * Whether $table certainly has a column named $column, compared the way its database
+     * compares column names ({@see Connection::column_name_matches()}).
      */
     protected static function table_has_column(Table $table, string $column): bool
     {
-        foreach (array_keys($table->columns) as $name) {
-            $name = (string) $name;
+        $conn = $table->conn;
+        if (null === $conn) {
+            throw new DatabaseException('No database connection established for ' . $table->class->getName());
+        }
 
-            if ($name === $column || (!($table->conn instanceof PgsqlAdapter) && 0 === strcasecmp($name, $column))) {
+        foreach (array_keys($table->columns) as $name) {
+            if (true === $conn->column_name_matches($column, (string) $name)) {
                 return true;
             }
         }

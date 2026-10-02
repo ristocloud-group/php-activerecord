@@ -946,6 +946,20 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals(1, count(Venue::all(['conditions' => ['marquee' => 'Warner Theatre']])));
     }
 
+    public function test_column_name_matches_as_the_database_does()
+    {
+        $c = $this->conn;
+        $pgsql = $c instanceof ActiveRecord\PgsqlAdapter;
+        $mysql = $c instanceof ActiveRecord\MysqlAdapter;
+
+        $this->assert_true($c->column_name_matches('author_id', 'author_id'));
+        $this->assert_false($c->column_name_matches('author_id', 'name'));
+        $this->assert_equals(!$pgsql, $c->column_name_matches('AUTHOR_ID', 'author_id'));
+        // MySQL folds non-ASCII letters too, in its own way: undecided here
+        $this->assert_equals($mysql ? null : false, $c->column_name_matches('CAFÉ', 'café'));
+        $this->assert_equals(!$pgsql, $c->column_name_matches('Café', 'cAFé'));
+    }
+
     public function test_qualified_hash_condition_keys_are_not_checked()
     {
         $q = $this->conn::$QUOTE_CHARACTER;

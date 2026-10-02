@@ -753,7 +753,25 @@ abstract class Connection
      */
     public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
     {
-        return in_array($name, $columns, true);
+        foreach ($columns as $column) {
+            if (false !== $this->column_name_matches($name, $column)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether the database takes the unqualified identifier $name for the column $column:
+     * true or false, or null when it cannot be told here. This default compares exactly,
+     * as standard SQL does for a quoted identifier.
+     *
+     * @internal Serves resolves_column_name() and the relationship key checks; not a supported API.
+     */
+    public function column_name_matches(string $name, string $column): ?bool
+    {
+        return $name === $column;
     }
 
     /**
