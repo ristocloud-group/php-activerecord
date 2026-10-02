@@ -434,6 +434,21 @@ class Table
     }
 
     /**
+     * A conditions hash with the model's $alias_attribute names replaced by their columns,
+     * split like {@see map_names()} where an alias and its column would collide.
+     *
+     * @internal Serves update_all/delete_all and relationship hash conditions.
+     * @param array<string, mixed> $conditions
+     * @return non-empty-list<array<string, mixed>>
+     */
+    public function alias_condition_hashes(array $conditions): array
+    {
+        $map = (array) $this->class->getStaticPropertyValue('alias_attribute', []);
+
+        return [] === $map ? [$conditions] : $this->map_names($conditions, $map);
+    }
+
+    /**
      * The identifier a hash-condition key is rendered as (see Expressions), or null when
      * the key is table-qualified: an unquoted dotted key, or quoted identifiers joined by '.'.
      */

@@ -837,6 +837,46 @@ abstract class AdapterTest extends DatabaseTest
         );
     }
 
+    public function test_alias_keys_are_mapped_in_count_exists_update_all_and_delete_all()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // used to reach the database unmapped (unknown column `marquee`)
+        $this->assert_equals(1, Venue::count(['conditions' => ['marquee' => 'Warner Theatre']]));
+        $this->assert_equals(1, Venue::count(['marquee' => 'Warner Theatre', 'mycity' => 'Washington']));
+        $this->assert_true(Venue::exists(['marquee' => 'Warner Theatre']));
+        $this->assert_equals(1, Venue::update_all(['set' => ['state' => 'ZZ'], 'conditions' => ['marquee' => 'Warner Theatre']]));
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=?", Venue::table()->last_sql);
+        $this->assert_equals(1, Venue::count(['conditions' => ['state' => 'ZZ']]));
+
+        // an alias and its column are both kept, as in finders
+        $both = ['name' => 'Warner Theatre', 'marquee' => 'Blender Theater at Gramercy'];
+        $this->assert_equals(0, Venue::count(['conditions' => $both]));
+        $this->assert_false(Venue::exists($both));
+        $this->assert_equals(0, Venue::update_all(['set' => ['state' => 'XX'], 'conditions' => $both]));
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=? AND {$q}name{$q}=?", Venue::table()->last_sql);
+        $this->assert_equals(0, Venue::delete_all(['conditions' => $both]));
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=? AND {$q}name{$q}=?", Venue::table()->last_sql);
+
+        $count = Venue::count();
+        $this->assert_equals(1, Venue::delete_all(['conditions' => ['marquee' => 'Warner Theatre', 'name' => 'Warner Theatre']]));
+        $this->assert_equals($count - 1, Venue::count());
+    }
+
+    public function test_alias_keys_are_mapped_in_relationship_hash_conditions()
+    {
+        // lazy
+        $this->assert_equals(2, MarqueeEvent::find(2)->venue->id);
+        $this->assert_null(MarqueeEvent::find(1)->venue);
+        $this->assert_null(MarqueeEvent::find(2)->scoped_venue);
+        $this->assert_null(MarqueeEvent::find(1)->scoped_venue);
+
+        // eager
+        $events = MarqueeEvent::all(['conditions' => ['id' => [1, 2]], 'include' => ['venue', 'scoped_venue'], 'order' => 'id']);
+        $this->assert_equals([null, 2], array_map(fn($e) => $e->venue?->id, $events));
+        $this->assert_equals([null, null], array_map(fn($e) => $e->scoped_venue?->id, $events));
+    }
+
     public function test_alias_key_without_its_column_renders_as_before()
     {
         $q = $this->conn::$QUOTE_CHARACTER;
