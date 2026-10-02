@@ -156,7 +156,10 @@ every attribute blocked by a model's `$attr_accessible` / `$attr_protected` and,
 warning. Turn on strict mode to throw an `ActiveRecord\MassAssignmentException` instead — raised before anything is
 assigned, its message lists every blocked attribute. It is global and off by default; assigning a single attribute
 (`$model->name = …`) is not affected. The foreign key that association builders (`build_*` / `create_*`) inject is
-subject to the same guard, so list it in the associated model's `$attr_accessible`.
+assigned directly, like Rails: it needs no `$attr_accessible` entry and is never dropped or reported. The attributes
+passed to a builder are guarded as usual, and that includes a foreign key passed there with a value: the builder then
+injects nothing for it, so a blocked one is dropped (the record gets no foreign key) or, in strict mode, throws. A
+foreign key passed as `null` counts as not passed and is replaced by the injected value.
 
 ```php
 ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
@@ -245,7 +248,7 @@ php examples/simple/simple.php
 | [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete), tables without a primary key, the never-saved- and deleted-record update/delete guard, and convention overrides (`$table_name`, `$primary_key`) |
 | [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes |
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
-| [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner |
+| [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner, a `has_many` keyed by a declared `primary_key` (lazy load, eager `include` and `create_*` agree, a declared `limit` applies per owner) |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |
 | [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking |
 | [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |

@@ -209,8 +209,12 @@ class Config extends Singleton
      * warning is logged. When on, a {@link MassAssignmentException} listing every
      * blocked attribute is thrown instead, before any attribute is assigned.
      * Assigning a single attribute ($model->name = ...) is never affected. The
-     * foreign key injected by association builders (build_* / create_*) is subject
-     * to the same guard: list it in the associated model's attr_accessible.
+     * foreign key injected by association builders (build_* / create_*) is
+     * assigned directly, like Rails, so the guard never drops or reports it. The
+     * attributes passed to a builder are guarded as usual, including a foreign
+     * key passed there with a value: nothing is injected for it, so a blocked one
+     * is dropped (the record gets no foreign key) or, when strict, throws. A
+     * foreign key passed as null is replaced by the injected value.
      *
      * <code>
      * ActiveRecord\Config::initialize(function($cfg) {

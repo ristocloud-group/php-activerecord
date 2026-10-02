@@ -184,8 +184,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $inflector = Inflector::instance();
         $query_key = $query_keys[0];
         $model_values_key = $model_values_keys[0];
+        // GH #40: composite keys are queried and matched on every pair, as load() does
+        $pairs = $this instanceof HasMany && empty($options['through']) ? min(count($query_keys), count($model_values_keys)) : 1;
 
-        foreach ($attributes as $column => $value) {
+        foreach (1 === $pairs ? $attributes : [] as $column => $value) {
             $values[] = $value[$inflector->variablize($model_values_key)];
         }
 
@@ -194,7 +196,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if (null === $conn) {
             throw new DatabaseException('No database connection established for ' . $table->class->getName());
         }
-        $conditions = SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values) ?? [];
+        $conditions = 1 === $pairs
+            ? SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values) ?? []
+            : $this->create_eager_conditions_from_pairs($conn, array_slice($query_keys, 0, $pairs), array_slice($model_values_keys, 0, $pairs), $attributes);
 
         // Accept the hash form (GH #13): normalize it to the positional shape
         // before merging so the branch below (and add_condition) can consume it.
@@ -206,7 +210,13 @@ abstract class AbstractRelationship implements InterfaceRelationship
             // Group the declared fragment so its own OR cannot swallow the key
             // condition ("a OR b AND fk IN(?)" would match "a" for any owner).
             $options['conditions'][0] = '(' . $options['conditions'][0] . ')';
-            Utils::add_condition($options['conditions'], $conditions);
+            if (1 === $pairs) {
+                Utils::add_condition($options['conditions'], $conditions);
+            } else {
+                // one bind per placeholder: add_condition() would nest them all in one
+                $options['conditions'][0] .= ' AND ' . array_shift($conditions);
+                array_push($options['conditions'], ...$conditions);
+            }
         } else {
             $options['conditions'] = $conditions;
         }
@@ -261,19 +271,51 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $options = $this->unset_non_finder_options($options);
 
         $class = $this->class_name;
+        [$skip, $take] = $this->eager_window($options);
+
+        if (0 === $take) {
+            // limit 0: no owner gets a child (#34), no query needed
+            foreach ($models as $model) {
+                $model->set_relationship_from_eager_load(null, $this->attribute_name);
+            }
+
+            return;
+        }
 
         $related_models = $class::find('all', $options);
         $used_models = [];
         $model_values_key = $inflector->variablize($model_values_key);
         $query_key = $inflector->variablize($query_key);
 
+        $pair_keys = [];
+        for ($i = 1; $i < $pairs; ++$i) {
+            $pair_keys[$inflector->variablize($query_keys[$i])] = $inflector->variablize($model_values_keys[$i]);
+        }
+        $key_matches = self::eager_key_matcher($class::table());
+
         foreach ($models as $model) {
-            $matches = 0;
+            $matches = $skipped = 0;
             $key_to_match = $model->$model_values_key;
 
             foreach ($related_models as $related) {
                 /** @var Model $related */
-                if (empty($query_key) || $related->$query_key == $key_to_match) {
+                if (empty($query_key) || $key_matches($related->$query_key, $key_to_match, $pairs > 1, $query_key)) {
+                    foreach ($pair_keys as $related_key => $owner_key) {
+                        // the owner value the key condition was built from
+                        if (!$key_matches($related->$related_key, $model->attributes()[$owner_key] ?? null, true, $related_key)) {
+                            continue 2;
+                        }
+                    }
+
+                    if ($skipped < $skip) {
+                        ++$skipped;
+                        continue;
+                    }
+
+                    if (null !== $take && $matches >= $take) {
+                        break;
+                    }
+
                     $hash = spl_object_hash($related);
 
                     if (in_array($hash, $used_models)) {
@@ -284,6 +326,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
                     $used_models[] = $hash;
                     $matches++;
+
+                    if ($this instanceof HasOne) {
+                        break; // GH #40: the first match in the declared order, as load()'s find('first')
+                    }
                 }
             }
 
@@ -291,6 +337,120 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $model->set_relationship_from_eager_load(null, $this->attribute_name);
             }
         }
+    }
+
+    /**
+     * GH #40: the eager key conditions for composite keys, one "(fk1 = ? AND fk2 = ?)" group
+     * per distinct owner key, OR'ed: every pair is queried as load() queries it (a null part
+     * as IS NULL). An owner whose key values are all null is left out, as load() finds
+     * nothing for it.
+     *
+     * @param list<string> $query_keys
+     * @param list<string> $model_values_keys
+     * @param list<array<string, mixed>> $attributes
+     * @return list<mixed>
+     */
+    private function create_eager_conditions_from_pairs(Connection $conn, array $query_keys, array $model_values_keys, array $attributes): array
+    {
+        $inflector = Inflector::instance();
+        $groups = $binds = [];
+
+        foreach ($attributes as $owner) {
+            $key = [];
+            foreach ($model_values_keys as $model_values_key) {
+                $key[] = $owner[$inflector->variablize($model_values_key)] ?? null;
+            }
+
+            $signature = serialize($key);
+            if (all(null, $key) || isset($groups[$signature])) {
+                continue;
+            }
+
+            $condition = SQLBuilder::create_conditions_from_columns($conn, $query_keys, $key) ?? [''];
+            $groups[$signature] = '(' . array_shift($condition) . ')';
+            array_push($binds, ...$condition);
+        }
+
+        // no owner key at all (HasMany::load_eagerly() does not get here): match nothing
+        return array_merge(['(' . ([] === $groups ? '1 = 0' : implode(' OR ', $groups)) . ')'], $binds);
+    }
+
+    /**
+     * GH #40: a declared limit/offset applies to each owner's children in the eager load, as
+     * it does in load(): it is taken off the query here and returned as [rows to skip, rows to
+     * take] for the matching. A has_one ignores both, as load()'s find('first') does. A
+     * negative limit or offset stays on the query, as before.
+     *
+     * @param array<string, mixed> $options
+     * @param-out array<string, mixed> $options
+     * @return array{int, int|null}
+     */
+    private function eager_window(array &$options): array
+    {
+        if (!($this instanceof HasMany) || (!array_key_exists('limit', $options) && !array_key_exists('offset', $options))) {
+            return [0, null];
+        }
+
+        // read like SQLBuilder::limit() / offset() (#34): 0 is LIMIT 0, null no limit
+        $limit = $options['limit'] ?? null;
+        $take = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
+        $skip = intval($options['offset'] ?? 0);
+
+        if ($this instanceof HasOne) {
+            [$skip, $take] = [0, null];
+        } elseif ($skip < 0 || $take < 0) {
+            return [0, null];
+        }
+
+        unset($options['limit'], $options['offset']);
+
+        return [$skip, $take];
+    }
+
+    /**
+     * GH #40: compares a child's key with an owner's in the eager load, as the database did
+     * when it found the child: PHP ==, as always, and on MySQL/MariaDB two strings that differ
+     * only by case also match, as under their default case-insensitive collations
+     * (utf8mb4_0900_ai_ci, utf8mb4_uca1400_ai_ci) - only when the child's key column
+     * ($related_column) is a text column (not binary/blob, which compare byte for byte) and both
+     * keys are valid UTF-8, so no two distinct byte strings fold together. For a part of a
+     * composite key ($strict_null) null matches only null, as IS NULL.
+     *
+     * @param Table $related the related model's table, whose connection found the children
+     * @return \Closure(mixed, mixed, bool, string): bool
+     */
+    private static function eager_key_matcher(Table $related): \Closure
+    {
+        $ignore_case = $related->conn instanceof MysqlAdapter && function_exists('mb_convert_case');
+        $text_columns = $folded = [];
+
+        $is_text_column = function (string $column) use ($related, &$text_columns): bool {
+            if (!array_key_exists($column, $text_columns)) {
+                $meta = $related->get_column_by_inflected_name($column);
+                $text_columns[$column] = null !== $meta && Column::STRING === $meta->type
+                    && !preg_match('/binary|blob/i', (string) $meta->raw_type);
+            }
+
+            return $text_columns[$column];
+        };
+
+        $fold = function (string $key) use (&$folded): string {
+            return $folded[$key] ??= mb_convert_case($key, MB_CASE_FOLD, 'UTF-8');
+        };
+
+        return function (mixed $related_key, mixed $owner_key, bool $strict_null, string $related_column) use ($ignore_case, $is_text_column, $fold): bool {
+            if ($strict_null && (null === $related_key || null === $owner_key)) {
+                return $related_key === $owner_key;
+            }
+
+            if ($related_key == $owner_key) {
+                return true;
+            }
+
+            return $ignore_case && is_string($related_key) && is_string($owner_key) && $is_text_column($related_column)
+                && mb_check_encoding($related_key, 'UTF-8') && mb_check_encoding($owner_key, 'UTF-8')
+                && $fold($related_key) === $fold($owner_key);
+        };
     }
 
     /**
@@ -699,6 +859,9 @@ class HasMany extends AbstractRelationship
     /** @var list<string>|null */
     protected $primary_key;
 
+    /** @var list<string> The declared `primary_key` option ([] when the table pk is inferred). */
+    private array $declared_primary_key = [];
+
     /** @var string|null */
     private $through;
 
@@ -728,13 +891,23 @@ class HasMany extends AbstractRelationship
         if (!$this->primary_key) {
             $pk = relationship_option_key_list($options['primary_key'] ?? null, (string) $options[0], 'primary_key');
             if ($pk) {
-                $this->primary_key = $pk;
+                $this->primary_key = $this->declared_primary_key = $pk;
             }
         }
 
         if (!$this->class_name) {
             $this->set_inferred_class_name();
         }
+    }
+
+    /**
+     * GH #40: a declared `primary_key` keys the eager load and the build_/create_ builders
+     * as it keys {@see load()}. Without one, both keep keying off the table pk as before; a
+     * `through` relationship is left as it was.
+     */
+    private function keys_off_declared_primary_key(): bool
+    {
+        return [] !== $this->declared_primary_key && null === $this->through;
     }
 
     /**
@@ -820,7 +993,13 @@ class HasMany extends AbstractRelationship
             throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
         }
 
-        if (!($conditions = $this->create_conditions_from_keys($model, $this->foreign_key, $this->primary_key))) {
+        // GH #40: a declared primary_key (the middle one on a reverse-FK through) is read
+        // inflected, as the eager load and the builders read it; the table pk as before
+        $value_keys = $this->primary_key === Table::load(get_class($model))->pk
+            ? $this->primary_key
+            : array_map(fn($key) => Inflector::instance()->variablize($key), $this->primary_key);
+
+        if (!($conditions = $this->create_conditions_from_keys($model, $this->foreign_key, $value_keys))) {
             return null;
         }
 
@@ -837,6 +1016,27 @@ class HasMany extends AbstractRelationship
     private function inject_foreign_key_for_new_association(Model $model, array &$attributes): array
     {
         $this->set_keys(get_class($model));
+
+        if ($this->keys_off_declared_primary_key()) {
+            // GH #40: as in load(), each foreign key column takes the owner's value of the
+            // corresponding declared primary_key column; a value passed in still wins.
+            $inflector = Inflector::instance();
+
+            foreach ($this->foreign_key as $i => $foreign_key) {
+                if (!isset($this->declared_primary_key[$i])) {
+                    break;
+                }
+
+                $foreign_key = $inflector->variablize($foreign_key);
+
+                if (!isset($attributes[$foreign_key])) {
+                    $attributes[$foreign_key] = $model->read_attribute($inflector->variablize($this->declared_primary_key[$i]));
+                }
+            }
+
+            return $attributes;
+        }
+
         $primary_key = Inflector::instance()->variablize($this->foreign_key[0]);
 
         if (!isset($attributes[$primary_key])) {
@@ -847,13 +1047,63 @@ class HasMany extends AbstractRelationship
     }
 
     /**
+     * GH #40: takes the foreign keys inject_foreign_key_for_new_association() added out of
+     * $attributes when the associated model's attr_accessible / attr_protected would block them
+     * (the check of Model::guarded_attribute_block(), which is private), and returns them for the
+     * builders to assign directly, like Rails. An allowed one stays in the mass assignment, as
+     * before; the attributes passed to the builder ($passed) stay guarded.
+     *
+     * @param array<int|string, mixed> $passed
+     * @param array<int|string, mixed> $attributes
+     * @param-out array<int|string, mixed> $attributes
+     * @return array<string, mixed>
+     */
+    private function take_out_guarded_foreign_keys(array $passed, array &$attributes): array
+    {
+        /** @var class-string<Model> $class_name */
+        $class_name = $this->class_name;
+        $direct = [];
+
+        foreach ($this->foreign_key as $foreign_key) {
+            $foreign_key = Inflector::instance()->variablize($foreign_key);
+
+            if (isset($passed[$foreign_key]) || !array_key_exists($foreign_key, $attributes)) {
+                continue; // passed in, or not injected
+            }
+
+            // exactly Model::guarded_attribute_block() on the new record (its attributes are the
+            // table's columns): alias, then the 'id' shortcut of a pk-less table
+            $name = $class_name::$alias_attribute[$foreign_key] ?? $foreign_key;
+            if ('id' === $name && null === $class_name::table()->get_column_by_inflected_name('id')) {
+                $name = $class_name::table()->pk[0] ?? '';
+            }
+
+            if ((!empty($class_name::$attr_accessible) && !in_array($name, $class_name::$attr_accessible))
+                || (!empty($class_name::$attr_protected) && in_array($name, $class_name::$attr_protected))) {
+                $direct[$foreign_key] = $attributes[$foreign_key];
+                unset($attributes[$foreign_key]);
+            }
+        }
+
+        return $direct;
+    }
+
+    /**
      * @param array<int|string, mixed> $attributes
      * @return Model
      */
     public function build_association(Model $model, $attributes = [])
     {
+        $passed = $attributes;
         $attributes = $this->inject_foreign_key_for_new_association($model, $attributes);
-        return parent::build_association($model, $attributes);
+        $direct = $this->take_out_guarded_foreign_keys($passed, $attributes);
+        $record = parent::build_association($model, $attributes);
+
+        foreach ($direct as $name => $value) {
+            $record->$name = $value;
+        }
+
+        return $record;
     }
 
     /**
@@ -862,8 +1112,26 @@ class HasMany extends AbstractRelationship
      */
     public function create_association(Model $model, $attributes = [])
     {
+        $passed = $attributes;
         $attributes = $this->inject_foreign_key_for_new_association($model, $attributes);
-        return parent::create_association($model, $attributes);
+        $direct = $this->take_out_guarded_foreign_keys($passed, $attributes);
+
+        if ([] === $direct) {
+            return parent::create_association($model, $attributes);
+        }
+
+        // as Model::create(), with the guarded foreign keys assigned before the save
+        $class_name = $this->class_name;
+        /** @var Model $record */
+        $record = new $class_name($attributes);
+
+        foreach ($direct as $name => $value) {
+            $record->$name = $value;
+        }
+
+        $record->save();
+
+        return $this->append_record_to_associate($model, $record);
     }
 
     /**
@@ -875,7 +1143,59 @@ class HasMany extends AbstractRelationship
     public function load_eagerly($models, $attributes, $includes, Table $table)
     {
         $this->set_keys($table->class->name);
-        $this->query_and_attach_related_models_eagerly($table, $models, $attributes, $includes, $this->foreign_key, $table->pk);
+        $owner_keys = $this->eager_owner_keys($table);
+
+        if (null === $owner_keys) {
+            $this->query_and_attach_related_models_eagerly($table, $models, $attributes, $includes, $this->foreign_key, $table->pk);
+
+            return;
+        }
+
+        // GH #40: key off the declared primary_key, as load() does. load() finds nothing for an
+        // owner whose key is null, so leave such an owner out of the query: its null would be
+        // rendered as "fk IS NULL" and match it to every child that has no owner.
+        $inflector = Inflector::instance();
+        $keyed_models = $keyed_attributes = [];
+
+        foreach ($models as $i => $model) {
+            $key = array_map(fn($owner_key) => $attributes[$i][$inflector->variablize($owner_key)] ?? null, $owner_keys);
+
+            if (all(null, $key)) {
+                $model->set_relationship_from_eager_load(null, $this->attribute_name);
+            } else {
+                $keyed_models[] = $model;
+                $keyed_attributes[] = $attributes[$i];
+            }
+        }
+
+        if ([] !== $keyed_models) {
+            $this->query_and_attach_related_models_eagerly($table, $keyed_models, $keyed_attributes, $includes, $this->foreign_key, $owner_keys);
+        }
+    }
+
+    /**
+     * GH #40: the owner columns the eager load keys off, as load() does: the declared
+     * primary_key; on a reverse-FK `through` the middle relationship's declared primary_key;
+     * a composite table pk for a composite foreign key. Null: the table pk, as before.
+     *
+     * @return list<string>|null
+     */
+    private function eager_owner_keys(Table $table): ?array
+    {
+        if (null !== $this->through) {
+            $through = $table->get_relationship($this->through);
+            $declared = $through instanceof HasMany && $this->resolve_source_relationship($through) instanceof HasMany
+                ? $through->declared_primary_key
+                : $this->declared_primary_key;
+
+            return [] !== $declared ? $declared : null;
+        }
+
+        if ([] !== $this->declared_primary_key) {
+            return $this->declared_primary_key;
+        }
+
+        return count($this->foreign_key) > 1 && count($table->pk) > 1 ? $table->pk : null;
     }
 };
 
