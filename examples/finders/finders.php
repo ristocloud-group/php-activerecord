@@ -26,6 +26,15 @@ out('find_by_name: ' . (Widget::find_by_name('Alpha')->name ?? '(none)'));
 out('find_all_by_category(gizmos): ' . count(Widget::find_all_by_category('gizmos')));
 out('find_by_category_and_in_stock: ' . (Widget::find_by_category_and_in_stock('gadgets', 1)->name ?? '(none)'));
 
+// A column whose own name contains _and_ / _or_ stays whole: the finder name is
+// split only into real column (or alias) names, preferring one name per value.
+// (Before #53 it was split at every _and_: "shipping=? AND handling IS NULL".)
+$free = Widget::find_all_by_shipping_and_handling(0);
+out('find_all_by_shipping_and_handling(0): ' . implode(', ', ActiveRecord\collect($free, 'name')));
+out('  SQL: ' . Widget::table()->last_sql);
+out('find_by_shipping_and_handling_and_category: ' . (Widget::find_by_shipping_and_handling_and_category(0, 'gizmos')->name ?? '(none)'));
+out('  SQL: ' . Widget::table()->last_sql);
+
 // Option set: conditions / order / limit / offset / select.
 $page = Widget::all([
     'select'     => 'name, price',

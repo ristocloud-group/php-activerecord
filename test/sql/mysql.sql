@@ -101,6 +101,17 @@ CREATE TABLE property_amenities(
   `property_id` int(11) NOT NULL DEFAULT '0'
 );
 
+-- column names containing the dynamic-finder separators _and_ / _or_ (#53)
+CREATE TABLE swatches(
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `black` INT,
+  `white` INT,
+  `black_and_white` INT,
+  `black_or_white` INT,
+  `Shade_and_Tone` INT,
+  `title` VARCHAR(20)
+);
+
 CREATE TABLE users (
     id INT NOT NULL AUTO_INCREMENT PRIMARY KEY
 ) ENGINE=InnoDB;

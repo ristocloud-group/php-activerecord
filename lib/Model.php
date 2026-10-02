@@ -1520,13 +1520,6 @@ class Model
         $create = false;
 
         if (substr($method, 0, 17) == 'find_or_create_by') {
-            $attributes = substr($method, 17);
-
-            // can't take any finders with OR in it when doing a find_or_create_by
-            if (strpos($attributes, '_or_') !== false) {
-                throw new ActiveRecordException("Cannot use OR'd attributes in find_or_create_by");
-            }
-
             $create = true;
             $method = 'find_by' . substr($method, 17);
         }
@@ -1539,22 +1532,132 @@ class Model
 
         if (substr($method, 0, 7) === 'find_by') {
             $attributes = substr($method, 8);
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $alias_attribute_map);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+
+            // can't take any finders with OR in it when doing a find_or_create_by
+            // (substr($method, 7) is what followed "find_or_create_by"; an _or_ inside
+            // the name of a real attribute is not an OR, #53)
+            if ($create && strpos(substr($method, 7), '_or_') !== false && (null === $split || in_array('_or_', $split[1], true))) {
+                throw new ActiveRecordException("Cannot use OR'd attributes in find_or_create_by");
+            }
+
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
 
             if (!($ret = static::find('first', $options)) && $create) {
-                return static::create(SQLBuilder::create_hash_from_underscored_string($attributes, $args, $alias_attribute_map));
+                return static::create(null === $split
+                    ? SQLBuilder::create_hash_from_underscored_string($attributes, $args, $alias_attribute_map)
+                    : SQLBuilder::create_hash_from_columns($split[0], $args, $alias_attribute_map));
             }
 
             return $ret;
         } elseif (substr($method, 0, 11) === 'find_all_by') {
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 12), $args, $alias_attribute_map);
+            $attributes = substr($method, 12);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
             return static::find('all', $options);
         } elseif (substr($method, 0, 8) === 'count_by') {
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 9), $args, $alias_attribute_map);
+            $attributes = substr($method, 9);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
             return static::count($options);
         }
 
         throw new ActiveRecordException("Call to undefined method: $method");
+    }
+
+    /**
+     * The conditions of a dynamic finder: split as split_dynamic_finder_attributes() said ($split),
+     * or at every separator as create_conditions_from_underscored_string() does when it said null.
+     *
+     * @param list<mixed> $args
+     * @param array<string, string>|null $map
+     * @param array{list<string>, list<string>}|null $split
+     * @return list<mixed>|null
+     */
+    private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map, ?array $split): ?array
+    {
+        return null === $split
+            ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $map)
+            : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $map, $split[1]);
+    }
+
+    /**
+     * Where a dynamic finder's attribute string splits when the name of a real attribute
+     * itself contains _and_ or _or_ (#53).
+     *
+     * A split is valid when each of its names is a column of the table (its column name or
+     * its attribute name, as mass assignment accepts them) or an alias_attribute key. The
+     * best valid split has as many names as there are values, else the fewest names; between
+     * splits with as many names, the one with the longest names first. Splits are not
+     * enumerated: one backward pass over the k separators makes O(k²) name lookups.
+     *
+     * @param int $num_values Number of values passed to the finder; an array counts as one
+     * @return array{list<string>, list<string>}|null The names and the separators that join
+     *   them, or null to split at every separator as before: when there is no separator, no
+     *   valid split, or the best valid split is that one
+     */
+    private static function split_dynamic_finder_attributes(string $attributes, int $num_values): ?array
+    {
+        $parts = preg_split('/(_and_|_or_)/i', $attributes, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        if (false === $parts || count($parts) < 3) {
+            return null;
+        }
+
+        $real = array_fill_keys(array_keys((array) static::$alias_attribute), true);
+
+        foreach (static::table()->columns as $name => $column) {
+            $real[$name] = $real[$column->inflected_name] = true;
+        }
+
+        // word $w is $parts[2 * $w], the separator before it $parts[2 * $w - 1].
+        // $best[$w][$n]: the longest real name [its last word, the name] that starts at
+        // word $w and leaves the words after it splittable into $n - 1 real names.
+        $last = intdiv(count($parts), 2);
+        $best = [$last + 1 => [0 => [$last, '']]];
+
+        for ($w = $last; $w >= 0; --$w) {
+            $best[$w] = [];
+            $name = '';
+
+            for ($end = $w; $end <= $last; ++$end) {
+                $name .= ($end > $w ? $parts[2 * $end - 1] : '') . $parts[2 * $end];
+
+                if (isset($real[$name])) {
+                    foreach (array_keys($best[$end + 1]) as $n) {
+                        $best[$w][$n + 1] = [$end, $name];
+                    }
+                }
+            }
+        }
+
+        $counts = $best[0];
+
+        if ([] === $counts) {
+            return null;
+        }
+
+        $count = isset($counts[$num_values]) ? $num_values : min(array_keys($counts));
+
+        if ($count === $last + 1) {
+            return null;
+        }
+
+        $names = [];
+        $separators = [];
+
+        for ($w = 0; $count > 0; --$count) {
+            [$end, $name] = $best[$w][$count];
+
+            if ($w > 0) {
+                $separators[] = $parts[2 * $w - 1];
+            }
+
+            $names[] = $name;
+            $w = $end + 1;
+        }
+
+        return [$names, $separators];
     }
 
     /**
