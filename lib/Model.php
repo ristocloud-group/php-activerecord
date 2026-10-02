@@ -1628,7 +1628,13 @@ class Model
         if (count($pk) > 1) {
             // a find by pk looks a list of values up in the first pk column only: a
             // composite key names its row by every column
-            $found = static::find('first', ['conditions' => $pk]);
+            $conditions = [];
+
+            foreach ($pk as $name => $value) {
+                $conditions[$name] = self::date_pk_finder_value($name, $value);
+            }
+
+            $found = static::find('first', ['conditions' => $conditions]);
 
             if (null === $found) {
                 $values = array_map(fn($value) => match (true) {
@@ -2117,7 +2123,11 @@ class Model
      */
     public static function find_by_pk($values, $options)
     {
-        $options['conditions'] = static::pk_conditions($values);
+        $pk = static::table()->pk[0] ?? null;
+        $bound = null === $pk ? $values : (is_array($values)
+            ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
+            : self::date_pk_finder_value($pk, $values));
+        $options['conditions'] = static::pk_conditions($bound);
         $list = static::table()->find($options);
         $results = count($list);
 
@@ -2136,6 +2146,24 @@ class Model
             throw new RecordNotFound("Couldn't find all $class with IDs ($values) (found $results, but was looking for $expected)");
         }
         return $expected == 1 ? $list[0] : $list;
+    }
+
+    /**
+     * A DateTime at midnight for a DATE pk column, as the date the column stores. A finder
+     * binds its values positionally in the datetime format ('2026-01-02 00:00:00'), which
+     * SQLite compares as text with the stored '2026-01-02'. Any other value, including a
+     * DateTime with a time of day, is returned as is, so it binds as before.
+     */
+    private static function date_pk_finder_value(string $name, mixed $value): mixed
+    {
+        if (!$value instanceof \DateTimeInterface || '00:00:00.000000' !== $value->format('H:i:s.u')) {
+            return $value;
+        }
+
+        $table = static::table();
+        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
+
+        return null !== $column && Column::DATE === $column->type ? static::connection()->date_to_string($value) : $value;
     }
 
     /**

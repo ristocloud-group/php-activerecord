@@ -54,6 +54,13 @@ class PkGuardDatedCount extends ActiveRecord\Model
     public static $table_name = 'dated_counts';
 }
 
+// the same table keyed by its DATE column alone (its fixture days are unique)
+class PkGuardDatedDay extends ActiveRecord\Model
+{
+    public static $table_name = 'dated_counts';
+    public static $primary_key = 'day';
+}
+
 class PrimaryKeyWriteGuardTest extends DatabaseTest
 {
     /** @var list<string> */
@@ -711,5 +718,30 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         } catch (RecordNotFound $e) {
             $this->assert_same("Couldn't find Author with ID=99", $e->getMessage());
         }
+    }
+
+    public function test_find_by_a_date_pk_and_reload_match_the_row()
+    {
+        // a find by pk binds its values positionally, in the datetime format: SQLite compared
+        // '2026-01-02 00:00:00' with the stored '2026-01-02' and found nothing
+        $day = PkGuardDatedDay::find(new \DateTime('2026-01-02'));
+        $this->assert_equals(2, $day->hits);
+
+        PkGuardDatedDay::update_all(['set' => ['hits' => 8], 'conditions' => ['hits' => 2]]);
+        $this->assert_same($day, $day->reload());
+        $this->assert_equals(8, $day->hits);
+
+        $this->assert_count(2, PkGuardDatedDay::find([new \DateTime('2026-01-01'), new \DateTime('2026-01-02')]));
+    }
+
+    public function test_reload_of_a_composite_date_pk_record_matches_the_row()
+    {
+        $count = PkGuardDatedCount::first(['conditions' => ['hits' => 1]]);
+        PkGuardDatedCount::update_all(['set' => ['hits' => 9], 'conditions' => ['hits' => 1]]);
+
+        $this->assert_same($count, $count->reload());
+        $this->assert_equals(9, $count->hits);
+        $this->assert_true($count->update_attribute('hits', 10));
+        $this->assert_same([10, 2], $this->dated_hits());
     }
 }
