@@ -51,18 +51,13 @@ class PgsqlAdapter extends Connection
         return "SELECT EXISTS($inner)::int";
     }
 
-    public function query_column_info($table)
+    /**
+     * @param string $table
+     * @param string|null $schema Restrict the lookup to this schema (see {@see columns_in_schema()})
+     */
+    public function query_column_info($table, ?string $schema = null)
     {
-        // A model with `$db` passes its schema quoted ("public".authors): look the table up
-        // in that schema, by its bare name, instead of matching no relname at all.
-        $schema = null;
-        $in_schema = '';
-
-        if (1 === preg_match('/\A"((?:[^"]|"")+)"\.(.+)\z/s', $table, $m)) {
-            $schema = str_replace('""', '"', $m[1]);
-            $table = $m[2];
-            $in_schema = ' AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ?)';
-        }
+        $in_schema = null === $schema ? '' : ' AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ?)';
 
         $sql = <<<SQL
             SELECT
@@ -147,6 +142,27 @@ class PgsqlAdapter extends Connection
             }
         }
         return $c;
+    }
+
+    /**
+     * The columns of the table $table in the schema $schema, both unquoted names (a
+     * quoted one is unquoted first): what a model with `$db` introspects.
+     *
+     * @internal Serves Table; not a supported API.
+     * @return array<string, Column>
+     */
+    public function columns_in_schema(string $table, string $schema): array
+    {
+        $unquote = fn(string $name) => 1 === preg_match('/\A"((?:[^"]|"")+)"\z/', $name, $m) ? str_replace('""', '"', $m[1]) : $name;
+        $columns = [];
+        $sth = $this->query_column_info($unquote($table), $unquote($schema));
+
+        while (($row = $sth->fetch())) {
+            $c = $this->create_column($row);
+            $columns[$c->name] = $c;
+        }
+
+        return $columns;
     }
 
     /**

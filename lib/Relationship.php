@@ -650,18 +650,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     protected static function table_has_column(Table $table, string $column): bool
     {
-        $conn = $table->conn;
-        if (null === $conn) {
-            throw new DatabaseException('No database connection established for ' . $table->class->getName());
-        }
-
-        foreach (array_keys($table->columns) as $name) {
-            if (true === $conn->column_name_matches($column, (string) $name)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $table->has_column($column);
     }
 
     /**

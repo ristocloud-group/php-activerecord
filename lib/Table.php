@@ -409,8 +409,8 @@ class Table
         $conn = $this->connection();
         $columns = $this->column_names($this->columns);
 
-        // no introspected column (e.g. Postgres with `$db`, whose introspection does not
-        // resolve a schema-qualified name): the schema is unknown, the database decides
+        // no introspected column (the table could not be introspected, e.g. a pre-quoted
+        // schema-qualified $table_name on Postgres): the schema is unknown, the database decides
         if ([] === $columns) {
             return;
         }
@@ -425,7 +425,7 @@ class Table
                 continue;
             }
 
-            $fresh_columns ??= $this->column_names($conn->columns($this->get_fully_qualified_table_name(!($conn instanceof PgsqlAdapter))));
+            $fresh_columns ??= $this->column_names($this->introspect_columns());
 
             if (!$conn->resolves_column_name($name, $this->table, $fresh_columns, $select)) {
                 throw new DatabaseException("Unknown column '$key' in hash conditions for {$this->class->getName()} (table {$this->table})");
@@ -435,17 +435,55 @@ class Table
 
     /**
      * A conditions hash with the model's $alias_attribute names replaced by their columns,
-     * split like {@see map_names()} where an alias and its column would collide.
+     * split like {@see map_names()} where an alias and its column would collide. An alias
+     * named like a real column of the table is not mapped: these paths (count, exists,
+     * update_all, delete_all, relationship conditions) always sent that name to the
+     * database as the column, and still do.
      *
-     * @internal Serves update_all/delete_all and relationship hash conditions.
+     * @internal Serves count/exists, update_all/delete_all and relationship hash conditions.
      * @param array<string, mixed> $conditions
      * @return non-empty-list<array<string, mixed>>
      */
     public function alias_condition_hashes(array $conditions): array
     {
-        $map = (array) $this->class->getStaticPropertyValue('alias_attribute', []);
+        $map = $this->condition_alias_map();
 
         return [] === $map ? [$conditions] : $this->map_names($conditions, $map);
+    }
+
+    /**
+     * The model's $alias_attribute map without the aliases named like a real column
+     * (see {@see alias_condition_hashes()}).
+     *
+     * @internal
+     * @return array<string, string>
+     */
+    public function condition_alias_map(): array
+    {
+        return array_filter(
+            (array) $this->class->getStaticPropertyValue('alias_attribute', []),
+            fn($alias) => !$this->has_column((string) $alias),
+            ARRAY_FILTER_USE_KEY
+        );
+    }
+
+    /**
+     * Whether this table certainly has a column named $name, compared the way its database
+     * compares column names ({@see Connection::column_name_matches()}).
+     *
+     * @internal
+     */
+    public function has_column(string $name): bool
+    {
+        $conn = $this->connection();
+
+        foreach (array_keys($this->columns) as $column) {
+            if (true === $conn->column_name_matches($name, (string) $column)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -722,10 +760,33 @@ class Table
 
         $table_name = $this->get_fully_qualified_table_name($quote_name);
         $conn = $this->connection();
+        // a Postgres `$db` model is introspected in its schema: its own key, so a pre-quoted
+        // $table_name that spells the same string ('"public".authors') never reuses it
+        if ($conn instanceof PgsqlAdapter && $this->db_name) {
+            $table_name .= '-in-schema';
+        }
+
         // scoped by connection identity: same-named tables on different databases differ (#45)
-        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () use ($conn, $table_name) {
-            return $conn->columns($table_name);
+        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () {
+            return $this->introspect_columns();
         });
+    }
+
+    /**
+     * The table's columns, read from the database (no cache). On Postgres a model with
+     * `$db` is looked up in that schema.
+     *
+     * @return array<string, Column>
+     */
+    private function introspect_columns(): array
+    {
+        $conn = $this->connection();
+
+        if ($conn instanceof PgsqlAdapter && $this->db_name) {
+            return $conn->columns_in_schema($this->table, $this->db_name);
+        }
+
+        return $conn->columns($this->get_fully_qualified_table_name(!($conn instanceof PgsqlAdapter)));
     }
 
     /**
@@ -831,6 +892,17 @@ class Table
             $this->sequence = isset($this->pk[0])
                 ? $this->connection()->get_sequence_name($this->table, $this->pk[0])
                 : null;
+
+            // with `$db` that derived, unqualified name would resolve through search_path,
+            // possibly to a same-named table's sequence in another schema: use the
+            // sequence the pk column's default really draws from (e.g. s26.books_book_id_seq)
+            if ($this->db_name && isset($this->pk[0])) {
+                $column = $this->columns[$this->pk[0]] ?? $this->get_column_by_inflected_name($this->pk[0]);
+
+                if (null !== $column && $column->sequence) {
+                    $this->sequence = $column->sequence;
+                }
+            }
         }
     }
 

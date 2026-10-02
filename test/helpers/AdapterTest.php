@@ -863,6 +863,32 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals($count - 1, Venue::count());
     }
 
+    public function test_alias_named_like_a_column_is_not_mapped_in_the_new_paths()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // find() maps it, as it always has
+        $this->assert_equals([2], array_map(fn($v) => $v->id, ShadowAliasVenue::all(['conditions' => ['city' => 'Warner Theatre']])));
+
+        // the other paths keep the real column, exactly as before
+        // (two venues are in Washington)
+        $this->assert_equals(2, ShadowAliasVenue::count(['conditions' => ['city' => 'Washington']]));
+        $this->assert_true(ShadowAliasVenue::exists(['city' => 'Washington']));
+        $this->assert_false(ShadowAliasVenue::exists(['city' => 'Warner Theatre']));
+        $this->assert_equals(2, ShadowAliasVenue::update_all(['set' => ['state' => 'ZZ'], 'conditions' => ['city' => 'Washington']]));
+        $this->assert_sql_has_exact("WHERE {$q}city{$q}=?", ShadowAliasVenue::table()->last_sql);
+        $this->assert_equals(2, Venue::count(['conditions' => ['state' => 'ZZ', 'city' => 'Washington']]));
+        $this->assert_equals(0, ShadowAliasVenue::delete_all(['conditions' => ['city' => 'Warner Theatre']]));
+        $this->assert_equals(2, ShadowAliasVenue::delete_all(['conditions' => ['city' => 'Washington']]));
+        $this->assert_sql_has_exact("WHERE {$q}city{$q}=?", ShadowAliasVenue::table()->last_sql);
+
+        // a non-shadowing alias of the same model is still mapped
+        $this->assert_equals(1, ShadowAliasVenue::count(['conditions' => ['marquee' => 'Blender Theater at Gramercy']]));
+
+        // relationship conditions: the real column (venue 1 is in New York)
+        $this->assert_null(ShadowAliasEvent::find(1)->venue);
+    }
+
     public function test_alias_keys_are_mapped_in_relationship_hash_conditions()
     {
         // lazy

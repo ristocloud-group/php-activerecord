@@ -1748,8 +1748,9 @@ class Model
             }
         }
 
-        // alias_attribute names in a conditions hash are mapped, as by find()
-        $options['mapped_names'] = static::$alias_attribute;
+        // alias_attribute names in a conditions hash are mapped, as by find(), except an
+        // alias named like a real column, which these callers always sent as the column
+        $options['mapped_names'] = static::table()->condition_alias_map();
 
         return $options;
     }
