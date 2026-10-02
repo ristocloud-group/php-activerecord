@@ -291,7 +291,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         for ($i = 1; $i < $pairs; ++$i) {
             $pair_keys[$inflector->variablize($query_keys[$i])] = $inflector->variablize($model_values_keys[$i]);
         }
-        $key_matches = self::eager_key_matcher($class::table()->conn);
+        $key_matches = self::eager_key_matcher($class::table());
 
         foreach ($models as $model) {
             $matches = $skipped = 0;
@@ -299,10 +299,10 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
             foreach ($related_models as $related) {
                 /** @var Model $related */
-                if (empty($query_key) || $key_matches($related->$query_key, $key_to_match, $pairs > 1)) {
+                if (empty($query_key) || $key_matches($related->$query_key, $key_to_match, $pairs > 1, $query_key)) {
                     foreach ($pair_keys as $related_key => $owner_key) {
                         // the owner value the key condition was built from
-                        if (!$key_matches($related->$related_key, $model->attributes()[$owner_key] ?? null, true)) {
+                        if (!$key_matches($related->$related_key, $model->attributes()[$owner_key] ?? null, true, $related_key)) {
                             continue 2;
                         }
                     }
@@ -411,27 +411,45 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * GH #40: compares a child's key with an owner's in the eager load, as the database did
      * when it found the child: PHP ==, as always, and on MySQL/MariaDB two strings that differ
      * only by case also match, as under their default case-insensitive collations
-     * (utf8mb4_0900_ai_ci, utf8mb4_uca1400_ai_ci). For a part of a composite key ($strict_null)
-     * null matches only null, as IS NULL.
+     * (utf8mb4_0900_ai_ci, utf8mb4_uca1400_ai_ci) - only when the child's key column
+     * ($related_column) is a text column (not binary/blob, which compare byte for byte) and both
+     * keys are valid UTF-8, so no two distinct byte strings fold together. For a part of a
+     * composite key ($strict_null) null matches only null, as IS NULL.
      *
-     * @param Connection|null $conn the connection of the related model, which found the children
-     * @return \Closure(mixed, mixed, bool): bool
+     * @param Table $related the related model's table, whose connection found the children
+     * @return \Closure(mixed, mixed, bool, string): bool
      */
-    private static function eager_key_matcher(?Connection $conn): \Closure
+    private static function eager_key_matcher(Table $related): \Closure
     {
-        $ignore_case = $conn instanceof MysqlAdapter;
-        $folded = [];
-        $fold = function (string $key) use (&$folded): string {
-            return $folded[$key] ??= function_exists('mb_convert_case') ? mb_convert_case($key, MB_CASE_FOLD, 'UTF-8') : strtolower($key);
+        $ignore_case = $related->conn instanceof MysqlAdapter && function_exists('mb_convert_case');
+        $text_columns = $folded = [];
+
+        $is_text_column = function (string $column) use ($related, &$text_columns): bool {
+            if (!array_key_exists($column, $text_columns)) {
+                $meta = $related->get_column_by_inflected_name($column);
+                $text_columns[$column] = null !== $meta && Column::STRING === $meta->type
+                    && !preg_match('/binary|blob/i', (string) $meta->raw_type);
+            }
+
+            return $text_columns[$column];
         };
 
-        return function (mixed $related_key, mixed $owner_key, bool $strict_null) use ($ignore_case, $fold): bool {
+        $fold = function (string $key) use (&$folded): string {
+            return $folded[$key] ??= mb_convert_case($key, MB_CASE_FOLD, 'UTF-8');
+        };
+
+        return function (mixed $related_key, mixed $owner_key, bool $strict_null, string $related_column) use ($ignore_case, $is_text_column, $fold): bool {
             if ($strict_null && (null === $related_key || null === $owner_key)) {
                 return $related_key === $owner_key;
             }
 
-            return $related_key == $owner_key
-                || ($ignore_case && is_string($related_key) && is_string($owner_key) && $fold($related_key) === $fold($owner_key));
+            if ($related_key == $owner_key) {
+                return true;
+            }
+
+            return $ignore_case && is_string($related_key) && is_string($owner_key) && $is_text_column($related_column)
+                && mb_check_encoding($related_key, 'UTF-8') && mb_check_encoding($owner_key, 'UTF-8')
+                && $fold($related_key) === $fold($owner_key);
         };
     }
 
@@ -1031,9 +1049,9 @@ class HasMany extends AbstractRelationship
     /**
      * GH #40: takes the foreign keys inject_foreign_key_for_new_association() added out of
      * $attributes when the associated model's attr_accessible / attr_protected would block them
-     * (Model::guarded_attribute_block()), and returns them for the builders to assign directly,
-     * like Rails. An allowed one stays in the mass assignment, as before; the attributes passed
-     * to the builder ($passed) stay guarded.
+     * (the check of Model::guarded_attribute_block(), which is private), and returns them for the
+     * builders to assign directly, like Rails. An allowed one stays in the mass assignment, as
+     * before; the attributes passed to the builder ($passed) stay guarded.
      *
      * @param array<int|string, mixed> $passed
      * @param array<int|string, mixed> $attributes
@@ -1053,7 +1071,12 @@ class HasMany extends AbstractRelationship
                 continue; // passed in, or not injected
             }
 
+            // exactly Model::guarded_attribute_block() on the new record (its attributes are the
+            // table's columns): alias, then the 'id' shortcut of a pk-less table
             $name = $class_name::$alias_attribute[$foreign_key] ?? $foreign_key;
+            if ('id' === $name && null === $class_name::table()->get_column_by_inflected_name('id')) {
+                $name = $class_name::table()->pk[0] ?? '';
+            }
 
             if ((!empty($class_name::$attr_accessible) && !in_array($name, $class_name::$attr_accessible))
                 || (!empty($class_name::$attr_protected) && in_array($name, $class_name::$attr_protected))) {
