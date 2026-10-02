@@ -66,6 +66,22 @@ foreach ($writes as $call => $write) {
         echo "$call() threw: " . $e->getMessage() . "\n";
     }
 }
+
+// A deleted record is refused the same way (up to 2.1.0 a later save() ran an
+// UPDATE on the deleted row and returned true), unless the delete was rolled
+// back by Model::transaction(): then the record is writable again.
+$book = Book::create(['name' => 'Short-lived', 'author' => 'Ann']);
+Book::transaction(function () use ($book): bool {
+    $book->delete();
+    return false;
+});
+echo 'after a rolled-back delete, update_attribute() returned ' . var_export($book->update_attribute('author', 'Bea'), true) . "\n";
+$book->delete();
+try {
+    $book->update_attribute('author', 'Cy');
+} catch (ActiveRecord\ActiveRecordException $e) {
+    echo 'after delete(), update_attribute() threw: ' . $e->getMessage() . "\n";
+}
 echo 'books in the table: ' . Book::count() . "\n\n";
 
 // Fetch the first row and dump its attributes.
