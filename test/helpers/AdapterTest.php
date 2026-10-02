@@ -716,6 +716,44 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals([1, 'x', 2, 3, 4], $sql->bind_values());
     }
 
+    public function test_alias_key_and_its_column_are_both_kept_in_hash_conditions()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $ids = fn(array $venues) => array_values(array_unique(array_map(fn($v) => $v->id, $venues)));
+
+        // a scope on the column plus a filter on its alias_attribute name (marquee => name):
+        // both stay ANDed, in either order, with and without joins (the alias used to
+        // replace the column's condition, so 'Blender…' came back)
+        foreach ([['name' => 'Warner Theatre', 'marquee' => 'Blender Theater at Gramercy'], ['marquee' => 'Blender Theater at Gramercy', 'name' => 'Warner Theatre']] as $conditions) {
+            $this->assert_equals([], Venue::all(['conditions' => $conditions]));
+            $this->assert_equals([], Venue::all(['joins' => ['events'], 'conditions' => $conditions]));
+            $this->assert_null(Venue::first(['conditions' => $conditions]));
+        }
+
+        Venue::all(['conditions' => ['name' => 'Warner Theatre', 'marquee' => 'x']]);
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=? AND {$q}name{$q}=?", Venue::table()->last_sql);
+        Venue::all(['joins' => ['events'], 'conditions' => ['name' => 'Warner Theatre', 'marquee' => 'x']]);
+        $this->assert_sql_has_exact("WHERE {$q}venues{$q}.{$q}name{$q}=? AND {$q}venues{$q}.{$q}name{$q}=?", Venue::table()->last_sql);
+
+        // with (A)'s spellings of the same column, and the bind values aligned
+        $conditions = ['name' => ['Warner Theatre', 'x'], "{$q}name{$q}" => 'Warner Theatre', 'marquee' => ['Warner Theatre', null], 'venues.name' => 'Warner Theatre', 'mycity' => 'Washington'];
+        $this->assert_equals([2], $ids(Venue::all(['conditions' => $conditions])));
+        $this->assert_equals([2], $ids(Venue::all(['joins' => ['events'], 'conditions' => $conditions])));
+        $this->assert_sql_has_exact(
+            "WHERE {$q}venues{$q}.{$q}name{$q} IN(?,?) AND {$q}venues{$q}.{$q}name{$q}=? AND ({$q}venues{$q}.{$q}name{$q} IN(?) OR {$q}venues{$q}.{$q}name{$q} IS NULL)"
+            . " AND {$q}venues{$q}.{$q}name{$q}=? AND {$q}venues{$q}.{$q}city{$q}=?",
+            Venue::table()->last_sql
+        );
+    }
+
+    public function test_alias_key_without_its_column_renders_as_before()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $this->assert_equals([2], array_map(fn($v) => $v->id, Venue::all(['conditions' => ['marquee' => 'Warner Theatre', 'mycity' => 'Washington']])));
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=? AND {$q}city{$q}=?", Venue::table()->last_sql);
+    }
+
     public function test_unknown_hash_condition_key_is_rejected_before_the_query()
     {
         $q = $this->conn::$QUOTE_CHARACTER;

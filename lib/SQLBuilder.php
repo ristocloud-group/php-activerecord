@@ -146,6 +146,20 @@ class SQLBuilder
     }
 
     /**
+     * WHERE from several conditions hashes, ANDed in order: like where($hash) for each,
+     * without one hash overwriting a key of another.
+     *
+     * @internal Serves Table, for hashes whose keys name the same column; not a supported API.
+     * @param list<array<string, mixed>> $hashes
+     * @return $this
+     */
+    public function where_hashes(array $hashes)
+    {
+        $this->apply_where_hashes($hashes);
+        return $this;
+    }
+
+    /**
      * @param string|null $order
      * @return $this
      */
@@ -471,6 +485,30 @@ class SQLBuilder
     }
 
     /**
+     * Renders conditions hashes ANDed in order. With joins each hash is prefixed with the
+     * table, which may split it further (see prepend_table_name_to_fields()).
+     *
+     * @param list<array<string, mixed>> $hashes
+     */
+    private function apply_where_hashes(array $hashes): void
+    {
+        require_once 'Expressions.php';
+        $where = [];
+        $values = [];
+
+        foreach ($hashes as $hash) {
+            foreach (is_null($this->joins) ? [$hash] : $this->prepend_table_name_to_fields($hash) as $h) {
+                $e = new Expressions($this->connection, $h);
+                $where[] = $e->to_s();
+                $values[] = $e->values();
+            }
+        }
+
+        $this->where = implode(' AND ', $where);
+        $this->where_values = array_flatten($values);
+    }
+
+    /**
      * @param list<mixed> $args
      */
     private function apply_where_conditions(array $args): void
@@ -479,18 +517,7 @@ class SQLBuilder
         $num_args = count($args);
 
         if ($num_args == 1 && is_hash($args[0])) {
-            $hashes = is_null($this->joins) ? [$args[0]] : $this->prepend_table_name_to_fields($args[0]);
-            $where = [];
-            $values = [];
-
-            foreach ($hashes as $hash) {
-                $e = new Expressions($this->connection, $hash);
-                $where[] = $e->to_s();
-                $values[] = $e->values();
-            }
-
-            $this->where = implode(' AND ', $where);
-            $this->where_values = array_flatten($values);
+            $this->apply_where_hashes([$args[0]]);
         } elseif ($num_args > 0) {
             // if the values has a nested array then we'll need to use Expressions to expand the bind marker for us
             $values = array_slice($args, 1);
