@@ -3,6 +3,7 @@
 use ActiveRecord\ActiveRecordException;
 use ActiveRecord\Model;
 use ActiveRecord\ReadOnlyException;
+use ActiveRecord\RecordNotFound;
 
 /*
  * GH #41: update()/delete() build their WHERE from the record's current pk
@@ -619,5 +620,52 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         $count->day = new \DateTimeImmutable('2026-01-01');
         $this->assert_true($count->delete());
         $this->assert_same([2], $this->dated_hits());
+    }
+
+    public function test_reload_of_a_composite_pk_record_reloads_its_row()
+    {
+        // reload() found by the first pk column with every pk value ("owner IN ('acme', 'def')"):
+        // RecordNotFound (found N, but was looking for 2)
+        $item = PkGuardCodedItem::first(['conditions' => ['owner' => 'acme', 'code' => 'def']]);
+        PkGuardCodedItem::update_all(['set' => ['name' => 'external'], 'conditions' => ['owner' => 'acme', 'code' => 'def']]);
+        $item->name = 'dirty';
+
+        $this->assert_same($item, $item->reload());
+        $this->assert_same('external', $item->name);
+        $this->assert_false($item->is_dirty());
+
+        $this->assert_true($item->update_attribute('name', 'saved'));
+        $this->assert_same('saved', $this->coded_item_name('acme', 'def'));
+        $this->assert_same('one', $this->coded_item_name('acme', 'abc'));
+
+        $receipt = PkGuardReadReceipt::first(['conditions' => ['user_id' => 2, 'story_id' => 2]]);
+        $this->assert_same($receipt, $receipt->reload());
+        $this->assert_equals(2, $receipt->user_id);
+    }
+
+    public function test_reload_of_a_deleted_composite_pk_row_throws_record_not_found()
+    {
+        $item = PkGuardCodedItem::first(['conditions' => ['owner' => 'acme', 'code' => 'abc']]);
+        PkGuardCodedItem::delete_all(['conditions' => ['owner' => 'acme', 'code' => 'abc']]);
+
+        try {
+            $item->reload();
+            $this->fail('expected RecordNotFound');
+        } catch (RecordNotFound $e) {
+            $this->assert_same("Couldn't find PkGuardCodedItem with ID=acme,abc", $e->getMessage());
+        }
+    }
+
+    public function test_reload_of_a_single_pk_record_is_unchanged()
+    {
+        $author = Author::find(1);
+        $author->author_id = 99;
+
+        try {
+            $author->reload();
+            $this->fail('expected RecordNotFound');
+        } catch (RecordNotFound $e) {
+            $this->assert_same("Couldn't find Author with ID=99", $e->getMessage());
+        }
     }
 }

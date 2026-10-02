@@ -1623,9 +1623,26 @@ class Model
     public function reload()
     {
         $this->__relationships = [];
-        $pk = array_values($this->get_values_for($this->get_primary_key()));
+        $pk = $this->get_values_for($this->get_primary_key());
 
-        $this->set_attributes_via_mass_assignment($this->find($pk)->attributes, false);
+        if (count($pk) > 1) {
+            // a find by pk looks a list of values up in the first pk column only: a
+            // composite key names its row by every column
+            $found = static::find('first', ['conditions' => $pk]);
+
+            if (null === $found) {
+                $values = array_map(fn($value) => match (true) {
+                    $value instanceof \DateTimeInterface => $value->format('Y-m-d H:i:s'),
+                    is_scalar($value) || null === $value || $value instanceof \Stringable => (string) $value,
+                    default => get_debug_type($value),
+                }, $pk);
+                throw new RecordNotFound("Couldn't find " . static::class . ' with ID=' . implode(',', $values));
+            }
+        } else {
+            $found = $this->find(array_values($pk));
+        }
+
+        $this->set_attributes_via_mass_assignment($found->attributes, false);
         $this->reset_dirty();
         $this->remember_persisted_pk();
 
