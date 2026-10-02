@@ -388,17 +388,47 @@ class Model
     /**
      * Determines if an attribute exists for this {@link Model}.
      *
+     * Checks names in the order {@link __get()} resolves them: an attribute, alias,
+     * getter, relationship, the 'id' primary-key shortcut, then a declared
+     * {@link $delegate}. Like an attribute, a name is set even when its value is
+     * null; a delegate is set because it is declared, without loading or checking
+     * its target.
+     *
      * @param string $attribute_name
      * @return boolean
      */
     public function __isset($attribute_name)
     {
-        return
-            array_key_exists($attribute_name, $this->attributes)
-            || array_key_exists($attribute_name, static::$alias_attribute)
-        || method_exists($this, "get_{$attribute_name}")
-      || array_key_exists($attribute_name, $this->__relationships)
-        || static::table()->has_relationship($attribute_name);
+        if ($this->resolves_locally($attribute_name)) {
+            return true;
+        }
+
+        // the 'id' shortcut reads the pk attribute, null included (a pk-less table never resolves it here)
+        if ('id' === $attribute_name && null !== ($pk = $this->get_primary_key(true)) && array_key_exists($pk, $this->attributes)) {
+            return true;
+        }
+
+        foreach (static::$delegate as &$item) {
+            if ($this->is_delegated($attribute_name, $item)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True when $name is an attribute, alias, getter or (loaded or declared)
+     * relationship of this model itself: what isset() checked before #54, without
+     * the 'id' shortcut and delegates.
+     */
+    private function resolves_locally(string $name): bool
+    {
+        return array_key_exists($name, $this->attributes)
+            || array_key_exists($name, static::$alias_attribute)
+            || method_exists($this, "get_{$name}")
+            || array_key_exists($name, $this->__relationships)
+            || static::table()->has_relationship($name);
     }
 
     /**
@@ -565,10 +595,15 @@ class Model
         }
 
         if ($name == 'id') {
-            // pk-less table: '' is what a null pk offset always mapped to
-            $pk = $this->get_primary_key(true) ?? '';
-            if (isset($this->attributes[$pk])) {
-                return $this->attributes[$pk];
+            $pk = $this->get_primary_key(true);
+            if (null !== $pk) {
+                // the pk attribute itself, null included
+                if (array_key_exists($pk, $this->attributes)) {
+                    return $this->attributes[$pk];
+                }
+            } elseif (isset($this->attributes[''])) {
+                // pk-less table: '' is what a null pk offset always mapped to, read once set non-null
+                return $this->attributes[''];
             }
         }
 
@@ -1354,11 +1389,12 @@ class Model
     {
         $now = date('Y-m-d H:i:s');
 
-        if (isset($this->updated_at)) {
+        // isset() also sees a delegate of the same name (#54): only the model's own timestamps are set
+        if (isset($this->updated_at) && $this->resolves_locally('updated_at')) {
             $this->updated_at = $now;
         }
 
-        if (isset($this->created_at) && $this->is_new_record()) {
+        if (isset($this->created_at) && $this->resolves_locally('created_at') && $this->is_new_record()) {
             $this->created_at = $now;
         }
     }
@@ -1667,13 +1703,6 @@ class Model
         $create = false;
 
         if (substr($method, 0, 17) == 'find_or_create_by') {
-            $attributes = substr($method, 17);
-
-            // can't take any finders with OR in it when doing a find_or_create_by
-            if (strpos($attributes, '_or_') !== false) {
-                throw new ActiveRecordException("Cannot use OR'd attributes in find_or_create_by");
-            }
-
             $create = true;
             $method = 'find_by' . substr($method, 17);
         }
@@ -1686,22 +1715,132 @@ class Model
 
         if (substr($method, 0, 7) === 'find_by') {
             $attributes = substr($method, 8);
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $alias_attribute_map);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+
+            // can't take any finders with OR in it when doing a find_or_create_by
+            // (substr($method, 7) is what followed "find_or_create_by"; an _or_ inside
+            // the name of a real attribute is not an OR, #53)
+            if ($create && strpos(substr($method, 7), '_or_') !== false && (null === $split || in_array('_or_', $split[1], true))) {
+                throw new ActiveRecordException("Cannot use OR'd attributes in find_or_create_by");
+            }
+
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
 
             if (!($ret = static::find('first', $options)) && $create) {
-                return static::create(SQLBuilder::create_hash_from_underscored_string($attributes, $args, $alias_attribute_map));
+                return static::create(null === $split
+                    ? SQLBuilder::create_hash_from_underscored_string($attributes, $args, $alias_attribute_map)
+                    : SQLBuilder::create_hash_from_columns($split[0], $args, $alias_attribute_map));
             }
 
             return $ret;
         } elseif (substr($method, 0, 11) === 'find_all_by') {
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 12), $args, $alias_attribute_map);
+            $attributes = substr($method, 12);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
             return static::find('all', $options);
         } elseif (substr($method, 0, 8) === 'count_by') {
-            $options['conditions'] = SQLBuilder::create_conditions_from_underscored_string(static::connection(), substr($method, 9), $args, $alias_attribute_map);
+            $attributes = substr($method, 9);
+            $split = self::split_dynamic_finder_attributes($attributes, count($args));
+            $options['conditions'] = self::dynamic_finder_conditions($attributes, $args, $alias_attribute_map, $split);
             return static::count($options);
         }
 
         throw new ActiveRecordException("Call to undefined method: $method");
+    }
+
+    /**
+     * The conditions of a dynamic finder: split as split_dynamic_finder_attributes() said ($split),
+     * or at every separator as create_conditions_from_underscored_string() does when it said null.
+     *
+     * @param list<mixed> $args
+     * @param array<string, string>|null $map
+     * @param array{list<string>, list<string>}|null $split
+     * @return list<mixed>|null
+     */
+    private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map, ?array $split): ?array
+    {
+        return null === $split
+            ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $map)
+            : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $map, $split[1]);
+    }
+
+    /**
+     * Where a dynamic finder's attribute string splits when the name of a real attribute
+     * itself contains _and_ or _or_ (#53).
+     *
+     * A split is valid when each of its names is a column of the table (its column name or
+     * its attribute name, as mass assignment accepts them) or an alias_attribute key. The
+     * best valid split has as many names as there are values, else the fewest names; between
+     * splits with as many names, the one with the longest names first. Splits are not
+     * enumerated: one backward pass over the k separators makes O(k²) name lookups.
+     *
+     * @param int $num_values Number of values passed to the finder; an array counts as one
+     * @return array{list<string>, list<string>}|null The names and the separators that join
+     *   them, or null to split at every separator as before: when there is no separator, no
+     *   valid split, or the best valid split is that one
+     */
+    private static function split_dynamic_finder_attributes(string $attributes, int $num_values): ?array
+    {
+        $parts = preg_split('/(_and_|_or_)/i', $attributes, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        if (false === $parts || count($parts) < 3) {
+            return null;
+        }
+
+        $real = array_fill_keys(array_keys((array) static::$alias_attribute), true);
+
+        foreach (static::table()->columns as $name => $column) {
+            $real[$name] = $real[$column->inflected_name] = true;
+        }
+
+        // word $w is $parts[2 * $w], the separator before it $parts[2 * $w - 1].
+        // $best[$w][$n]: the longest real name [its last word, the name] that starts at
+        // word $w and leaves the words after it splittable into $n - 1 real names.
+        $last = intdiv(count($parts), 2);
+        $best = [$last + 1 => [0 => [$last, '']]];
+
+        for ($w = $last; $w >= 0; --$w) {
+            $best[$w] = [];
+            $name = '';
+
+            for ($end = $w; $end <= $last; ++$end) {
+                $name .= ($end > $w ? $parts[2 * $end - 1] : '') . $parts[2 * $end];
+
+                if (isset($real[$name])) {
+                    foreach (array_keys($best[$end + 1]) as $n) {
+                        $best[$w][$n + 1] = [$end, $name];
+                    }
+                }
+            }
+        }
+
+        $counts = $best[0];
+
+        if ([] === $counts) {
+            return null;
+        }
+
+        $count = isset($counts[$num_values]) ? $num_values : min(array_keys($counts));
+
+        if ($count === $last + 1) {
+            return null;
+        }
+
+        $names = [];
+        $separators = [];
+
+        for ($w = 0; $count > 0; --$count) {
+            [$end, $name] = $best[$w][$count];
+
+            if ($w > 0) {
+                $separators[] = $parts[2 * $w - 1];
+            }
+
+            $names[] = $name;
+            $w = $end + 1;
+        }
+
+        return [$names, $separators];
     }
 
     /**
@@ -1778,7 +1917,8 @@ class Model
      * </code>
      *
      * @see find
-     * @return int|string Number of records that matched the query
+     * @return int|string Number of records that matched the query; 0 when the count query
+     *   returns no row (e.g. 'limit' => 0, or an 'offset' past its single row) (#34)
      */
     public static function count(/* ... */)
     {
@@ -1788,7 +1928,9 @@ class Model
         $table = static::table();
         $sql = $table->options_to_sql($options);
         $values = $sql->get_where_values();
-        return static::connection()->query_and_fetch_one($sql->to_s(), $values);
+        $row = static::connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
+
+        return false === $row ? 0 : $row[0];
     }
 
     /**

@@ -40,6 +40,11 @@ class PgsqlAdapter extends Connection
         return $sql . ' LIMIT ' . intval($limit) . ' OFFSET ' . intval($offset);
     }
 
+    public function offset_without_limit(string $sql, int $offset): string
+    {
+        return "$sql OFFSET $offset";
+    }
+
     public function exists_sql(string $inner): string
     {
         // Postgres EXISTS() returns a boolean (t/f); cast so the scalar is 1/0.

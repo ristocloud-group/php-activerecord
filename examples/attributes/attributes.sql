@@ -9,3 +9,4 @@ CREATE TABLE members (
   is_admin INTEGER
 );
 INSERT INTO companies (name, country) VALUES ('Acme', 'IT');
+CREATE TABLE badges (badge_no INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT);

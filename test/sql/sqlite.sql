@@ -100,6 +100,17 @@ CREATE TABLE property_amenities(
   `property_id` INT NOT NULL
 );
 
+-- column names containing the dynamic-finder separators _and_ / _or_ (#53)
+CREATE TABLE swatches(
+  `id` INTEGER NOT NULL PRIMARY KEY,
+  `black` INT,
+  `white` INT,
+  `black_and_white` INT,
+  `black_or_white` INT,
+  `Shade_and_Tone` INT,
+  `title` VARCHAR(20)
+);
+
 CREATE TABLE users (
     id INTEGER NOT NULL PRIMARY KEY
 );
