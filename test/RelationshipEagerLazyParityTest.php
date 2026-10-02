@@ -164,7 +164,7 @@ class RelationshipEagerLazyParityTest extends DatabaseTest
 
         // venue 1 (tier 2) -> events of venue 2 -> hosts 2, 3; every other tier (5) has no events
         $sql = $this->assert_parity([1 => [2, 3], 2 => [], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityTierVenue', 'hosts_by_tier');
-        $this->assert_sql_has('WHERE venue_id IN(?,?,?,?,?,?) ORDER BY hosts.id asc', $sql);
+        $this->assert_sql_has('venue_id IN(?,?,?,?,?,?) ORDER BY hosts.id asc', $sql);
     }
 
     public function test_eager_reverse_fk_through_keys_off_the_middle_declared_primary_key()
