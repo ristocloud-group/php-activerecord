@@ -136,6 +136,21 @@ class Model
     private ?array $__persisted_pk = null;
 
     /**
+     * Set by a delete() that ran its DELETE: save()/update_attribute(s)/delete() then
+     * throw. Cleared when the Model::transaction() scope of that delete rolls back, and
+     * by a reload() that finds the row again.
+     */
+    private bool $__destroyed = false;
+
+    /**
+     * The records deleted inside each open Model::transaction() scope, per connection
+     * (spl_object_id), innermost scope last.
+     *
+     * @var array<int, list<list<Model>>>
+     */
+    private static array $__deleted_in_transaction = [];
+
+    /**
      * Set to the name of the connection this {@link Model} should use.
      *
      * @var string
@@ -1000,6 +1015,7 @@ class Model
     private function update($validate = true)
     {
         $this->verify_not_readonly('update');
+        $this->verify_not_destroyed('update');
 
         // refused before validation, so no callback runs for a write that cannot land
         if ($this->is_dirty()) {
@@ -1165,6 +1181,7 @@ class Model
     public function delete()
     {
         $this->verify_not_readonly('delete');
+        $this->verify_not_destroyed('delete');
 
         $pk = $this->values_for_pk();
 
@@ -1179,9 +1196,30 @@ class Model
         }
 
         static::table()->delete($pk);
+        $this->__destroyed = true;
+        $connection_id = spl_object_id(static::connection());
+
+        // inside a Model::transaction() scope: a rollback of it undoes the delete
+        if (!empty(self::$__deleted_in_transaction[$connection_id])) {
+            self::$__deleted_in_transaction[$connection_id][count(self::$__deleted_in_transaction[$connection_id]) - 1][] = $this;
+        }
         $this->invoke_callback('after_destroy', false);
 
         return true;
+    }
+
+    /**
+     * Refuses a write on a record whose row this object deleted: an UPDATE would
+     * match nothing (or a row inserted again under the same key) and report success.
+     *
+     * @param 'update'|'delete' $action
+     * @throws ActiveRecordException
+     */
+    private function verify_not_destroyed(string $action): void
+    {
+        if ($this->__destroyed) {
+            throw new ActiveRecordException(sprintf('Cannot %s, record has been deleted: %s', $action, static::class));
+        }
     }
 
     /**
@@ -1618,6 +1656,9 @@ class Model
     /**
      * Reloads the attributes and relationships of this object from the database.
      *
+     * A record this object deleted is writable again once reload() finds its row
+     * (inserted again); with the row gone it throws RecordNotFound.
+     *
      * @return Model
      */
     public function reload()
@@ -1651,6 +1692,8 @@ class Model
         $this->set_attributes_via_mass_assignment($found->attributes, false);
         $this->reset_dirty();
         $this->remember_persisted_pk();
+        // the row exists (again): this object mirrors it like a fresh find
+        $this->__destroyed = false;
 
         return $this;
     }
@@ -2405,6 +2448,10 @@ class Model
      * SAVEPOINT, so the inner scope commits or rolls back on its own while
      * the real commit happens only at the outermost level.
      *
+     * A record deleted inside a scope that rolls back (its own or an enclosing
+     * one) is writable again, as if delete() had not run. A transaction opened
+     * on the connection directly does not do this; reload() the record instead.
+     *
      * @param Closure $closure The closure to execute. To cause a rollback have your closure return false or throw an exception.
      * @return boolean True if the transaction was committed, False if rolled back.
      */
@@ -2412,6 +2459,8 @@ class Model
     {
         $connection = static::connection();
         $connection->transaction();
+        self::$__deleted_in_transaction[spl_object_id($connection)][] = [];
+        $committed = false;
 
         try {
             if ($closure() === false) {
@@ -2419,13 +2468,38 @@ class Model
                 return false;
             }
             $connection->commit();
+            $committed = true;
         } catch (\Throwable $e) {
             if ($connection->inTransaction()) {
                 $connection->rollback();
             }
 
             throw $e;
+        } finally {
+            self::close_transaction_scope(spl_object_id($connection), $committed);
         }
         return true;
+    }
+
+    /**
+     * Ends the innermost Model::transaction() scope of a connection: the records deleted
+     * in a rolled-back scope are not deleted any more; those of a committed inner scope
+     * wait for the enclosing one, and those of the outermost stay deleted.
+     */
+    private static function close_transaction_scope(int $connection_id, bool $committed): void
+    {
+        $deleted = array_pop(self::$__deleted_in_transaction[$connection_id]) ?? [];
+
+        if (!$committed) {
+            foreach ($deleted as $record) {
+                $record->__destroyed = false;
+            }
+        } elseif (!empty(self::$__deleted_in_transaction[$connection_id])) {
+            array_push(self::$__deleted_in_transaction[$connection_id][count(self::$__deleted_in_transaction[$connection_id]) - 1], ...$deleted);
+        }
+
+        if (empty(self::$__deleted_in_transaction[$connection_id])) {
+            unset(self::$__deleted_in_transaction[$connection_id]);
+        }
     }
 };

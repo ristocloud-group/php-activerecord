@@ -744,4 +744,183 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         $this->assert_true($count->update_attribute('hits', 10));
         $this->assert_same([10, 2], $this->dated_hits());
     }
+
+    public function test_writes_on_a_deleted_record_are_refused()
+    {
+        // after delete() the record stayed persisted: a dirty save() ran an UPDATE on the
+        // deleted row and returned true, and so did update_attribute() and a second delete()
+        $author = Author::find(1);
+        $this->assert_true($author->delete());
+        $this->assert_false($author->is_new_record());
+
+        $author->name = 'ghost';
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $author->save());
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $author->update_attribute('name', 'ghost'));
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $author->update_attributes(['name' => 'ghost']));
+        $this->assert_refused('Cannot delete, record has been deleted: Author', fn() => $author->delete());
+
+        $clean = Author::find(2);
+        $clean->delete();
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $clean->save());
+
+        $this->assert_false(Author::exists(1));
+        $this->assert_same(['3=Bill Clinton', '4=Uncle Bob'], $this->author_rows());
+    }
+
+    public function test_cancelled_delete_does_not_mark_the_record_deleted()
+    {
+        Author::table()->callback->register('before_destroy', fn() => false);
+        $author = Author::find(1);
+
+        $this->assert_false($author->delete());
+        $this->assert_true($author->update_attribute('name', 'kept'));
+        $this->assert_same('KEPT', Author::find(1)->name);
+    }
+
+    public function test_a_clone_of_a_deleted_record_is_deleted_and_a_new_load_is_not()
+    {
+        $author = Author::find(1);
+        $author->delete();
+        $clone = clone $author;
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $clone->update_attribute('name', 'ghost'));
+
+        $again = Author::create(['author_id' => 1, 'name' => 'again']);
+        $this->assert_true($again->update_attribute('name', 'again and again'));
+        $this->assert_true(Author::find(1)->delete());
+
+        // built by hand as persisted: not the deleted object, so it writes by its key
+        $built = new Author(['author_id' => 2, 'name' => 'built'], true, false, false);
+        $this->assert_true($built->save());
+        $this->assert_same('BUILT', Author::find(2)->name);
+    }
+
+    public function test_reload_of_a_deleted_record_clears_the_flag_when_the_row_exists_again()
+    {
+        $author = Author::find(1);
+        $author->delete();
+
+        try {
+            $author->reload();
+            $this->fail('expected RecordNotFound');
+        } catch (RecordNotFound $e) {
+            $this->assert_same("Couldn't find Author with ID=1", $e->getMessage());
+        }
+
+        Author::create(['author_id' => 1, 'name' => 'restored']);
+        $this->assert_same($author, $author->reload());
+        $this->assert_same('RESTORED', $author->name);
+        $this->assert_true($author->update_attribute('name', 'saved'));
+        $this->assert_same('SAVED', Author::find(1)->name);
+    }
+
+    public function test_deleted_flag_survives_serialization_and_a_legacy_payload_is_not_deleted()
+    {
+        $author = Author::find(1);
+        $author->delete();
+        $copy = unserialize(serialize($author));
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $copy->update_attribute('name', 'ghost'));
+
+        // a payload cached by an older version has no flag: not deleted, as before
+        $properties = (array) Author::find(2);
+        $flag = "\0" . Model::class . "\0__destroyed";
+        $this->assert_true(array_key_exists($flag, $properties));
+        unset($properties[$flag]);
+        $legacy = unserialize('O:' . strlen(Author::class) . ':"' . Author::class . '"' . substr(serialize($properties), 1));
+        $this->assert_true($legacy->update_attribute('name', 'legacy'));
+        $this->assert_same('LEGACY', Author::find(2)->name);
+    }
+
+    public function test_delete_all_does_not_touch_loaded_records()
+    {
+        // static, no instances: a record loaded before keeps writing by its key (matching nothing)
+        $author = Author::find(1);
+        Author::delete_all(['conditions' => ['author_id' => 1]]);
+        $this->assert_true($author->update_attribute('name', 'ghost'));
+        $this->assert_false(Author::exists(1));
+    }
+
+    public function test_delete_rolled_back_by_returning_false_is_undone_on_the_record()
+    {
+        $author = Author::find(1);
+        $this->assert_false(Author::transaction(function () use ($author) {
+            $this->assert_true($author->delete());
+            $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $author->update_attribute('name', 'ghost'));
+
+            return false;
+        }));
+
+        $this->assert_true(Author::exists(1));
+        $author->name = 'kept';
+        $this->assert_true($author->save());
+        $this->assert_same('KEPT', Author::find(1)->name);
+    }
+
+    public function test_delete_rolled_back_by_an_exception_is_undone_on_the_record()
+    {
+        $author = Author::find(1);
+
+        try {
+            Author::transaction(function () use ($author) {
+                $author->delete();
+
+                throw new RuntimeException('abort');
+            });
+            $this->fail('expected RuntimeException');
+        } catch (RuntimeException $e) {
+            $this->assert_same('abort', $e->getMessage());
+        }
+
+        $this->assert_true(Author::exists(1));
+        $this->assert_true($author->delete());
+        $this->assert_false(Author::exists(1));
+    }
+
+    public function test_committed_delete_stays_deleted()
+    {
+        $author = Author::find(1);
+        $this->assert_true(Author::transaction(fn() => $author->delete()));
+
+        $this->assert_false(Author::exists(1));
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $author->update_attribute('name', 'ghost'));
+    }
+
+    public function test_nested_rollback_restores_only_the_records_deleted_in_its_savepoint()
+    {
+        [$outer, $rolled_back, $committed] = [Author::find(1), Author::find(2), Author::find(3)];
+
+        $this->assert_true(Author::transaction(function () use ($outer, $rolled_back, $committed) {
+            $outer->delete();
+            $this->assert_false(Author::transaction(function () use ($rolled_back) {
+                $rolled_back->delete();
+
+                return false;
+            }));
+            $this->assert_true(Author::transaction(fn() => $committed->delete()));
+
+            // the savepoint rolled back: that record is saveable again inside the outer scope
+            $this->assert_true($rolled_back->update_attribute('name', 'restored'));
+            $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $committed->update_attribute('name', 'ghost'));
+        }));
+
+        $this->assert_same(['2=RESTORED', '4=Uncle Bob'], $this->author_rows());
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $outer->update_attribute('name', 'ghost'));
+        $this->assert_refused('Cannot update, record has been deleted: Author', fn() => $committed->update_attribute('name', 'ghost'));
+    }
+
+    public function test_outer_rollback_restores_records_deleted_in_committed_inner_scopes()
+    {
+        [$outer, $inner] = [Author::find(1), Author::find(3)];
+
+        $this->assert_false(Author::transaction(function () use ($outer, $inner) {
+            $outer->delete();
+            $this->assert_true(Author::transaction(fn() => $inner->delete()));
+
+            return false;
+        }));
+
+        $this->assert_same(4, count($this->author_rows()));
+        $this->assert_true($outer->update_attribute('name', 'outer'));
+        $this->assert_true($inner->update_attribute('name', 'inner'));
+        $this->assert_same(['1=OUTER', '2=George W. Bush', '3=INNER', '4=Uncle Bob'], $this->author_rows());
+    }
 }
