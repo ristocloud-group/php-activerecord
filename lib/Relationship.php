@@ -291,7 +291,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         for ($i = 1; $i < $pairs; ++$i) {
             $pair_keys[$inflector->variablize($query_keys[$i])] = $inflector->variablize($model_values_keys[$i]);
         }
-        $key_matches = self::eager_key_matcher();
+        $key_matches = self::eager_key_matcher($class::table()->conn);
 
         foreach ($models as $model) {
             $matches = $skipped = 0;
@@ -409,19 +409,29 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
     /**
      * GH #40: compares a child's key with an owner's in the eager load, as the database did
-     * when it found the child: PHP ==, as always. For a part of a composite key ($strict_null)
+     * when it found the child: PHP ==, as always, and on MySQL/MariaDB two strings that differ
+     * only by case also match, as under their default case-insensitive collations
+     * (utf8mb4_0900_ai_ci, utf8mb4_uca1400_ai_ci). For a part of a composite key ($strict_null)
      * null matches only null, as IS NULL.
      *
+     * @param Connection|null $conn the connection of the related model, which found the children
      * @return \Closure(mixed, mixed, bool): bool
      */
-    private static function eager_key_matcher(): \Closure
+    private static function eager_key_matcher(?Connection $conn): \Closure
     {
-        return function (mixed $related_key, mixed $owner_key, bool $strict_null): bool {
+        $ignore_case = $conn instanceof MysqlAdapter;
+        $folded = [];
+        $fold = function (string $key) use (&$folded): string {
+            return $folded[$key] ??= function_exists('mb_convert_case') ? mb_convert_case($key, MB_CASE_FOLD, 'UTF-8') : strtolower($key);
+        };
+
+        return function (mixed $related_key, mixed $owner_key, bool $strict_null) use ($ignore_case, $fold): bool {
             if ($strict_null && (null === $related_key || null === $owner_key)) {
                 return $related_key === $owner_key;
             }
 
-            return $related_key == $owner_key;
+            return $related_key == $owner_key
+                || ($ignore_case && is_string($related_key) && is_string($owner_key) && $fold($related_key) === $fold($owner_key));
         };
     }
 

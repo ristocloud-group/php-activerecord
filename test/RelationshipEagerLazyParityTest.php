@@ -78,12 +78,26 @@ class ParityVenue extends ActiveRecord\Model
         ['offset_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 1],
         ['no_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'limit' => 0],
         ['window_events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id desc', 'limit' => '1', 'offset' => 1],
+        ['typed_events', 'class_name' => 'Event', 'foreign_key' => 'type', 'primary_key' => 'city', 'order' => 'id asc'],
     ];
     public static $has_one = [
         ['first_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc'],
         ['latest_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id desc'],
         ['offset_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 1, 'limit' => 0],
     ];
+}
+
+// (g) string keys: events.type -> venues.city
+class ParityCityVenue extends ActiveRecord\Model
+{
+    public static $table_name = 'venues';
+    public static $pk = 'city';
+}
+
+class ParityTypedEvent extends ActiveRecord\Model
+{
+    public static $table_name = 'events';
+    public static $belongs_to = [['city_venue', 'class_name' => 'ParityCityVenue', 'foreign_key' => 'type']];
 }
 
 class RelationshipEagerLazyParityTest extends DatabaseTest
@@ -250,5 +264,38 @@ class RelationshipEagerLazyParityTest extends DatabaseTest
         $sql = $this->assert_parity([1 => 1, 2 => 2, 6 => 5, 7 => null, 8 => null, 9 => 7], 'ParityVenue', 'offset_event');
         $this->assert_sql_doesnt_has('LIMIT', $sql);
         $this->assert_sql_doesnt_has('OFFSET', $sql);
+    }
+
+    // ---- (g) string keys compare like MySQL's case-insensitive collation ----
+
+    private function is_mysql(): bool
+    {
+        return $this->conn instanceof ActiveRecord\MysqlAdapter;
+    }
+
+    public function test_eager_belongs_to_matches_string_keys_like_the_lazy_load()
+    {
+        $this->conn->query("UPDATE venues SET city = 'music' WHERE id = 1");
+        $this->conn->query("UPDATE venues SET city = 'Blah' WHERE id = 2");
+
+        // MySQL/MariaDB _ci collations: 'Music' = 'music'; SQLite and Postgres compare case-sensitively
+        $music = $this->is_mysql() ? 'music' : null;
+        $this->assert_parity([1 => $music, 2 => $music, 3 => $music, 5 => $music, 6 => $music, 7 => 'Blah'], 'ParityTypedEvent', 'city_venue', 'id asc', 'id', 'city');
+    }
+
+    public function test_eager_has_many_matches_string_keys_like_the_lazy_load()
+    {
+        $this->conn->query("UPDATE venues SET city = 'MUSIC' WHERE id = 1");
+        $this->conn->query("UPDATE venues SET city = 'Blah' WHERE id = 2");
+
+        $music = $this->is_mysql() ? [1, 2, 3, 5, 6] : [];
+        $this->assert_parity([1 => $music, 2 => [7], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'typed_events');
+    }
+
+    public function test_eager_string_keys_still_match_exactly_on_every_adapter()
+    {
+        $this->conn->query("UPDATE venues SET city = 'Music' WHERE id = 1");
+
+        $this->assert_parity([1 => [1, 2, 3, 5, 6], 2 => [], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'typed_events');
     }
 }
