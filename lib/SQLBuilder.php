@@ -176,12 +176,16 @@ class SQLBuilder
     }
 
     /**
+     * An explicit zero (0 or '0') is a LIMIT 0 that returns/affects no rows (#34).
+     * Any other value is cast with intval(), and one that casts to 0 (null, '', ...)
+     * means no limit, as it always has.
+     *
      * @param int|string $limit
      * @return $this
      */
     public function limit($limit)
     {
-        $this->limit = intval($limit);
+        $this->limit = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
         return $this;
     }
 
@@ -340,16 +344,97 @@ class SQLBuilder
             $parts = [];
         }
 
+        // the names sit at the even offsets, the separators between them at the odd ones
+        $columns = [];
+        $separators = [];
+
+        foreach ($parts as $i => $part) {
+            if (0 === $i % 2) {
+                $columns[] = $part;
+            } else {
+                $separators[] = $part;
+            }
+        }
+
+        return self::build_conditions($connection, $columns, $separators, $values, $map);
+    }
+
+    /**
+     * Like create_conditions_from_underscored_string() but takes the column names as a list, so a
+     * name that itself contains _and_ or _or_ stays one column (#53). For the same names it builds
+     * the same conditions: same SQL, same values.
+     *
+     * @internal Serves the library's own dynamic finders and relationship key conditions; not a
+     *   supported API.
+     * @param list<string> $columns Column names, in order
+     * @param array<int, mixed> $values Array of values for the columns. This is used
+     *   to determine what kind of bind marker to use: =?, IN(?), IS NULL
+     * @param array<string, string>|null $map A hash of "mapped_column_name" => "real_column_name"
+     * @param list<string> $separators The underscored separators of a dynamic finder name, '_and_' or
+     *   '_or_' in any case: $separators[$i] joins $columns[$i] and $columns[$i + 1], with OR for '_or_'
+     *   and AND for '_and_'. A missing entry means '_and_'; entries past the last column are ignored.
+     * @return list<mixed>|null A conditions array in the form array(sql_string, value1, value2,...),
+     *   or null for no columns or a single empty name (like an empty underscored string)
+     * @throws ActiveRecordException if a separator is not '_and_' or '_or_'
+     */
+    public static function create_conditions_from_columns(Connection $connection, array $columns, array $values = [], ?array $map = null, array $separators = []): ?array
+    {
+        foreach ($separators as $separator) {
+            if (!preg_match('/\A(_and_|_or_)\z/i', $separator)) {
+                throw new ActiveRecordException("Invalid separator '$separator': expected '_and_' or '_or_'");
+            }
+        }
+
+        if ([] === $columns || (1 === count($columns) && !$columns[0])) {
+            return null;
+        }
+
+        return self::build_conditions($connection, $columns, $separators, $values, $map);
+    }
+
+    /**
+     * Like create_hash_from_underscored_string() but takes the attribute names as a list (#53).
+     *
+     * @internal Serves the library's own find_or_create_by dynamic finder; not a supported API.
+     * @param list<string> $columns Attribute names, in order
+     * @param array<int, mixed> $values Array of values for each attribute in $columns
+     * @param array<string, string>|null $map A hash of "mapped_column_name" => "real_column_name"
+     * @return array<string, mixed> A hash of array(name => value, ...)
+     */
+    public static function create_hash_from_columns(array $columns, array $values = [], ?array $map = null): array
+    {
+        $hash = [];
+
+        for ($i = 0,$n = count($columns); $i < $n; ++$i) {
+            // map to correct name if $map was supplied
+            $name = $map && isset($map[$columns[$i]]) ? $map[$columns[$i]] : $columns[$i];
+            $hash[$name] = $values[$i];
+        }
+        return $hash;
+    }
+
+    /**
+     * The conditions both builders above share; $values and $map stay untyped like
+     * create_conditions_from_underscored_string()'s own parameters.
+     *
+     * @param list<string> $columns
+     * @param list<string> $separators
+     * @param array<int, mixed> $values
+     * @param array<string, string>|null $map
+     * @return list<mixed>
+     */
+    private static function build_conditions(Connection $connection, array $columns, array $separators, $values, $map): array
+    {
         $num_values = count($values);
         $conditions = [''];
 
-        for ($i = 0,$j = 0,$n = count($parts); $i < $n; $i += 2,++$j) {
-            if ($i >= 2) {
-                $conditions[0] .= preg_replace(['/_and_/i','/_or_/i'], [' AND ',' OR '], $parts[$i - 1]);
+        for ($j = 0,$n = count($columns); $j < $n; ++$j) {
+            if ($j > 0) {
+                $conditions[0] .= 0 === strcasecmp($separators[$j - 1] ?? '', '_or_') ? ' OR ' : ' AND ';
             }
 
             // map to correct name if $map was supplied
-            $name = $map && isset($map[$parts[$i]]) ? $map[$parts[$i]] : $parts[$i];
+            $name = $map && isset($map[$columns[$j]]) ? $map[$columns[$j]] : $columns[$j];
             $quoted_name = $connection->quote_name($name);
 
             if ($j < $num_values && is_array($values[$j]) && count($values[$j]) > 0) {
@@ -482,7 +567,7 @@ class SQLBuilder
                 $sql .= " ORDER BY $this->order";
             }
 
-            if ($this->limit) {
+            if (null !== $this->limit) {
                 $sql = $this->connection->limit($sql, null, $this->limit);
             }
         }
@@ -557,8 +642,12 @@ class SQLBuilder
             $sql .= " ORDER BY $this->order";
         }
 
-        if ($this->limit || $this->offset) {
+        if (null !== $this->limit || ($this->offset ?? 0) < 0) {
+            // a limit (0 included, #34); a negative offset without one renders as it always has
             $sql = $this->connection->limit($sql, $this->offset, $this->limit ?? 0);
+        } elseif ($this->offset) {
+            // an offset without a limit: every row after the offset (#34)
+            $sql = $this->connection->offset_without_limit($sql, $this->offset);
         }
 
         return $sql;
@@ -583,7 +672,7 @@ class SQLBuilder
                 $sql .= " ORDER BY $this->order";
             }
 
-            if ($this->limit) {
+            if (null !== $this->limit) {
                 $sql = $this->connection->limit($sql, null, $this->limit);
             }
         }

@@ -360,6 +360,97 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals([], $this->limit(null, null));
     }
 
+    /**
+     * @param array<string, mixed> $options
+     * @return list<int> the author_id of every Author::all($options) row, ordered by author_id
+     */
+    private function author_ids(array $options): array
+    {
+        $authors = Author::all(['order' => 'author_id'] + $options);
+
+        return ActiveRecord\collect($authors, 'author_id');
+    }
+
+    public function test_gh34_limit_zero_returns_no_rows()
+    {
+        $this->assert_equals([], $this->author_ids(['limit' => 0]));
+        $this->assert_equals([], $this->author_ids(['limit' => '0']));
+        $this->assert_equals([], $this->author_ids(['limit' => 0, 'offset' => 0]));
+        $this->assert_equals([], $this->author_ids(['limit' => 0, 'offset' => 1]));
+    }
+
+    public function test_gh34_null_limit_still_means_no_limit()
+    {
+        $this->assert_equals([1, 2, 3, 4], $this->author_ids([]));
+        $this->assert_equals([1, 2, 3, 4], $this->author_ids(['limit' => null]));
+        $this->assert_equals([1, 2, 3, 4], $this->author_ids(['limit' => null, 'offset' => null]));
+    }
+
+    public function test_gh34_offset_without_limit_returns_every_row_after_the_offset()
+    {
+        $this->assert_equals([2, 3, 4], $this->author_ids(['offset' => 1]));
+        $this->assert_equals([4], $this->author_ids(['offset' => '3']));
+        $this->assert_equals([3, 4], $this->author_ids(['limit' => null, 'offset' => 2]));
+        $this->assert_equals([], $this->author_ids(['offset' => 4]));
+        $this->assert_equals([1, 2, 3, 4], $this->author_ids(['offset' => 0]));
+        $this->assert_equals([2, 3], $this->author_ids(['limit' => 2, 'offset' => 1]));
+    }
+
+    public function test_gh34_update_all_and_delete_all_with_limit_zero()
+    {
+        $options = ['conditions' => ['author_id > ?', 1], 'order' => 'author_id'];
+
+        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+            // MySQL / MariaDB / SQLite: LIMIT 0 touches no row
+            $this->assert_equals(0, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
+            $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+            $this->assert_equals(0, Author::delete_all(['limit' => '0'] + $options));
+            $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+            $this->assert_equals(0, Author::count(['conditions' => ['name = ?', 'X']]));
+            $this->assert_equals(4, Author::count());
+        } else {
+            // Postgres has no LIMIT on UPDATE/DELETE: the limit is ignored, as it always was
+            $this->assert_equals(3, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
+            $this->assert_sql_doesnt_has('LIMIT', Author::table()->last_sql);
+            $this->assert_equals(3, Author::delete_all(['limit' => '0'] + $options));
+            $this->assert_sql_doesnt_has('LIMIT', Author::table()->last_sql);
+            $this->assert_equals(1, Author::count());
+        }
+    }
+
+    public function test_gh34_count_is_zero_when_the_count_query_returns_no_row()
+    {
+        $this->assert_same(0, Author::count(['limit' => 0]));
+        $this->assert_same(0, Author::count(['limit' => '0']));
+        $this->assert_same(0, Author::count(['offset' => 1]));
+        $this->assert_same(0, Author::count(['limit' => 5, 'offset' => 1]));
+        $this->assert_same(0, Author::count(['group' => 'parent_author_id', 'having' => 'COUNT(*) > 99']));
+    }
+
+    public function test_gh34_count_that_returns_a_row_is_unchanged()
+    {
+        $all = Author::count();
+        $this->assert_equals(4, $all);
+        $this->assert_same($all, Author::count(['limit' => 5]));
+        $this->assert_same($all, Author::count(['limit' => null, 'offset' => 0]));
+
+        $this->assert_equals(3, Author::count(['conditions' => ['author_id > ?', 1]]));
+        $this->assert_equals(0, Author::count(['conditions' => ['author_id > ?', 99]]));
+        $this->assert_same($this->conn->query_and_fetch_one('SELECT COUNT(*) FROM authors WHERE author_id > 99'), Author::count(['conditions' => ['author_id > ?', 99]]));
+        $this->assert_equals(2, Author::count_by_parent_author_id(2));
+    }
+
+    public function test_gh34_base_offset_without_limit_keeps_the_pre_34_rendering_and_returns_no_rows()
+    {
+        // what an adapter that does not override the hook gets: limit($sql, $offset, 0)
+        $base = new ReflectionMethod(ActiveRecord\Connection::class, 'offset_without_limit');
+        $sql = 'SELECT * FROM authors ORDER BY author_id';
+        $rendered = $base->invoke($this->conn, $sql, 1);
+
+        $this->assert_equals($this->conn->limit($sql, 1, 0), $rendered);
+        $this->assert_equals([], $this->conn->query($rendered)->fetchAll());
+    }
+
     public function test_fetch_no_results()
     {
         $sth = $this->conn->query('SELECT * FROM authors WHERE author_id=65534');
