@@ -170,6 +170,33 @@ class SqliteAdapter extends Connection
     }
 
     /**
+     * SQLite compares column names folding ASCII letters only (as strtolower() does),
+     * provides rowid / oid / _rowid_, and also resolves a select-list alias in WHERE:
+     * a name that appears in $select is left to the database.
+     *
+     * @internal
+     * @param list<string> $columns
+     */
+    public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
+    {
+        $name = strtolower($name);
+
+        return in_array($name, ['rowid', 'oid', '_rowid_'], true)
+            || parent::resolves_column_name($name, $table, $columns, $select)
+            || (null !== $select && '' !== $name && str_contains(strtolower($select), $name));
+    }
+
+    /**
+     * Equal ignoring ASCII case, as SQLite compares identifiers.
+     *
+     * @internal
+     */
+    public function column_name_matches(string $name, string $column): ?bool
+    {
+        return 0 === strcasecmp($name, $column);
+    }
+
+    /**
      * @return array<string, string|array{name: string, length?: int}>
      */
     public function native_database_types()

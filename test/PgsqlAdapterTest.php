@@ -71,6 +71,136 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_same(false, $columns['is_retired']->default);
     }
 
+    public function test_db_qualified_model_introspects_the_same_columns()
+    {
+        // `$db` ("public".authors) used to introspect no column at all
+        $plain = Author::table();
+        $qualified = PublicSchemaAuthor::table();
+        $this->assert_equals(array_keys($plain->columns), array_keys($qualified->columns));
+        $this->assert_equals(
+            array_map(fn($c) => [$c->raw_type, $c->type, $c->pk, $c->nullable], $plain->columns),
+            array_map(fn($c) => [$c->raw_type, $c->type, $c->pk, $c->nullable], $qualified->columns)
+        );
+
+        // the primary key is inferred, the sequence named, attributes typed and writable
+        $this->assert_equals(['book_id'], PublicSchemaBook::table()->pk);
+        $this->assert_equals('books_book_id_seq', PublicSchemaBook::table()->sequence);
+        $this->assert_equals('Ancient Art of Main Tanking', PublicSchemaBook::find(1)->name);
+        $book = PublicSchemaBook::create(['name' => 'Schema Book', 'author_id' => 1]);
+        $this->assert_false($book->is_new_record());
+        $this->assert_equals('Schema Book', PublicSchemaBook::find($book->book_id)->name);
+
+        // hash keys are checked against those columns
+        $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, PublicSchemaAuthor::all(['conditions' => ['name' => 'Tito']])));
+        $this->assert_exception_message_contains("Unknown column 'nope' in hash conditions for PublicSchemaAuthor", function () {
+            PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
+        }, ActiveRecord\DatabaseException::class);
+    }
+
+    public function test_db_qualified_model_uses_its_own_schema_sequence()
+    {
+        $c = $this->conn;
+        // introspect live: an earlier test may leave a schema cache adapter on (CacheTest)
+        $cache = ActiveRecord\Cache::$adapter;
+        ActiveRecord\Cache::$adapter = null;
+        $seq = fn(string $name) => (int) $c->query("SELECT last_value FROM $name")->fetchColumn();
+
+        try {
+            $c->query('CREATE SCHEMA s26');
+            $c->query('CREATE TABLE s26.books (book_id SERIAL PRIMARY KEY, name varchar(50))');
+            $c->query("INSERT INTO s26.books (name) VALUES ('s26-a')");
+            $c->query('CREATE SCHEMA "S26Mix"');
+            $c->query('CREATE TABLE "S26Mix"."MixTab" (id SERIAL PRIMARY KEY, label text)');
+            ActiveRecord\Table::clear_cache();
+
+            // the sequence from the column default, schema-qualified; not public.books_book_id_seq
+            $this->assert_equals('s26.books_book_id_seq', S26Book::table()->sequence);
+            $this->assert_equals('"S26Mix"."MixTab_id_seq"', S26MixTab::table()->sequence);
+
+            $public = $seq('public.books_book_id_seq');
+            $book = S26Book::create(['name' => 's26-b']);
+            $this->assert_equals(2, (int) $book->book_id);
+            $this->assert_equals(2, $seq('s26.books_book_id_seq'));
+            $this->assert_equals($public, $seq('public.books_book_id_seq'));
+            $this->assert_equals('s26-b', S26Book::find(2)->name);
+
+            $tab = S26MixTab::create(['label' => 'm']);
+            $this->assert_equals(1, (int) $tab->id);
+            $this->assert_equals('m', S26MixTab::find(1)->label);
+
+            // a model without `$db` keeps the derived, unqualified name
+            $this->assert_equals('books_book_id_seq', Book::table()->sequence);
+        } finally {
+            $c->query('DROP SCHEMA IF EXISTS s26 CASCADE');
+            $c->query('DROP SCHEMA IF EXISTS "S26Mix" CASCADE');
+            ActiveRecord\Table::clear_cache();
+            ActiveRecord\Cache::$adapter = $cache;
+        }
+    }
+
+    public function test_pre_quoted_schema_like_table_name_without_db_is_introspected_as_before()
+    {
+        $c = $this->conn;
+        // introspect live: an earlier test may leave a schema cache adapter on (CacheTest)
+        $cache = ActiveRecord\Cache::$adapter;
+        ActiveRecord\Cache::$adapter = null;
+
+        try {
+            $c->query('CREATE SCHEMA s26');
+            $c->query('CREATE TABLE s26.books (book_id SERIAL PRIMARY KEY, name varchar(50))');
+            ActiveRecord\Table::clear_cache();
+
+            // no `$db`: the whole '"s26".books' is the relation name, which matches nothing
+            $this->assert_equals([], S26QuotedTableNameBook::table()->columns);
+        } finally {
+            $c->query('DROP SCHEMA IF EXISTS s26 CASCADE');
+            ActiveRecord\Table::clear_cache();
+            ActiveRecord\Cache::$adapter = $cache;
+        }
+    }
+
+    public function test_db_qualified_model_has_its_own_schema_cache_key()
+    {
+        $cache = ActiveRecord\Cache::$adapter;
+        ActiveRecord\Cache::initialize('file://' . sys_get_temp_dir() . '/phpar-s26-' . bin2hex(random_bytes(4)));
+
+        try {
+            // "public".authors (`$db`) and '"public".authors' (a pre-quoted $table_name) spell
+            // the same string: the schema lookup must not be served to the other model
+            ActiveRecord\Table::clear_cache();
+            $this->assert_equals(array_keys(Author::table()->columns), array_keys(PublicSchemaAuthor::table()->columns));
+            ActiveRecord\Table::clear_cache();
+            $this->assert_equals([], PublicQuotedTableNameAuthor::table()->columns);
+        } finally {
+            ActiveRecord\Cache::flush();
+            ActiveRecord\Cache::initialize(null);
+            ActiveRecord\Cache::$adapter = $cache;
+            ActiveRecord\Table::clear_cache();
+        }
+    }
+
+    public function test_hash_condition_keys_are_left_to_the_database_when_the_schema_is_unknown()
+    {
+        // a table whose columns could not be introspected: no key is rejected
+        $table = PublicSchemaAuthor::table();
+        $columns = $table->columns;
+        $table->columns = [];
+
+        try {
+            $this->assert_equals(1, PublicSchemaAuthor::count(['conditions' => ['name' => 'Tito']]));
+            $this->assert_equals('Tito', PublicSchemaAuthor::find(1)->name);
+
+            try {
+                PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
+                $this->fail('nope must fail at the database');
+            } catch (ActiveRecord\DatabaseException $e) {
+                $this->assert_false(str_starts_with($e->getMessage(), 'Unknown column'), $e->getMessage());
+            }
+        } finally {
+            $table->columns = $columns;
+        }
+    }
+
     public function test_table_without_primary_key_infers_no_sequence()
     {
         // rm-bldg has no primary key, so there is no pk column to derive a

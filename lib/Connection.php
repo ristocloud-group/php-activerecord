@@ -571,13 +571,37 @@ abstract class Connection
     /**
      * Quote a name like table names and field names.
      *
+     * A name that already is one or more correctly quoted identifiers joined by
+     * '.' (`t`, `db`.`t`, `a``b` — an embedded quote character doubled) is
+     * returned unchanged. Anything else is wrapped in the quote character with
+     * every embedded quote character doubled, so it is always exactly one
+     * identifier and never raw SQL (#64). Dots are not split: 'db.t' is the
+     * single identifier `db.t`.
+     *
      * @param string $string String to quote.
      * @return string
      */
     public function quote_name($string)
     {
-        return $string[0] === static::$QUOTE_CHARACTER || $string[strlen($string) - 1] === static::$QUOTE_CHARACTER
-            ? $string : static::$QUOTE_CHARACTER . $string . static::$QUOTE_CHARACTER;
+        $q = static::$QUOTE_CHARACTER;
+        $string = (string) $string;
+
+        if ('' !== $string && $q === $string[0] && 1 === preg_match(self::quoted_name_pattern($q), $string)) {
+            return $string;
+        }
+
+        return $q . str_replace($q, $q . $q, $string) . $q;
+    }
+
+    /**
+     * Matches one or more identifiers quoted with $q and joined by '.', each
+     * non-empty with any embedded $q doubled.
+     */
+    private static function quoted_name_pattern(string $q): string
+    {
+        $identifier = sprintf('%1$s(?:[^%1$s]|%1$s%1$s)+%1$s', preg_quote($q, '/'));
+
+        return "/\\A{$identifier}(?:\\.{$identifier})*\\z/";
     }
 
     /**
@@ -713,6 +737,41 @@ abstract class Connection
     public function accepts_limit_and_order_for_update_and_delete()
     {
         return false;
+    }
+
+    /**
+     * Whether the WHERE clause of a query that reads only $table may resolve $name, an
+     * unqualified identifier (unquoted), instead of rejecting it as an unknown column:
+     * because it is one of the table's $columns, or a name the database provides itself.
+     * Each adapter compares names the way its database does, and answers true whenever
+     * it cannot be sure. This default compares exactly, as standard SQL does for a quoted
+     * identifier.
+     *
+     * @internal Serves the validation of hash-condition keys; not a supported API.
+     * @param list<string> $columns The table's column names
+     * @param string|null $select The query's select list, if one was given
+     */
+    public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
+    {
+        foreach ($columns as $column) {
+            if (false !== $this->column_name_matches($name, $column)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether the database takes the unqualified identifier $name for the column $column:
+     * true or false, or null when it cannot be told here. This default compares exactly,
+     * as standard SQL does for a quoted identifier.
+     *
+     * @internal Serves resolves_column_name() and the relationship key checks; not a supported API.
+     */
+    public function column_name_matches(string $name, string $column): ?bool
+    {
+        return $name === $column;
     }
 
     /**

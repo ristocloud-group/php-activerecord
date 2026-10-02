@@ -90,6 +90,15 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected $options = [];
 
     /**
+     * Key columns that the key conditions must name table-qualified, as key => quoted
+     * `table`.`column`: the owner key of a reverse-FK `through` lives on the middle table,
+     * and the target table may have a column of the same name.
+     *
+     * @var array<string, string>
+     */
+    protected $qualified_keys = [];
+
+    /**
      * Is the relationship single or multi.
      *
      * @var boolean
@@ -196,8 +205,67 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if (null === $conn) {
             throw new DatabaseException('No database connection established for ' . $table->class->getName());
         }
+        $qualified_keys = [];
+        $match_key = null;
+
+        if (!empty($includes)) {
+            $options['include'] = $includes;
+        }
+
+        if (!empty($options['through'])) {
+            $through_relationship = $table->get_relationship($options['through'], true);
+            if (null === $through_relationship) {
+                throw new RelationshipException("Relationship named {$options['through']} has not been declared for class: {$table->class->getName()}");
+            }
+            $through_table = $through_relationship->get_table();
+            $source = $this->resolve_source_relationship($through_relationship);
+
+            if ($source instanceof HasMany) {
+                // Reverse-FK chain (issue #22): join the middle table and expose
+                // its owner FK (e.g. books.author_id) aliased onto every target
+                // row so the matching loop below can partition per owner. The
+                // owner FK stays as $query_key (already the owner FK here); its
+                // key condition names it qualified, as the target table may have
+                // a column of the same name.
+                $options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
+                $target_name = $this->get_table()->get_fully_qualified_table_name();
+                $middle_name = $through_table->get_fully_qualified_table_name();
+                $match_key = $this->middle_key_alias($query_key);
+                $options['select'] = "$target_name.*, $middle_name.$query_key AS $match_key";
+                $qualified_keys = [$query_key => $this->qualified_column($through_table, $query_key)];
+            } else {
+                // Historical join-table / belongs_to shape.
+                $pk = $this->primary_key;
+                $fk = $this->foreign_key;
+
+                $this->set_keys($this->get_table()->class->getName(), true);
+                $options['joins'] = $this->construct_inner_join_sql($through_table, true);
+
+                // GH #27: expose the middle table's owner FK (e.g. events.venue_id)
+                // aliased onto every target row — same trick as the reverse-FK
+                // branch above — so the matching loop below can partition the rows
+                // per parent. (This used to null out $query_key, which made the
+                // loop attach every fetched row to every parent.)
+                $target_name = $this->get_table()->get_fully_qualified_table_name();
+                $middle_name = $through_table->get_fully_qualified_table_name();
+                $select = isset($options['select']) && is_string($options['select'])
+                    ? $options['select']
+                    : "$target_name.*";
+                $match_key = $this->middle_key_alias($query_key);
+                $options['select'] = "$select, $middle_name.$query_key AS $match_key";
+                // the key is the middle table's (selected from it above): name it qualified
+                $qualified_keys = [$query_key => $this->qualified_column($through_table, $query_key)];
+
+                // reset keys
+                $this->primary_key = $pk;
+                $this->foreign_key = $fk;
+            }
+        }
+
+        // built after the through block, which may qualify the key (GH #40: composite pairs
+        // apply only without `through`, where no key is qualified)
         $conditions = 1 === $pairs
-            ? SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values) ?? []
+            ? SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values, $qualified_keys) ?? []
             : $this->create_eager_conditions_from_pairs($conn, array_slice($query_keys, 0, $pairs), array_slice($model_values_keys, 0, $pairs), $attributes);
 
         // Accept the hash form (GH #13): normalize it to the positional shape
@@ -221,53 +289,6 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $options['conditions'] = $conditions;
         }
 
-        if (!empty($includes)) {
-            $options['include'] = $includes;
-        }
-
-        if (!empty($options['through'])) {
-            $through_relationship = $table->get_relationship($options['through'], true);
-            if (null === $through_relationship) {
-                throw new RelationshipException("Relationship named {$options['through']} has not been declared for class: {$table->class->getName()}");
-            }
-            $through_table = $through_relationship->get_table();
-            $source = $this->resolve_source_relationship($through_relationship);
-
-            if ($source instanceof HasMany) {
-                // Reverse-FK chain (issue #22): join the middle table and expose
-                // its owner FK (e.g. books.author_id) aliased onto every target
-                // row so the matching loop below can partition per owner. The
-                // owner FK stays as $query_key (already the owner FK here).
-                $options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
-                $target_name = $this->get_table()->get_fully_qualified_table_name();
-                $middle_name = $through_table->get_fully_qualified_table_name();
-                $options['select'] = "$target_name.*, $middle_name.$query_key AS $query_key";
-            } else {
-                // Historical join-table / belongs_to shape.
-                $pk = $this->primary_key;
-                $fk = $this->foreign_key;
-
-                $this->set_keys($this->get_table()->class->getName(), true);
-                $options['joins'] = $this->construct_inner_join_sql($through_table, true);
-
-                // GH #27: expose the middle table's owner FK (e.g. events.venue_id)
-                // aliased onto every target row — same trick as the reverse-FK
-                // branch above — so the matching loop below can partition the rows
-                // per parent. (This used to null out $query_key, which made the
-                // loop attach every fetched row to every parent.)
-                $target_name = $this->get_table()->get_fully_qualified_table_name();
-                $middle_name = $through_table->get_fully_qualified_table_name();
-                $select = isset($options['select']) && is_string($options['select'])
-                    ? $options['select']
-                    : "$target_name.*";
-                $options['select'] = "$select, $middle_name.$query_key AS $query_key";
-
-                // reset keys
-                $this->primary_key = $pk;
-                $this->foreign_key = $fk;
-            }
-        }
-
         $options = $this->unset_non_finder_options($options);
 
         $class = $this->class_name;
@@ -285,7 +306,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $related_models = $class::find('all', $options);
         $used_models = [];
         $model_values_key = $inflector->variablize($model_values_key);
-        $query_key = $inflector->variablize($query_key);
+        $query_key = $inflector->variablize($match_key ?? $query_key);
 
         $pair_keys = [];
         for ($i = 1; $i < $pairs; ++$i) {
@@ -597,9 +618,32 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected function to_positional_conditions(Connection $conn, array $conditions)
     {
         if (is_hash($conditions)) {
+            $hashes = [$conditions];
+
+            // without `through` the query reads only the target table, so a key must name
+            // one of its columns (or aliases, mapped like a finder's); with it, an
+            // unqualified key may name a middle-table column
+            if (empty($this->options['through'])) {
+                $table = $this->get_table();
+                $select = $this->options['select'] ?? null;
+                $hashes = $table->alias_condition_hashes($conditions);
+
+                foreach ($hashes as $hash) {
+                    $table->validate_condition_keys($hash, is_string($select) ? $select : null);
+                }
+            }
+
             require_once 'Expressions.php';
-            $expressions = new Expressions($conn, $conditions);
-            return array_merge([$expressions->to_s()], array_flatten($expressions->values()));
+            $sql = [];
+            $values = [];
+
+            foreach ($hashes as $hash) {
+                $expressions = new Expressions($conn, $hash);
+                $sql[] = $expressions->to_s();
+                $values[] = $expressions->values();
+            }
+
+            return array_merge([implode(' AND ', $sql)], array_flatten($values));
         }
 
         return $conditions;
@@ -625,7 +669,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
             throw new DatabaseException('No database connection established for ' . $model_table->class->getName());
         }
         // the key columns as a list: a column named e.g. black_and_white stays one column (#53)
-        $conditions = SQLBuilder::create_conditions_from_columns($model_conn, $condition_keys, $condition_values) ?? [];
+        $conditions = SQLBuilder::create_conditions_from_columns($model_conn, $condition_keys, $condition_values, $this->qualified_keys) ?? [];
 
         # add_condition() mutates its first argument by reference, so we must merge
         # into a *local* copy — never $this->options['conditions'] directly, or the
@@ -746,6 +790,38 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         return null;
+    }
+
+    /**
+     * `table`.`column`, quoted with that table's own connection.
+     */
+    protected function qualified_column(Table $table, string $column): string
+    {
+        $conn = $table->conn;
+        if (null === $conn) {
+            throw new DatabaseException('No database connection established for ' . $table->class->getName());
+        }
+
+        return $table->get_fully_qualified_table_name() . '.' . $conn->quote_name($column);
+    }
+
+    /**
+     * Whether $table certainly has a column named $column, compared the way its database
+     * compares column names ({@see Connection::column_name_matches()}).
+     */
+    protected static function table_has_column(Table $table, string $column): bool
+    {
+        return $table->has_column($column);
+    }
+
+    /**
+     * The name the eager `through` query selects the middle table's key under. It is the
+     * key itself, unless the target table has a column of that name: the alias would
+     * overwrite it on every target row, so a private alias is used for the matching.
+     */
+    protected function middle_key_alias(string $key): string
+    {
+        return self::table_has_column($this->get_table(), $key) ? "ar_through_$key" : $key;
     }
 
     /**
@@ -955,10 +1031,9 @@ class HasMany extends AbstractRelationship
                     // Reverse-FK chain (issue #22): the middle model has_many the
                     // target, so hop target.<source_fk> = middle.<source_pk> and
                     // filter by the through model's own owner FK on the middle
-                    // table. The owner FK column (e.g. books.author_id) is left
-                    // unqualified in the condition: it is unambiguous because the
-                    // target table does not carry it, and qualifying it would be
-                    // mangled by quote_name().
+                    // table. The owner FK column (e.g. books.author_id) is named
+                    // qualified in the key condition: the target table may have a
+                    // column of the same name, which made it ambiguous.
                     $through_table = $through_relationship->get_table();
                     $this->options['joins'] = $this->construct_through_reverse_join_sql($through_table, $source);
 
@@ -966,8 +1041,10 @@ class HasMany extends AbstractRelationship
                     if (null === $through_relationship->primary_key) {
                         throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
                     }
-                    $this->foreign_key = [$through_relationship->foreign_key[0]];
+                    $owner_key = $through_relationship->foreign_key[0];
+                    $this->foreign_key = [$owner_key];
                     $this->primary_key = $through_relationship->primary_key;
+                    $this->qualified_keys = [$owner_key => $this->qualified_column($through_table, $owner_key)];
                 } else {
                     // save old keys as we will be reseting them below for inner join convenience
                     $pk = $this->primary_key;
@@ -981,6 +1058,14 @@ class HasMany extends AbstractRelationship
                     // reset keys
                     $this->primary_key = $pk;
                     $this->foreign_key = $fk;
+
+                    // a key column of the middle table is named qualified: the target
+                    // table may have a column of the same name (else left as it was)
+                    foreach ($this->foreign_key as $key) {
+                        if (self::table_has_column($through_table, $key)) {
+                            $this->qualified_keys[$key] = $this->qualified_column($through_table, $key);
+                        }
+                    }
                 }
             }
 

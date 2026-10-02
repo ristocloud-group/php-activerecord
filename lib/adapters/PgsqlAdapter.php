@@ -51,8 +51,14 @@ class PgsqlAdapter extends Connection
         return "SELECT EXISTS($inner)::int";
     }
 
-    public function query_column_info($table)
+    /**
+     * @param string $table
+     * @param string|null $schema Restrict the lookup to this schema (see {@see columns_in_schema()})
+     */
+    public function query_column_info($table, ?string $schema = null)
     {
+        $in_schema = null === $schema ? '' : ' AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ?)';
+
         $sql = <<<SQL
             SELECT
                   a.attname AS field,
@@ -71,13 +77,18 @@ class PgsqlAdapter extends Connection
                     AND pg_attrdef.adnum=a.attnum
                   ),'::[a-z_ ]+',''),'''$',''),'^''','') AS default
             FROM pg_attribute a, pg_class c, pg_type t
-            WHERE c.relname = ?
+            WHERE c.relname = ?{$in_schema}
                   AND a.attnum > 0
                   AND a.attrelid = c.oid
                   AND a.atttypid = t.oid
             ORDER BY a.attnum
             SQL;
         $values = [$table];
+
+        if (null !== $schema) {
+            $values[] = $schema;
+        }
+
         return $this->query($sql, $values);
     }
 
@@ -134,12 +145,48 @@ class PgsqlAdapter extends Connection
     }
 
     /**
+     * The columns of the table $table in the schema $schema, both unquoted names (a
+     * quoted one is unquoted first): what a model with `$db` introspects.
+     *
+     * @internal Serves Table; not a supported API.
+     * @return array<string, Column>
+     */
+    public function columns_in_schema(string $table, string $schema): array
+    {
+        $unquote = fn(string $name) => 1 === preg_match('/\A"((?:[^"]|"")+)"\z/', $name, $m) ? str_replace('""', '"', $m[1]) : $name;
+        $columns = [];
+        $sth = $this->query_column_info($unquote($table), $unquote($schema));
+
+        while (($row = $sth->fetch())) {
+            $c = $this->create_column($row);
+            $columns[$c->name] = $c;
+        }
+
+        return $columns;
+    }
+
+    /**
      * @param string $charset
      * @return void
      */
     public function set_encoding($charset)
     {
         $this->query("SET NAMES '$charset'");
+    }
+
+    /**
+     * A quoted identifier is case-sensitive, so names compare exactly. Postgres also
+     * provides the system columns and the table name itself (a whole-row reference),
+     * and truncates a name longer than 63 bytes, which is then left to the database.
+     *
+     * @internal
+     * @param list<string> $columns
+     */
+    public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
+    {
+        return parent::resolves_column_name($name, $table, $columns, $select)
+            || in_array($name, ['ctid', 'xmin', 'xmax', 'cmin', 'cmax', 'tableoid', 'oid', $table], true)
+            || strlen($name) > 63;
     }
 
     /**

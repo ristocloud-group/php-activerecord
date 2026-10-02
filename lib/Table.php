@@ -249,11 +249,24 @@ class Table
 
                 call_user_func_array([$sql,'where'], $options['conditions']);
             } else {
+                $hashes = [$options['conditions']];
+
                 if (!empty($options['mapped_names'])) {
-                    $options['conditions'] = $this->map_names($options['conditions'], $options['mapped_names']);
+                    $hashes = $this->map_names($options['conditions'], $options['mapped_names']);
                 }
 
-                $sql->where($options['conditions']);
+                // with `from` the query may read another table: the database decides
+                if (!array_key_exists('from', $options)) {
+                    foreach ($hashes as $hash) {
+                        $this->validate_condition_keys($hash, is_string($options['select'] ?? null) ? $options['select'] : null);
+                    }
+                }
+
+                if (1 === count($hashes)) {
+                    $sql->where($hashes[0]);
+                } else {
+                    $sql->where_hashes($hashes);
+                }
             }
         }
 
@@ -376,6 +389,129 @@ class Table
             }
             $rel->load_eagerly($models, $attrs, $nested_includes, $this);
         }
+    }
+
+    /**
+     * Rejects a hash-condition key that is unqualified (a plain name or one quoted
+     * identifier) and names no column of this table, before any query is run. A
+     * table-qualified key ('t.c', `t`.`c`) is not checked. Names are compared the
+     * way the database compares them ({@see Connection::resolves_column_name()}); a
+     * name missing from the cached schema is checked again against the live table,
+     * so a column added after the schema was cached is not rejected.
+     *
+     * @internal Serves the finders, update_all/delete_all and relationship conditions.
+     * @param array<int|string, mixed> $conditions A conditions hash
+     * @param string|null $select The query's select list, if one was given
+     * @throws DatabaseException naming the model and the key
+     */
+    public function validate_condition_keys(array $conditions, ?string $select = null): void
+    {
+        $conn = $this->connection();
+        $columns = $this->column_names($this->columns);
+
+        // no introspected column (the table could not be introspected, e.g. a pre-quoted
+        // schema-qualified $table_name on Postgres): the schema is unknown, the database decides
+        if ([] === $columns) {
+            return;
+        }
+
+        $fresh_columns = null;
+
+        foreach (array_keys($conditions) as $key) {
+            $key = (string) $key;
+            $name = $this->unqualified_condition_name($conn, $key);
+
+            if (null === $name || $conn->resolves_column_name($name, $this->table, $columns, $select)) {
+                continue;
+            }
+
+            $fresh_columns ??= $this->column_names($this->introspect_columns());
+
+            if (!$conn->resolves_column_name($name, $this->table, $fresh_columns, $select)) {
+                throw new DatabaseException("Unknown column '$key' in hash conditions for {$this->class->getName()} (table {$this->table})");
+            }
+        }
+    }
+
+    /**
+     * A conditions hash with the model's $alias_attribute names replaced by their columns,
+     * split like {@see map_names()} where an alias and its column would collide. An alias
+     * named like a real column of the table is not mapped: these paths (count, exists,
+     * update_all, delete_all, relationship conditions) always sent that name to the
+     * database as the column, and still do.
+     *
+     * @internal Serves count/exists, update_all/delete_all and relationship hash conditions.
+     * @param array<string, mixed> $conditions
+     * @return non-empty-list<array<string, mixed>>
+     */
+    public function alias_condition_hashes(array $conditions): array
+    {
+        $map = $this->condition_alias_map();
+
+        return [] === $map ? [$conditions] : $this->map_names($conditions, $map);
+    }
+
+    /**
+     * The model's $alias_attribute map without the aliases named like a real column
+     * (see {@see alias_condition_hashes()}).
+     *
+     * @internal
+     * @return array<string, string>
+     */
+    public function condition_alias_map(): array
+    {
+        return array_filter(
+            (array) $this->class->getStaticPropertyValue('alias_attribute', []),
+            fn($alias) => !$this->has_column((string) $alias),
+            ARRAY_FILTER_USE_KEY
+        );
+    }
+
+    /**
+     * Whether this table certainly has a column named $name, compared the way its database
+     * compares column names ({@see Connection::column_name_matches()}).
+     *
+     * @internal
+     */
+    public function has_column(string $name): bool
+    {
+        $conn = $this->connection();
+
+        foreach (array_keys($this->columns) as $column) {
+            if (true === $conn->column_name_matches($name, (string) $column)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The identifier a hash-condition key is rendered as (see Expressions), or null when
+     * the key is table-qualified: an unquoted dotted key, or quoted identifiers joined by '.'.
+     */
+    private function unqualified_condition_name(Connection $conn, string $key): ?string
+    {
+        $q = $conn::$QUOTE_CHARACTER;
+
+        if (str_contains($key, '.') && !str_contains($key, $q)) {
+            return null;
+        }
+
+        // quote_name() gives quoted identifiers joined by '.', each embedded quote doubled:
+        // once the doubled ones are gone, any quote left marks a boundary between parts
+        $inner = substr($conn->quote_name($key), 1, -1);
+
+        return str_contains(str_replace($q . $q, '', $inner), $q) ? null : str_replace($q . $q, $q, $inner);
+    }
+
+    /**
+     * @param array<int|string, Column> $columns
+     * @return list<string>
+     */
+    private function column_names(array $columns): array
+    {
+        return array_map('strval', array_keys($columns));
     }
 
     /**
@@ -629,21 +765,49 @@ class Table
 
         $table_name = $this->get_fully_qualified_table_name($quote_name);
         $conn = $this->connection();
+        // a Postgres `$db` model is introspected in its schema: its own key, so a pre-quoted
+        // $table_name that spells the same string ('"public".authors') never reuses it
+        if ($conn instanceof PgsqlAdapter && $this->db_name) {
+            $table_name .= '-in-schema';
+        }
+
         // scoped by connection identity: same-named tables on different databases differ (#45)
-        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () use ($conn, $table_name) {
-            return $conn->columns($table_name);
+        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () {
+            return $this->introspect_columns();
         });
+    }
+
+    /**
+     * The table's columns, read from the database (no cache). On Postgres a model with
+     * `$db` is looked up in that schema.
+     *
+     * @return array<string, Column>
+     */
+    private function introspect_columns(): array
+    {
+        $conn = $this->connection();
+
+        if ($conn instanceof PgsqlAdapter && $this->db_name) {
+            return $conn->columns_in_schema($this->table, $this->db_name);
+        }
+
+        return $conn->columns($this->get_fully_qualified_table_name(!($conn instanceof PgsqlAdapter)));
     }
 
     /**
      * Replaces any aliases used in a hash based condition.
      *
+     * An alias and its column ('marquee' and 'name') would overwrite each other in one
+     * hash, so a repeated name starts a new hash: every condition is kept, in order, and
+     * the hashes are ANDed. Without a repeated name there is a single hash, as before.
+     *
      * @param array<string, mixed> $hash A hash
      * @param array<string, string> $map Hash of used_name => real_name
-     * @return array<string, mixed> Array with any aliases replaced with their read field name
+     * @return non-empty-list<array<string, mixed>> Hashes with any aliases replaced with their real field name
      */
     private function map_names(array &$hash, array &$map): array
     {
+        $hashes = [];
         $ret = [];
 
         foreach ($hash as $name => &$value) {
@@ -651,9 +815,17 @@ class Table
                 $name = $map[$name];
             }
 
+            if (array_key_exists($name, $ret)) {
+                $hashes[] = $ret;
+                $ret = [];
+            }
+
             $ret[$name] = $value;
         }
-        return $ret;
+
+        $hashes[] = $ret;
+
+        return $hashes;
     }
 
     /**
@@ -726,6 +898,17 @@ class Table
             $this->sequence = isset($this->pk[0])
                 ? $this->connection()->get_sequence_name($this->table, $this->pk[0])
                 : null;
+
+            // with `$db` that derived, unqualified name would resolve through search_path,
+            // possibly to a same-named table's sequence in another schema: use the
+            // sequence the pk column's default really draws from (e.g. s26.books_book_id_seq)
+            if ($this->db_name && isset($this->pk[0])) {
+                $column = $this->columns[$this->pk[0]] ?? $this->get_column_by_inflected_name($this->pk[0]);
+
+                if (null !== $column && $column->sequence) {
+                    $this->sequence = $column->sequence;
+                }
+            }
         }
     }
 

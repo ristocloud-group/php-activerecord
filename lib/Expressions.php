@@ -188,7 +188,7 @@ class Expressions
 
         foreach ($hash as $name => $value) {
             if ($this->connection) {
-                $name = $this->connection->quote_name((string) $name);
+                $name = $this->quote_key($this->connection, (string) $name);
             }
 
             if (is_array($value)) {
@@ -237,6 +237,21 @@ class Expressions
         }
 
         return [$sql, $values];
+    }
+
+    /**
+     * Quotes a hash-condition key. An unquoted key containing '.' is a qualified
+     * name ('venues.id'): each part is quoted on its own, `venues`.`id` (#35).
+     * Any other key, a pre-quoted one included, goes to quote_name() whole, so
+     * it is always identifiers and never raw SQL.
+     */
+    private function quote_key(Connection $connection, string $key): string
+    {
+        if (str_contains($key, '.') && !str_contains($key, $connection::$QUOTE_CHARACTER)) {
+            return implode('.', array_map([$connection, 'quote_name'], explode('.', $key)));
+        }
+
+        return $connection->quote_name($key);
     }
 
     /**
