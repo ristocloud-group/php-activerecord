@@ -12,7 +12,7 @@ php examples/validations/validations.php
 | Example | Demonstrates |
 |---|---|
 | [`validations/`](validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object (`full_messages()`, `on()`), `is_valid()` |
-| [`relationships/`](relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options and the unknown-option error), `has_many`, `has_one`, `has_many … through` (incl. many-to-many), eager `include`, `create_*` builders, composite-key `has_many` (`foreign_key`/`primary_key` lists) with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner, a `has_many` keyed by a declared `primary_key` (lazy load, eager `include` and `create_*` agree) |
+| [`relationships/`](relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options and the unknown-option error), `has_many`, `has_one`, `has_many … through` (incl. many-to-many), eager `include`, `create_*` builders, composite-key `has_many` (`foreign_key`/`primary_key` lists) with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner, a `has_many` keyed by a declared `primary_key` (lazy load, eager `include` and `create_*` agree, a declared `limit` applies per owner) |
 | [`callbacks/`](callbacks/) | Lifecycle hooks (`before_validation`, `before_save`, `after_create`, `before_update`, `before_destroy`) and halting a save |
 | [`attributes/`](attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and `Config::set_strict_mass_assignment()`, which throws instead of dropping), `$delegate`, dirty tracking (`is_dirty`, `dirty_attributes`) |
 | [`serialization/`](serialization/) | `to_json` / `to_xml` / `to_array` with `only` / `except` / `methods` / `include` |

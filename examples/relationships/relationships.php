@@ -115,6 +115,7 @@ out('Babbage post featured author: ' . ($engine->featured_author->name ?? '(none
  * @property int    $author_id
  * @property string $title
  * @property-read array<int, PostBySameAuthor> $same_author_posts
+ * @property-read array<int, PostBySameAuthor> $latest_same_author_posts
  *
  * @method PostBySameAuthor create_same_author_posts(array<string, mixed> $attributes) has_many builder
  */
@@ -122,7 +123,9 @@ class PostBySameAuthor extends ActiveRecord\Model
 {
     public static $table_name = 'posts';
     public static $has_many = [['same_author_posts', 'class_name' => 'PostBySameAuthor', 'foreign_key' => 'author_id',
-        'primary_key' => 'author_id', 'order' => 'id']];
+        'primary_key' => 'author_id', 'order' => 'id'],
+        ['latest_same_author_posts', 'class_name' => 'PostBySameAuthor', 'foreign_key' => 'author_id',
+            'primary_key' => 'author_id', 'order' => 'id desc', 'limit' => 1]];
 }
 
 $titles = fn(array $posts): string => implode(', ', ActiveRecord\collect($posts, 'title'));
@@ -143,6 +146,16 @@ out('create_same_author_posts on post ' . $engine_post->id . ': author_id = ' . 
 $reloaded = PostBySameAuthor::find($engine->id);
 out('  lazy reload: ' . $titles($reloaded->same_author_posts));
 $sequel->delete(); // keep the rest of the demo's data as it was
+
+// The eager include also applies a declared limit/offset to each owner, as the lazy
+// load does: every post gets the latest post of its author. Before, the LIMIT went
+// on the single IN(...) query, so only the first post got one.
+/** @var array<int, PostBySameAuthor> $latest */
+$latest = PostBySameAuthor::all(['order' => 'id', 'include' => 'latest_same_author_posts']);
+foreach ($latest as $post) {
+    out('  ' . $post->title . ' -> latest by its author (eager, limit 1): ' . $titles($post->latest_same_author_posts));
+}
+out('  SQL: ' . PostBySameAuthor::table()->last_sql);
 
 // Note: this fork's has_many :through only supports the join-table shape (see
 // tags/taggings below) -- not a plain one-to-many chain like "comments through
