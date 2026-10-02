@@ -105,6 +105,58 @@ out('Ada post featured author (belongs_to, OR conditions): ' . ($p1->featured_au
 out('  SQL: ' . Author::table()->last_sql);
 out('Babbage post featured author: ' . ($engine->featured_author->name ?? '(none)'));
 
+// has_many with a declared primary_key keys off that column, not the owner's id.
+// Here a post lists the posts by its author (posts.author_id = this post's
+// author_id), and the lazy load, the eager include and create_* all agree. Before
+// #40 only the lazy load did: include matched on the post id, so "On Notes" (post
+// 2) got the posts of author 2, and create_* stored the post id in author_id.
+/**
+ * @property int    $id
+ * @property int    $author_id
+ * @property string $title
+ * @property-read array<int, PostBySameAuthor> $same_author_posts
+ * @property-read array<int, PostBySameAuthor> $latest_same_author_posts
+ *
+ * @method PostBySameAuthor create_same_author_posts(array<string, mixed> $attributes) has_many builder
+ */
+class PostBySameAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'posts';
+    public static $has_many = [['same_author_posts', 'class_name' => 'PostBySameAuthor', 'foreign_key' => 'author_id',
+        'primary_key' => 'author_id', 'order' => 'id'],
+        ['latest_same_author_posts', 'class_name' => 'PostBySameAuthor', 'foreign_key' => 'author_id',
+            'primary_key' => 'author_id', 'order' => 'id desc', 'limit' => 1]];
+}
+
+$titles = fn(array $posts): string => implode(', ', ActiveRecord\collect($posts, 'title'));
+/** @var PostBySameAuthor $notes */
+$notes = PostBySameAuthor::find($p2->id);
+out('posts by the author of "On Notes" (lazy): ' . $titles($notes->same_author_posts));
+/** @var array<int, PostBySameAuthor> $all_posts */
+$all_posts = PostBySameAuthor::all(['order' => 'id', 'include' => 'same_author_posts']);
+foreach ($all_posts as $post) {
+    out('  ' . $post->title . ' (eager): ' . $titles($post->same_author_posts));
+}
+out('  SQL: ' . PostBySameAuthor::table()->last_sql);
+/** @var PostBySameAuthor $engine_post */
+$engine_post = PostBySameAuthor::find($engine->id);
+$sequel = $engine_post->create_same_author_posts(['title' => 'On the Difference Engine']);
+out('create_same_author_posts on post ' . $engine_post->id . ': author_id = ' . $sequel->author_id . ' (Babbage is ' . $babbage->id . ')');
+/** @var PostBySameAuthor $reloaded */
+$reloaded = PostBySameAuthor::find($engine->id);
+out('  lazy reload: ' . $titles($reloaded->same_author_posts));
+$sequel->delete(); // keep the rest of the demo's data as it was
+
+// The eager include also applies a declared limit/offset to each owner, as the lazy
+// load does: every post gets the latest post of its author. Before, the LIMIT went
+// on the single IN(...) query, so only the first post got one.
+/** @var array<int, PostBySameAuthor> $latest */
+$latest = PostBySameAuthor::all(['order' => 'id', 'include' => 'latest_same_author_posts']);
+foreach ($latest as $post) {
+    out('  ' . $post->title . ' -> latest by its author (eager, limit 1): ' . $titles($post->latest_same_author_posts));
+}
+out('  SQL: ' . PostBySameAuthor::table()->last_sql);
+
 // Note: this fork's has_many :through only supports the join-table shape (see
 // tags/taggings below) -- not a plain one-to-many chain like "comments through
 // posts" -- so comments are aggregated across the author's posts directly.

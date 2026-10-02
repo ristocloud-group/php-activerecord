@@ -628,7 +628,7 @@ abstract class Connection
     /**
      * Return a date time formatted into the database's date format.
      *
-     * @param \DateTime $datetime The DateTime object (native \DateTime or ActiveRecord\DateTime)
+     * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)
      * @return string
      */
     public function date_to_string($datetime)
@@ -639,7 +639,7 @@ abstract class Connection
     /**
      * Return a date time formatted into the database's datetime format.
      *
-     * @param \DateTime $datetime The DateTime object (native \DateTime or ActiveRecord\DateTime)
+     * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)
      * @return string
      */
     public function datetime_to_string($datetime)

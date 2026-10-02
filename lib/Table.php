@@ -716,6 +716,11 @@ class Table
     {
         $data = $this->process_data($data);
 
+        // a pk hash in the WHERE is bound like the SET values (a DateTime in the column's format)
+        if (is_array($where)) {
+            $where = $this->process_data($where);
+        }
+
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
         $sql->update($data)->where($where);
 
@@ -835,7 +840,8 @@ class Table
         }
 
         foreach ($hash as $name => &$value) {
-            if ($value instanceof \DateTime) {
+            // any DateTimeInterface: PDO cannot bind a \DateTimeImmutable either
+            if ($value instanceof \DateTimeInterface) {
                 if (isset($this->columns[$name]) && $this->columns[$name]->type == Column::DATE) {
                     $value = $this->connection()->date_to_string($value);
                 } else {
