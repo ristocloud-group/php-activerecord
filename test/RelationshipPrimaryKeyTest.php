@@ -68,6 +68,14 @@ class ParentKeyedGuardedCompositeAuthor extends ActiveRecord\Model
         'primary_key' => ['author_id', 'parent_author_id'], 'order' => 'id asc']];
 }
 
+// a mixed-case declared primary_key (the mysql schema names the column Author_Id)
+class MixedCaseKeyedBook extends ActiveRecord\Model
+{
+    public static $table_name = 'books';
+    public static $has_many = [['same_author_books', 'class_name' => 'Book', 'foreign_key' => 'author_id',
+        'primary_key' => 'Author_Id', 'order' => 'book_id asc']];
+}
+
 class RelationshipPrimaryKeyTest extends DatabaseTest
 {
     /**
@@ -286,6 +294,19 @@ class RelationshipPrimaryKeyTest extends DatabaseTest
             $this->assert_equals($count + 1, PrimaryKeyGuardedCompositeItem::count());
         } finally {
             ActiveRecord\Config::instance()->set_strict_mass_assignment($strict);
+        }
+    }
+
+    public function test_lazy_load_inflects_a_mixed_case_declared_primary_key()
+    {
+        $second = (int) Book::create(['author_id' => 1, 'name' => 'second'])->book_id;
+
+        foreach ([false, true] as $eager) {
+            $books = MixedCaseKeyedBook::find('all', ['order' => 'book_id asc'] + ($eager ? ['include' => 'same_author_books'] : []));
+            $this->assert_same([1 => [1, $second], 2 => [2], $second => [1, $second]], array_combine(
+                array_map(fn($book) => (int) $book->book_id, $books),
+                array_map(fn($book) => $this->ids($book->same_author_books), $books)
+            ), $eager ? 'eager' : 'lazy');
         }
     }
 }

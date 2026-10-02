@@ -833,7 +833,13 @@ class HasMany extends AbstractRelationship
             throw new RelationshipException("Could not determine primary key for relationship '{$this->attribute_name}'");
         }
 
-        if (!($conditions = $this->create_conditions_from_keys($model, $this->foreign_key, $this->primary_key))) {
+        // GH #40: a declared primary_key (the middle one on a reverse-FK through) is read
+        // inflected, as the eager load and the builders read it; the table pk as before
+        $value_keys = $this->primary_key === Table::load(get_class($model))->pk
+            ? $this->primary_key
+            : array_map(fn($key) => Inflector::instance()->variablize($key), $this->primary_key);
+
+        if (!($conditions = $this->create_conditions_from_keys($model, $this->foreign_key, $value_keys))) {
             return null;
         }
 
@@ -909,8 +915,9 @@ class HasMany extends AbstractRelationship
     public function load_eagerly($models, $attributes, $includes, Table $table)
     {
         $this->set_keys($table->class->name);
+        $owner_keys = $this->eager_owner_keys($table);
 
-        if (!$this->keys_off_declared_primary_key()) {
+        if (null === $owner_keys) {
             $this->query_and_attach_related_models_eagerly($table, $models, $attributes, $includes, $this->foreign_key, $table->pk);
 
             return;
@@ -919,11 +926,13 @@ class HasMany extends AbstractRelationship
         // GH #40: key off the declared primary_key, as load() does. load() finds nothing for an
         // owner whose key is null, so leave such an owner out of the query: its null would be
         // rendered as "fk IS NULL" and match it to every child that has no owner.
-        $key = Inflector::instance()->variablize($this->declared_primary_key[0]);
+        $inflector = Inflector::instance();
         $keyed_models = $keyed_attributes = [];
 
         foreach ($models as $i => $model) {
-            if (null === ($attributes[$i][$key] ?? null)) {
+            $key = array_map(fn($owner_key) => $attributes[$i][$inflector->variablize($owner_key)] ?? null, $owner_keys);
+
+            if (all(null, $key)) {
                 $model->set_relationship_from_eager_load(null, $this->attribute_name);
             } else {
                 $keyed_models[] = $model;
@@ -932,8 +941,29 @@ class HasMany extends AbstractRelationship
         }
 
         if ([] !== $keyed_models) {
-            $this->query_and_attach_related_models_eagerly($table, $keyed_models, $keyed_attributes, $includes, $this->foreign_key, $this->declared_primary_key);
+            $this->query_and_attach_related_models_eagerly($table, $keyed_models, $keyed_attributes, $includes, $this->foreign_key, $owner_keys);
         }
+    }
+
+    /**
+     * GH #40: the owner columns the eager load keys off, as load() does: the declared
+     * primary_key; on a reverse-FK `through` the middle relationship's declared primary_key.
+     * Null: the table pk, as before.
+     *
+     * @return list<string>|null
+     */
+    private function eager_owner_keys(Table $table): ?array
+    {
+        if (null !== $this->through) {
+            $through = $table->get_relationship($this->through);
+            $declared = $through instanceof HasMany && $this->resolve_source_relationship($through) instanceof HasMany
+                ? $through->declared_primary_key
+                : $this->declared_primary_key;
+
+            return [] !== $declared ? $declared : null;
+        }
+
+        return [] !== $this->declared_primary_key ? $this->declared_primary_key : null;
     }
 };
 
