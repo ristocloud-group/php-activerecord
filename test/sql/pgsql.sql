@@ -152,6 +152,14 @@ CREATE TABLE coded_items (
   PRIMARY KEY(owner, code)
 );
 
+-- DATE/DATETIME composite pk: bound in the update/delete WHERE in the column's format (#41)
+CREATE TABLE dated_counts (
+  day date NOT NULL,
+  at timestamp NOT NULL,
+  hits int,
+  PRIMARY KEY(day, at)
+);
+
 -- children of a composite-key has_many: (author_ref, parent_ref) -> authors (author_id, parent_author_id)
 CREATE TABLE composite_items (
   id serial primary key,

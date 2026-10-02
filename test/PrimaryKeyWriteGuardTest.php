@@ -47,6 +47,12 @@ class PkGuardGeneratedCodeItem extends ActiveRecord\Model
     }
 }
 
+// composite primary key (day DATE, at DATETIME)
+class PkGuardDatedCount extends ActiveRecord\Model
+{
+    public static $table_name = 'dated_counts';
+}
+
 class PrimaryKeyWriteGuardTest extends DatabaseTest
 {
     /** @var list<string> */
@@ -565,5 +571,53 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
             fn() => $item->save(),
             PkGuardCodedItem::class
         );
+    }
+
+    /**
+     * @return list<int> hits of every dated_counts row, in pk order
+     */
+    private function dated_hits(): array
+    {
+        return array_map(fn(PkGuardDatedCount $c) => (int) $c->hits, PkGuardDatedCount::all(['order' => 'day, at']));
+    }
+
+    public function test_date_and_datetime_pk_values_match_their_row_on_update()
+    {
+        // the UPDATE's WHERE bound them through DateTime::__toString() (RFC 2822): MySQL
+        // refused it (error 1292), SQLite and MariaDB matched no row and returned true
+        $count = PkGuardDatedCount::first(['conditions' => ['hits' => 1]]);
+        $count->hits = 10;
+        $this->assert_true($count->save());
+        $this->assert_same([10, 2], $this->dated_hits());
+
+        $this->assert_true($count->update_attribute('hits', 11));
+        $this->assert_same([11, 2], $this->dated_hits());
+    }
+
+    public function test_created_date_and_datetime_pk_updates_and_deletes()
+    {
+        $count = PkGuardDatedCount::create(['day' => '2026-03-01', 'at' => new \DateTime('2026-03-01 08:00:00'), 'hits' => 3]);
+
+        $this->assert_true($count->update_attribute('hits', 5));
+        $this->assert_same([1, 2, 5], $this->dated_hits());
+
+        $this->assert_true($count->delete());
+        $this->assert_same([1, 2], $this->dated_hits());
+    }
+
+    public function test_datetime_immutable_pk_values_are_bound_like_datetimes()
+    {
+        // an equal DateTimeImmutable is the same key; it reaches the SET and the WHERE,
+        // where PDO could not bind it ("could not be converted to string")
+        $count = PkGuardDatedCount::first(['conditions' => ['hits' => 1]]);
+        $count->at = new \DateTimeImmutable('2026-01-01 10:00:00');
+        $count->hits = 12;
+        $this->assert_true($count->save());
+        $this->assert_same([12, 2], $this->dated_hits());
+
+        $count = PkGuardDatedCount::first(['conditions' => ['hits' => 12]]);
+        $count->day = new \DateTimeImmutable('2026-01-01');
+        $this->assert_true($count->delete());
+        $this->assert_same([2], $this->dated_hits());
     }
 }
