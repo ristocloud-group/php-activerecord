@@ -400,6 +400,13 @@ class Table
     {
         $conn = $this->connection();
         $columns = $this->column_names($this->columns);
+
+        // no introspected column (e.g. Postgres with `$db`, whose introspection does not
+        // resolve a schema-qualified name): the schema is unknown, the database decides
+        if ([] === $columns) {
+            return;
+        }
+
         $fresh_columns = null;
 
         foreach (array_keys($conditions) as $key) {

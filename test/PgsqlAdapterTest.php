@@ -17,6 +17,26 @@ class PgsqlAdapterTest extends AdapterTest
         parent::set_up('pgsql');
     }
 
+    public function test_hash_condition_keys_are_left_to_the_database_when_the_schema_is_unknown()
+    {
+        // `$db` makes the column introspection come back empty on Postgres: with no
+        // known column, no key is rejected (find by pk included)
+        $this->assert_equals([], PublicSchemaAuthor::table()->columns);
+        $this->assert_equals(['Tito'], array_map(fn($a) => $a->name, PublicSchemaAuthor::all(['conditions' => ['name' => 'Tito']])));
+        $this->assert_equals(1, PublicSchemaAuthor::count(['conditions' => ['name' => 'Tito']]));
+        $this->assert_true(PublicSchemaAuthor::exists(['author_id' => 1]));
+        $this->assert_equals('Tito', PublicSchemaAuthor::find(1)->name);
+        $this->assert_equals(0, PublicSchemaAuthor::delete_all(['conditions' => ['name' => 'nobody']]));
+
+        // an unknown key still fails, at the database
+        try {
+            PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
+            $this->fail('nope must fail at the database');
+        } catch (ActiveRecord\DatabaseException $e) {
+            $this->assert_false(str_starts_with($e->getMessage(), 'Unknown column'), $e->getMessage());
+        }
+    }
+
     public function test_insert_id()
     {
         $this->conn->query("INSERT INTO authors(author_id,name) VALUES(nextval('authors_author_id_seq'),'name')");
