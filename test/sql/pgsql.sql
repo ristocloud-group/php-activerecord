@@ -144,6 +144,23 @@ CREATE TABLE news_read_receipts (
   PRIMARY KEY(user_id, story_id)
 );
 
+-- string composite pk, not auto-increment: code is filled by the database when not sent (#41)
+CREATE TABLE coded_items (
+  owner varchar(20) NOT NULL,
+  code varchar(40) NOT NULL DEFAULT md5(random()::text),
+  name varchar(20),
+  PRIMARY KEY(owner, code)
+);
+
+-- DATE/DATETIME composite pk: bound in the update/delete WHERE in the column's format (#41)
+CREATE TABLE dated_counts (
+  day date NOT NULL,
+  at timestamp NOT NULL,
+  hits int,
+  seen_at timestamp,
+  PRIMARY KEY(day, at)
+);
+
 -- children of a composite-key has_many: (author_ref, parent_ref) -> authors (author_id, parent_author_id)
 CREATE TABLE composite_items (
   id serial primary key,

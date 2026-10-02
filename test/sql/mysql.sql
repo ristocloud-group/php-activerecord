@@ -142,6 +142,23 @@ CREATE TABLE news_read_receipts (
   PRIMARY KEY(`user_id`, `story_id`)
 ) ENGINE=InnoDB;
 
+-- string composite pk, not auto-increment: `code` is filled by the database when not sent (#41)
+CREATE TABLE coded_items (
+  `owner` VARCHAR(20) NOT NULL,
+  `code` VARCHAR(40) NOT NULL DEFAULT (UUID()),
+  `name` VARCHAR(20),
+  PRIMARY KEY(`owner`, `code`)
+) ENGINE=InnoDB;
+
+-- DATE/DATETIME composite pk: bound in the update/delete WHERE in the column's format (#41)
+CREATE TABLE dated_counts (
+  `day` DATE NOT NULL,
+  `at` DATETIME NOT NULL,
+  `hits` INT,
+  `seen_at` DATETIME,
+  PRIMARY KEY(`day`, `at`)
+) ENGINE=InnoDB;
+
 -- children of a composite-key has_many: (author_ref, parent_ref) -> authors (author_id, parent_author_id)
 CREATE TABLE composite_items (
   `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,

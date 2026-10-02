@@ -125,6 +125,32 @@ class Model
     private $__new_record = true;
 
     /**
+     * The primary key values (name => value) the row is stored under: those
+     * this record was loaded or reloaded with, or that its INSERT sent or read
+     * back. Null on a new record; a pk column missing here is untracked (e.g.
+     * filled by the database on insert). update()/delete() refuse a tracked pk
+     * changed since then (#41).
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $__persisted_pk = null;
+
+    /**
+     * Set by a delete() that ran its DELETE: save()/update_attribute(s)/delete() then
+     * throw. Cleared when the Model::transaction() scope of that delete rolls back, and
+     * by a reload() that finds the row again.
+     */
+    private bool $__destroyed = false;
+
+    /**
+     * The records deleted inside each open Model::transaction() scope, per connection
+     * (spl_object_id), innermost scope last.
+     *
+     * @var array<int, list<list<Model>>>
+     */
+    private static array $__deleted_in_transaction = [];
+
+    /**
      * Set to the name of the connection this {@link Model} should use.
      *
      * @var string
@@ -300,6 +326,11 @@ class Model
         // dirty if instantiating via find since nothing is really dirty when doing that
         if ($instantiating_via_find) {
             $this->__dirty = [];
+        }
+
+        if (!$new_record) {
+            // a find loads the row; built by hand, only the pk values passed in are known
+            $this->remember_persisted_pk($instantiating_via_find ? null : array_keys(array_filter($this->dirty_attributes() ?? [], fn($value) => null !== $value)));
         }
 
         $this->invoke_callback('after_construct', false);
@@ -500,6 +531,11 @@ class Model
     {
         // make sure the models Table instance gets initialized when waking up
         static::table();
+
+        // serialized before the pk was tracked: its current pk is the best record of the row
+        if (!$this->__new_record && null === $this->__persisted_pk) {
+            $this->remember_persisted_pk();
+        }
     }
 
     /**
@@ -947,6 +983,10 @@ class Model
             $table->insert($attributes);
         }
 
+        // the row is stored under the pk values this INSERT sent or reads back below; one
+        // the database filled itself (a column default, a trigger) is not known here
+        $stored = array_keys(array_filter($attributes, fn($value) => null !== $value));
+
         // if we've got an autoincrementing/sequenced pk set it
         // don't need this check until the day comes that we decide to support composite pks
         // if (count($pk) == 1)
@@ -955,10 +995,12 @@ class Model
 
             if (null !== $column && ($column->auto_increment || $use_sequence)) {
                 $this->attributes[$pk] = static::connection()->insert_id($table->sequence);
+                $stored[] = $pk;
             }
         }
 
         $this->__new_record = false;
+        $this->remember_persisted_pk($stored);
         $this->invoke_callback('after_create', false);
         return true;
     }
@@ -973,6 +1015,12 @@ class Model
     private function update($validate = true)
     {
         $this->verify_not_readonly('update');
+        $this->verify_not_destroyed('update');
+
+        // refused before validation, so no callback runs for a write that cannot land
+        if ($this->is_dirty()) {
+            $this->verify_pk_for_write('update');
+        }
 
         if ($validate && !$this->_validate()) {
             return false;
@@ -985,12 +1033,20 @@ class Model
                 throw new ActiveRecordException("Cannot update, no primary key defined for: " . get_called_class());
             }
 
+            // validation callbacks may have dirtied the record or touched its pk
+            $this->verify_pk_for_write('update');
+
             if (!$this->invoke_callback('before_update', false)) {
                 return false;
             }
 
             $dirty = $this->dirty_attributes();
             static::table()->update($dirty, $pk);
+            // the row is keyed on $pk, read before before_update: a pk that callback
+            // assigned was written by this UPDATE, so the row now lives under it
+            if (null !== $this->__persisted_pk) {
+                $this->remember_persisted_pk(array_keys($this->__persisted_pk));
+            }
             $this->invoke_callback('after_update', false);
         }
 
@@ -1125,6 +1181,7 @@ class Model
     public function delete()
     {
         $this->verify_not_readonly('delete');
+        $this->verify_not_destroyed('delete');
 
         $pk = $this->values_for_pk();
 
@@ -1132,14 +1189,141 @@ class Model
             throw new ActiveRecordException("Cannot delete, no primary key defined for: " . get_called_class());
         }
 
+        $this->verify_pk_for_write('delete');
+
         if (!$this->invoke_callback('before_destroy', false)) {
             return false;
         }
 
         static::table()->delete($pk);
+        $this->__destroyed = true;
+        $connection_id = spl_object_id(static::connection());
+
+        // inside a Model::transaction() scope: a rollback of it undoes the delete
+        if (!empty(self::$__deleted_in_transaction[$connection_id])) {
+            self::$__deleted_in_transaction[$connection_id][count(self::$__deleted_in_transaction[$connection_id]) - 1][] = $this;
+        }
         $this->invoke_callback('after_destroy', false);
 
         return true;
+    }
+
+    /**
+     * Refuses a write on a record whose row this object deleted: an UPDATE would
+     * match nothing (or a row inserted again under the same key) and report success.
+     *
+     * @param 'update'|'delete' $action
+     * @throws ActiveRecordException
+     */
+    private function verify_not_destroyed(string $action): void
+    {
+        if ($this->__destroyed) {
+            throw new ActiveRecordException(sprintf('Cannot %s, record has been deleted: %s', $action, static::class));
+        }
+    }
+
+    /**
+     * Refuses an UPDATE/DELETE whose WHERE, built from the current pk values,
+     * would miss this record's row (#41): a null pk value (`WHERE pk IS NULL`
+     * matches nothing) or, on a persisted record, a pk value changed since it
+     * was loaded/inserted/reloaded (the statement would target the row under
+     * the new value). Values are compared after the column cast, so 1 and '1'
+     * (or a value object and its string) are the same key. An untracked pk
+     * column is only checked for null; one not loaded at all (a `select`
+     * without it) is left to values_for_pk(), which reports it as before.
+     *
+     * @param 'update'|'delete' $action
+     * @throws ActiveRecordException
+     */
+    private function verify_pk_for_write(string $action): void
+    {
+        $persisted = $this->__new_record ? [] : ($this->__persisted_pk ?? []);
+        $null = [];
+        $changed = [];
+
+        foreach (static::table()->pk as $name) {
+            if (!array_key_exists($name, $this->attributes)) {
+                continue;
+            }
+
+            if (null === $this->attributes[$name]) {
+                $null[] = $name;
+                continue;
+            }
+
+            if (!array_key_exists($name, $persisted)) {
+                continue;
+            }
+
+            $was = $this->cast_pk_value($name, $persisted[$name]);
+            $now = $this->cast_pk_value($name, $this->attributes[$name]);
+            $same = $was instanceof \DateTimeInterface && $now instanceof \DateTimeInterface ? $was == $now : $was === $now;
+
+            if (!$same) {
+                $changed[] = sprintf('%s: %s => %s', $name, self::describe_pk_value($was), self::describe_pk_value($now));
+            }
+        }
+
+        if (!empty($null)) {
+            throw new ActiveRecordException(sprintf('Cannot %s, primary key value is null for: %s (%s)', $action, static::class, implode(', ', $null)));
+        }
+
+        if (!empty($changed)) {
+            throw new ActiveRecordException(sprintf('Cannot %s, primary key changed for: %s (%s)', $action, static::class, implode(', ', $changed)));
+        }
+    }
+
+    /**
+     * Records the current pk values as the ones the row is stored under.
+     *
+     * @param list<string>|null $stored only these pk columns (null: all), so a value
+     *   the row was never written or read with stays untracked
+     */
+    private function remember_persisted_pk(?array $stored = null): void
+    {
+        $this->__persisted_pk = [];
+
+        foreach (static::table()->pk as $name) {
+            if (array_key_exists($name, $this->attributes) && (null === $stored || in_array($name, $stored, true))) {
+                $value = $this->attributes[$name];
+                $this->__persisted_pk[$name] = match (true) {
+                    // modified in place: keep a copy of the stored value
+                    $value instanceof \DateTimeInterface => clone $value,
+                    // a value object (e.g. a UUID) is bound as its string
+                    $value instanceof \Stringable => (string) $value,
+                    default => $value,
+                };
+            }
+        }
+    }
+
+    /**
+     * Casts a pk value the way it reaches the database: a DateTime as is, a value
+     * object as the string PDO binds, then the column cast assign_attribute() applies.
+     */
+    private function cast_pk_value(string $name, mixed $value): mixed
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return $value;
+        }
+
+        if ($value instanceof \Stringable) {
+            $value = (string) $value;
+        }
+
+        $table = static::table();
+        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
+
+        return null === $column || is_object($value) ? $value : $column->cast($value, static::connection());
+    }
+
+    private static function describe_pk_value(mixed $value): string
+    {
+        return match (true) {
+            $value instanceof \DateTimeInterface => $value->format('Y-m-d H:i:s'),
+            null === $value || is_scalar($value) => var_export($value, true),
+            default => get_debug_type($value),
+        };
     }
 
     /**
@@ -1472,15 +1656,44 @@ class Model
     /**
      * Reloads the attributes and relationships of this object from the database.
      *
+     * A record this object deleted is writable again once reload() finds its row
+     * (inserted again); with the row gone it throws RecordNotFound.
+     *
      * @return Model
      */
     public function reload()
     {
         $this->__relationships = [];
-        $pk = array_values($this->get_values_for($this->get_primary_key()));
+        $pk = $this->get_values_for($this->get_primary_key());
 
-        $this->set_attributes_via_mass_assignment($this->find($pk)->attributes, false);
+        if (count($pk) > 1) {
+            // a find by pk looks a list of values up in the first pk column only: a
+            // composite key names its row by every column
+            $conditions = [];
+
+            foreach ($pk as $name => $value) {
+                $conditions[$name] = self::date_pk_finder_value($name, $value);
+            }
+
+            $found = static::find('first', ['conditions' => $conditions]);
+
+            if (null === $found) {
+                $values = array_map(fn($value) => match (true) {
+                    $value instanceof \DateTimeInterface => $value->format('Y-m-d H:i:s'),
+                    is_scalar($value) || null === $value || $value instanceof \Stringable => (string) $value,
+                    default => get_debug_type($value),
+                }, $pk);
+                throw new RecordNotFound("Couldn't find " . static::class . ' with ID=' . implode(',', $values));
+            }
+        } else {
+            $found = $this->find(array_values($pk));
+        }
+
+        $this->set_attributes_via_mass_assignment($found->attributes, false);
         $this->reset_dirty();
+        $this->remember_persisted_pk();
+        // the row exists (again): this object mirrors it like a fresh find
+        $this->__destroyed = false;
 
         return $this;
     }
@@ -1953,12 +2166,18 @@ class Model
      */
     public static function find_by_pk($values, $options)
     {
-        $options['conditions'] = static::pk_conditions($values);
+        $pk = static::table()->pk[0] ?? null;
+        $bound = null === $pk ? $values : (is_array($values)
+            ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
+            : self::date_pk_finder_value($pk, $values));
+        $options['conditions'] = static::pk_conditions($bound);
         $list = static::table()->find($options);
         $results = count($list);
 
         if ($results != ($expected = is_array($values) ? count($values) : 1)) {
             $class = get_called_class();
+            // a \DateTime or \DateTimeImmutable has no string form (ActiveRecord\DateTime keeps its own)
+            $values = is_array($values) ? array_map(self::describe_find_value(...), $values) : self::describe_find_value($values);
 
             if ($expected == 1) {
                 if (!is_array($values)) {
@@ -1972,6 +2191,30 @@ class Model
             throw new RecordNotFound("Couldn't find all $class with IDs ($values) (found $results, but was looking for $expected)");
         }
         return $expected == 1 ? $list[0] : $list;
+    }
+
+    private static function describe_find_value(mixed $value): mixed
+    {
+        return $value instanceof \DateTimeInterface && !$value instanceof \Stringable ? $value->format('Y-m-d H:i:s') : $value;
+    }
+
+    /**
+     * A DateTime for a DATE pk column, as the date the column stores (like process_data()
+     * does for an update/delete). A finder binds its values positionally, in the datetime
+     * format ('2026-01-02 00:00:00' or '2026-01-02 14:00:00'), which SQLite compares as
+     * text with the stored '2026-01-02' and MySQL/MariaDB compare as a datetime. Any other
+     * value, or a DateTime for another column type, is returned as is.
+     */
+    private static function date_pk_finder_value(string $name, mixed $value): mixed
+    {
+        if (!$value instanceof \DateTimeInterface) {
+            return $value;
+        }
+
+        $table = static::table();
+        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
+
+        return null !== $column && Column::DATE === $column->type ? static::connection()->date_to_string($value) : $value;
     }
 
     /**
@@ -2213,6 +2456,10 @@ class Model
      * SAVEPOINT, so the inner scope commits or rolls back on its own while
      * the real commit happens only at the outermost level.
      *
+     * A record deleted inside a scope that rolls back (its own or an enclosing
+     * one) is writable again, as if delete() had not run. A transaction opened
+     * on the connection directly does not do this; reload() the record instead.
+     *
      * @param Closure $closure The closure to execute. To cause a rollback have your closure return false or throw an exception.
      * @return boolean True if the transaction was committed, False if rolled back.
      */
@@ -2220,6 +2467,8 @@ class Model
     {
         $connection = static::connection();
         $connection->transaction();
+        self::$__deleted_in_transaction[spl_object_id($connection)][] = [];
+        $committed = false;
 
         try {
             if ($closure() === false) {
@@ -2227,13 +2476,38 @@ class Model
                 return false;
             }
             $connection->commit();
+            $committed = true;
         } catch (\Throwable $e) {
             if ($connection->inTransaction()) {
                 $connection->rollback();
             }
 
             throw $e;
+        } finally {
+            self::close_transaction_scope(spl_object_id($connection), $committed);
         }
         return true;
+    }
+
+    /**
+     * Ends the innermost Model::transaction() scope of a connection: the records deleted
+     * in a rolled-back scope are not deleted any more; those of a committed inner scope
+     * wait for the enclosing one, and those of the outermost stay deleted.
+     */
+    private static function close_transaction_scope(int $connection_id, bool $committed): void
+    {
+        $deleted = array_pop(self::$__deleted_in_transaction[$connection_id]) ?? [];
+
+        if (!$committed) {
+            foreach ($deleted as $record) {
+                $record->__destroyed = false;
+            }
+        } elseif (!empty(self::$__deleted_in_transaction[$connection_id])) {
+            array_push(self::$__deleted_in_transaction[$connection_id][count(self::$__deleted_in_transaction[$connection_id]) - 1], ...$deleted);
+        }
+
+        if (empty(self::$__deleted_in_transaction[$connection_id])) {
+            unset(self::$__deleted_in_transaction[$connection_id]);
+        }
     }
 };
