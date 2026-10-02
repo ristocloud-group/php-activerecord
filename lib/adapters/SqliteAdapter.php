@@ -88,6 +88,12 @@ class SqliteAdapter extends Connection
         return "$sql LIMIT {$offset}$limit";
     }
 
+    public function offset_without_limit(string $sql, int $offset): string
+    {
+        // SQLite needs a LIMIT before OFFSET; a negative LIMIT means no upper bound
+        return "$sql LIMIT -1 OFFSET $offset";
+    }
+
     public function query_column_info($table)
     {
         return $this->query("pragma table_info($table)");

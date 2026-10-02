@@ -26,6 +26,15 @@ out('find_by_name: ' . (Widget::find_by_name('Alpha')->name ?? '(none)'));
 out('find_all_by_category(gizmos): ' . count(Widget::find_all_by_category('gizmos')));
 out('find_by_category_and_in_stock: ' . (Widget::find_by_category_and_in_stock('gadgets', 1)->name ?? '(none)'));
 
+// A column whose own name contains _and_ / _or_ stays whole: the finder name is
+// split only into real column (or alias) names, preferring one name per value.
+// (Before #53 it was split at every _and_: "shipping=? AND handling IS NULL".)
+$free = Widget::find_all_by_shipping_and_handling(0);
+out('find_all_by_shipping_and_handling(0): ' . implode(', ', ActiveRecord\collect($free, 'name')));
+out('  SQL: ' . Widget::table()->last_sql);
+out('find_by_shipping_and_handling_and_category: ' . (Widget::find_by_shipping_and_handling_and_category(0, 'gizmos')->name ?? '(none)'));
+out('  SQL: ' . Widget::table()->last_sql);
+
 // Option set: conditions / order / limit / offset / select.
 $page = Widget::all([
     'select'     => 'name, price',
@@ -35,6 +44,17 @@ $page = Widget::all([
     'offset'     => 1,
 ]);
 out('page names: ' . implode(', ', ActiveRecord\collect($page, 'name')));
+
+// 'limit' => 0 is a real LIMIT 0 (a page of size 0 has no rows), and an 'offset'
+// without a 'limit' returns every row after the offset. (Before #34 the first
+// returned ALL rows and the second NONE: it rendered "LIMIT 2,0".)
+$none = Widget::all(['order' => 'id', 'limit' => 0]);
+out('limit 0: ' . count($none) . ' rows');
+out('  SQL: ' . Widget::table()->last_sql);
+out('count(limit 0): ' . Widget::count(['limit' => 0]));
+$rest = Widget::all(['order' => 'id', 'offset' => 2]);
+out('offset 2, no limit: ' . implode(', ', ActiveRecord\collect($rest, 'name')));
+out('  SQL: ' . Widget::table()->last_sql);
 
 // last() reverses the order: only each item's own trailing asc/desc is flipped
 // (an item without one gets DESC), so a column like "description" is left

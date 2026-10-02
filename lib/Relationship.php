@@ -260,7 +260,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
             }
         }
 
-        $conditions = SQLBuilder::create_conditions_from_underscored_string($conn, $query_key, $values, $qualified_keys) ?? [];
+        // the key column as a list: a column named e.g. black_and_white stays one column (#53)
+        $conditions = SQLBuilder::create_conditions_from_columns($conn, [$query_key], $values, $qualified_keys) ?? [];
 
         // Accept the hash form (GH #13): normalize it to the positional shape
         // before merging so the branch below (and add_condition) can consume it.
@@ -478,7 +479,6 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     protected function create_conditions_from_keys(Model $model, $condition_keys = [], $value_keys = [])
     {
-        $condition_string = implode('_and_', $condition_keys);
         $condition_values = array_values($model->get_values_for($value_keys));
 
         // return null if all the foreign key values are null so that we don't try to do a query like "id is null"
@@ -491,8 +491,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
         if (null === $model_conn) {
             throw new DatabaseException('No database connection established for ' . $model_table->class->getName());
         }
-        $qualified_keys = $this->qualified_keys;
-        $conditions = SQLBuilder::create_conditions_from_underscored_string($model_conn, $condition_string, $condition_values, $qualified_keys) ?? [];
+        // the key columns as a list: a column named e.g. black_and_white stays one column (#53)
+        $conditions = SQLBuilder::create_conditions_from_columns($model_conn, $condition_keys, $condition_values, $this->qualified_keys) ?? [];
 
         # add_condition() mutates its first argument by reference, so we must merge
         # into a *local* copy — never $this->options['conditions'] directly, or the
