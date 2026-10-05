@@ -303,7 +303,7 @@ class Table
     {
         $conn = $this->connection();
         $sql = $this->options_to_sql($options);
-        $values = $sql->get_where_values();
+        $values = $this->format_date_bind_values($sql->get_where_values());
         $this->last_sql = $conn->exists_sql($sql->to_s());
 
         return (bool) (int) $conn->query_and_fetch_one($this->last_sql, $values);
@@ -654,6 +654,25 @@ class Table
             $ret[$name] = $value;
         }
         return $ret;
+    }
+
+    /**
+     * Bind values with each \DateTime / \DateTimeImmutable formatted as process_data()
+     * formats it: in the connection's datetime format, or for a DATE column named by a
+     * string key, its date format. PDO cannot convert those objects to a string, so the
+     * paths that bound them raw threw an Error (#138). A Stringable date (ActiveRecord\DateTime)
+     * and every other value are returned unchanged: PDO binds those as before.
+     *
+     * @internal Serves exists(), Model::count(), update_all() and delete_all(); not a supported API.
+     * @template TKey of int|string
+     * @param array<TKey, mixed> $values
+     * @return array<TKey, mixed>
+     */
+    public function format_date_bind_values(array $values): array
+    {
+        $dates = array_filter($values, fn($value) => $value instanceof \DateTimeInterface && !$value instanceof \Stringable);
+
+        return [] === $dates ? $values : array_replace($values, $this->process_data($dates));
     }
 
     /**
