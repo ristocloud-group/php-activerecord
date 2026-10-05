@@ -55,4 +55,36 @@ class CacheTestIsolationTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_null(Cache::$adapter);
         $this->assert_same([], Cache::$options);
     }
+
+    public function test_cache_test_restores_the_state_when_the_cache_is_initialized_again_in_a_test()
+    {
+        Cache::$adapter = null;
+        Cache::$options = [];
+
+        $cache_test = new CacheTest('test_initialize');
+        $cache_test->set_up();
+        // a test body that initializes the cache again (another URL, or null)
+        Cache::initialize('memcache://' . (getenv('PHPAR_MEMCACHED') ?: 'localhost'));
+        Cache::initialize(null);
+        Cache::initialize('memcache://' . (getenv('PHPAR_MEMCACHED') ?: 'localhost'));
+        $cache_test->tear_down();
+
+        $this->assert_null(Cache::$adapter);
+        $this->assert_same([], Cache::$options);
+    }
+
+    public function test_cache_test_restores_the_original_state_when_set_up_runs_twice()
+    {
+        Cache::$adapter = null;
+        Cache::$options = [];
+
+        $cache_test = new CacheTest('test_initialize');
+        $cache_test->set_up();
+        $cache_test->set_up(); // initialized twice before tear_down()
+        $this->assert_not_null(Cache::$adapter, 'CacheTest::set_up() should initialize its own cache');
+        $cache_test->tear_down();
+
+        $this->assert_null(Cache::$adapter);
+        $this->assert_same([], Cache::$options);
+    }
 }

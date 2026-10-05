@@ -6,12 +6,18 @@ class CacheTest extends SnakeCase_PHPUnit_Framework_TestCase
 {
     private mixed $previous_adapter = null;
     private array $previous_options = [];
+    private bool $saved_previous_state = false;
 
     public function set_up()
     {
-        // Remember the cache state so tear_down() can restore it (#139).
-        $this->previous_adapter = Cache::$adapter;
-        $this->previous_options = Cache::$options;
+        // Remember the cache state so tear_down() can restore it (#139). Only the
+        // first set_up() before a tear_down() saves it: a repeated set_up() must not
+        // replace it with the cache this test itself initialized.
+        if (!$this->saved_previous_state) {
+            $this->previous_adapter = Cache::$adapter;
+            $this->previous_options = Cache::$options;
+            $this->saved_previous_state = true;
+        }
 
         if (!extension_loaded('memcached')) {
             $this->markTestSkipped('The memcache extension is not available');
@@ -27,6 +33,7 @@ class CacheTest extends SnakeCase_PHPUnit_Framework_TestCase
         Cache::flush();
         Cache::$adapter = $this->previous_adapter;
         Cache::$options = $this->previous_options;
+        $this->saved_previous_state = false;
     }
 
     private function cache_get()
