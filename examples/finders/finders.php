@@ -56,6 +56,25 @@ $rest = Widget::all(['order' => 'id', 'offset' => 2]);
 out('offset 2, no limit: ' . implode(', ', ActiveRecord\collect($rest, 'name')));
 out('  SQL: ' . Widget::table()->last_sql);
 
+// A DateTime / DateTimeImmutable / ActiveRecord\DateTime bind value works in
+// count(), exists(), delete_all() and update_all() as in all(): it is bound in
+// the connection's datetime format. (Before #138 those four threw "Error: Object
+// of class DateTimeImmutable could not be converted to string", and bound an
+// ActiveRecord\DateTime as its RFC 2822 text, e.g. 'Sun, 01 Mar 2026 ...'.)
+$cutoff = new DateTimeImmutable('2026-03-01');
+$stale = ['restocked_at < ?', $cutoff];
+out('restocked before 2026-03-01: all() ' . count(Widget::all(['conditions' => $stale]))
+    . ', count() ' . Widget::count(['conditions' => $stale])
+    . ', exists() ' . var_export(Widget::exists(['conditions' => $stale]), true));
+Widget::transaction(function () use ($stale): bool {
+    out('delete_all(stale): ' . Widget::delete_all(['conditions' => $stale]) . ' rows (rolled back)');
+    out('  SQL: ' . Widget::table()->last_sql);
+
+    return false;
+});
+$restocked = Widget::update_all(['set' => ['restocked_at' => new DateTime('2026-03-02 09:30:00')], 'conditions' => $stale]);
+out("update_all(set restocked_at, stale): $restocked rows -> stale now " . Widget::count(['conditions' => $stale]));
+
 // last() reverses the order: only each item's own trailing asc/desc is flipped
 // (an item without one gets DESC), so a column like "description" is left
 // intact. (Before #37 it became "ASCription" and the query failed.)
