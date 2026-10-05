@@ -14,6 +14,22 @@ use PHPUnit\Framework\Attributes\DataProvider;
  *   2026-01-01 | 2026-01-01 10:00:00 | 1 | null
  *   2026-01-02 | 2026-01-02 10:00:00 | 2 | null
  */
+// uniqueness of the DATETIME column `at` (pk day: "day != ? AND at = ?")
+class DateBindUniqueAt extends ActiveRecord\Model
+{
+    public static $table_name = 'dated_counts';
+    public static $primary_key = 'day';
+    public static $validates_uniqueness_of = [['at']];
+}
+
+// uniqueness of the DATE column `day` (pk at: "at != ? AND day = ?")
+class DateBindUniqueDay extends ActiveRecord\Model
+{
+    public static $table_name = 'dated_counts';
+    public static $primary_key = 'at';
+    public static $validates_uniqueness_of = [['day']];
+}
+
 class DateBindValuesTest extends DatabaseTest
 {
     /**
@@ -54,6 +70,8 @@ class DateBindValuesTest extends DatabaseTest
         $this->assert_false(DatedCount::exists(['conditions' => ['at < ?', $this->date($class, '2026-01-01')]]));
         $this->assert_true(DatedCount::exists(['at' => $this->date($class, '2026-01-02 10:00:00')]));
         $this->assert_false(DatedCount::exists(['at' => $this->date($class, '2026-01-02 11:00:00')]));
+        $this->assert_true(DatedCount::exists(['at' => [$this->date($class, '2026-01-03'), $this->date($class, '2026-01-02 10:00:00')]]));
+        $this->assert_false(DatedCount::exists(['conditions' => ['at IN(?)', [$this->date($class, '2026-01-03'), $this->date($class, '2026-01-04')]]]));
     }
 
     /**
@@ -106,6 +124,28 @@ class DateBindValuesTest extends DatabaseTest
     }
 
     /**
+     * @param class-string<\DateTimeInterface> $class
+     */
+    #[DataProvider('date_classes')]
+    public function test_update_all_binds_a_date_in_hash_and_in_conditions(string $class)
+    {
+        $this->assert_equals(1, DatedCount::update_all([
+            'set' => ['hits' => 10],
+            'conditions' => ['at' => $this->date($class, '2026-01-01 10:00:00')],
+        ]));
+        $this->assert_equals(2, DatedCount::update_all([
+            'set' => ['hits' => 20, 'seen_at' => $this->date($class, '2026-02-03 04:05:06')],
+            'conditions' => ['at' => [$this->date($class, '2026-01-01 10:00:00'), $this->date($class, '2026-01-02 10:00:00')]],
+        ]));
+        $this->assert_equals(0, DatedCount::update_all([
+            'set' => ['hits' => 30],
+            'conditions' => ['at IN(?)', [$this->date($class, '2026-01-03'), $this->date($class, '2026-01-04')]],
+        ]));
+        $this->assert_equals([20, 20], $this->hits());
+        $this->assert_equals(2, DatedCount::count(['conditions' => ['seen_at' => '2026-02-03 04:05:06']]));
+    }
+
+    /**
      * A DATE column in the 'set' hash is written as the date it stores, like save() writes
      * it (SQLite keeps the bound text as is, so a datetime string would not match a date).
      *
@@ -140,6 +180,17 @@ class DateBindValuesTest extends DatabaseTest
     }
 
     /**
+     * @param class-string<\DateTimeInterface> $class
+     */
+    #[DataProvider('date_classes')]
+    public function test_delete_all_binds_a_date_in_a_scalar_hash(string $class)
+    {
+        $this->assert_equals(0, DatedCount::delete_all(['conditions' => ['at' => $this->date($class, '2026-01-01 11:00:00')]]));
+        $this->assert_equals(1, DatedCount::delete_all(['conditions' => ['at' => $this->date($class, '2026-01-01 10:00:00')]]));
+        $this->assert_equals([2], $this->hits());
+    }
+
+    /**
      * An ActiveRecord\DateTime was bound as its __toString() text ('Fri, 02 Jan 2026 00:00:00 +0000'),
      * which SQLite compares as text: every stored '2026-...' sorts before 'F', so delete_all() of
      * the rows older than the date deleted them all (MySQL rejected the value instead).
@@ -167,6 +218,47 @@ class DateBindValuesTest extends DatabaseTest
         $row = DatedCount::connection()->query('SELECT day, seen_at FROM dated_counts WHERE hits = 2')->fetch(\PDO::FETCH_NUM);
         $this->assert_equals('2026-03-04', $row[0]);
         $this->assert_equals('2026-02-03 04:05:06', $row[1]);
+    }
+
+    /**
+     * validates_uniqueness_of binds the model's ActiveRecord\DateTime through exists(): before #138
+     * MySQL/MariaDB rejected its RFC 2822 text on every is_valid() and SQLite never found the
+     * duplicate. A DATETIME column now finds it on every adapter.
+     */
+    public function test_validates_uniqueness_of_a_datetime_column()
+    {
+        $duplicate = new DateBindUniqueAt(['day' => '2026-05-05', 'at' => '2026-01-01 10:00:00']);
+        $this->assert_instance_of(ActiveRecord\DateTime::class, $duplicate->at);
+        $this->assert_false($duplicate->is_valid());
+        $this->assert_true($duplicate->errors->is_invalid('at'));
+
+        $this->assert_true((new DateBindUniqueAt(['day' => '2026-05-05', 'at' => '2026-01-01 11:00:00']))->is_valid());
+    }
+
+    /**
+     * A DATE column's value is bound in the datetime format, as the finders bind a condition
+     * ('2026-01-01 00:00:00'): MySQL/MariaDB/Postgres compare it as a date and find the duplicate;
+     * SQLite compares it as text with the stored '2026-01-01' and does not (as before #138, and as
+     * find_by_day() with an ActiveRecord\DateTime does). Pinned, not fixed here.
+     */
+    public function test_validates_uniqueness_of_a_date_column()
+    {
+        $duplicate = new DateBindUniqueDay(['day' => '2026-01-01', 'at' => '2026-09-09 09:00:00']);
+        $this->assert_instance_of(ActiveRecord\DateTime::class, $duplicate->day);
+
+        $this->assert_equals('sqlite' !== $this->conn->protocol, !$duplicate->is_valid());
+        $this->assert_true((new DateBindUniqueDay(['day' => '2026-01-05', 'at' => '2026-09-09 09:00:00']))->is_valid());
+    }
+
+    /**
+     * count_by_*() goes through count(): an ActiveRecord\DateTime is bound in the datetime format
+     * (before #138: a DatabaseException on MySQL/MariaDB, 0 on SQLite).
+     */
+    public function test_count_by_with_an_ar_datetime()
+    {
+        $this->assert_equals(1, DatedCount::count_by_at(new ActiveRecord\DateTime('2026-01-02 10:00:00')));
+        $this->assert_equals(0, DatedCount::count_by_at(new ActiveRecord\DateTime('2026-01-02 11:00:00')));
+        $this->assert_equals(1, DatedCount::count_by_at_and_hits(new ActiveRecord\DateTime('2026-01-01 10:00:00'), 1));
     }
 
     public function test_non_date_values_still_bind_as_given()

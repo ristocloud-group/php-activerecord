@@ -56,10 +56,11 @@ $rest = Widget::all(['order' => 'id', 'offset' => 2]);
 out('offset 2, no limit: ' . implode(', ', ActiveRecord\collect($rest, 'name')));
 out('  SQL: ' . Widget::table()->last_sql);
 
-// A DateTime / DateTimeImmutable bind value works in count(), exists(),
-// delete_all() and update_all() as in all(): it is bound in the connection's
-// datetime format. (Before #138 those four threw "Error: Object of class
-// DateTimeImmutable could not be converted to string".)
+// A DateTime / DateTimeImmutable / ActiveRecord\DateTime bind value works in
+// count(), exists(), delete_all() and update_all() as in all(): it is bound in
+// the connection's datetime format. (Before #138 those four threw "Error: Object
+// of class DateTimeImmutable could not be converted to string", and bound an
+// ActiveRecord\DateTime as its RFC 2822 text, e.g. 'Sun, 01 Mar 2026 ...'.)
 $cutoff = new DateTimeImmutable('2026-03-01');
 $stale = ['restocked_at < ?', $cutoff];
 out('restocked before 2026-03-01: all() ' . count(Widget::all(['conditions' => $stale]))
