@@ -657,11 +657,12 @@ class Table
     }
 
     /**
-     * Bind values with each \DateTime / \DateTimeImmutable formatted as process_data()
-     * formats it: in the connection's datetime format, or for a DATE column named by a
-     * string key, its date format. PDO cannot convert those objects to a string, so the
-     * paths that bound them raw threw an Error (#138). A Stringable date (ActiveRecord\DateTime)
-     * and every other value are returned unchanged: PDO binds those as before.
+     * Bind values with each \DateTimeInterface (\DateTime, \DateTimeImmutable, ActiveRecord\DateTime)
+     * formatted as process_data() formats it for the finders: in the connection's datetime format,
+     * or for a DATE column named by a string key, its date format. The paths that bound them raw
+     * threw an Error for a native date, and bound an ActiveRecord\DateTime as its __toString()
+     * text (RFC 2822 by default), which MySQL rejects and SQLite compares as text (#138).
+     * Every other value is returned unchanged.
      *
      * @internal Serves exists(), Model::count(), update_all() and delete_all(); not a supported API.
      * @template TKey of int|string
@@ -670,7 +671,7 @@ class Table
      */
     public function format_date_bind_values(array $values): array
     {
-        $dates = array_filter($values, fn($value) => $value instanceof \DateTimeInterface && !$value instanceof \Stringable);
+        $dates = array_filter($values, fn($value) => $value instanceof \DateTimeInterface);
 
         return [] === $dates ? $values : array_replace($values, $this->process_data($dates));
     }
