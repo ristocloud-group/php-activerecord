@@ -571,13 +571,58 @@ abstract class Connection
     /**
      * Quote a name like table names and field names.
      *
+     * The result is always identifiers, never raw SQL (#64):
+     *
+     * - A name that contains the quote character and is a dotted name (see
+     *   {@see split_name_parts()}) is rendered part by part: a quoted part as is,
+     *   a bare part wrapped. So `t`, `db`.`t` and `a``b` are returned unchanged, and
+     *   a partly quoted name such as `db`.t or db.`t` becomes `db`.`t`.
+     * - Anything else is wrapped in the quote character with every embedded quote
+     *   character doubled: exactly one identifier. A name without a quote character
+     *   is never split on dots: 'db.t' is the single identifier `db.t`.
+     *
      * @param string $string String to quote.
      * @return string
      */
     public function quote_name($string)
     {
-        return $string[0] === static::$QUOTE_CHARACTER || $string[strlen($string) - 1] === static::$QUOTE_CHARACTER
-            ? $string : static::$QUOTE_CHARACTER . $string . static::$QUOTE_CHARACTER;
+        $q = static::$QUOTE_CHARACTER;
+        $string = (string) $string;
+
+        if (str_contains($string, $q) && null !== ($parts = self::split_name_parts($string, $q))) {
+            return implode('.', array_map(fn(array $part) => $part[1] ? $part[0] : $q . $part[0] . $q, $parts));
+        }
+
+        return $q . str_replace($q, $q . $q, $string) . $q;
+    }
+
+    /**
+     * The parts of a dotted name, or null when $name is not one. The grammar, with Q
+     * the quote character $q:
+     *
+     *     name   := part ( '.' part )*
+     *     part   := quoted | bare
+     *     quoted := Q ( any character but Q | Q Q )+ Q     (an embedded Q doubled)
+     *     bare   := one or more characters, none of them Q or '.'
+     *
+     * Each part is [its text, whether it is quoted]. A bare part can never close a
+     * quote, so wrapping it in Q always gives one identifier.
+     *
+     * @internal Serves quote_name() and SQLBuilder; not a supported API.
+     * @return list<array{0: string, 1: bool}>|null
+     */
+    public static function split_name_parts(string $name, string $q): ?array
+    {
+        $quote = preg_quote($q, '/');
+        $part = "{$quote}(?:[^{$quote}]|{$quote}{$quote})+{$quote}|[^{$quote}.]+";
+
+        if (1 !== preg_match("/\\A(?:{$part})(?:\\.(?:{$part}))*\\z/", $name)) {
+            return null;
+        }
+
+        preg_match_all("/\\G({$part})(?:\\.|\\z)/", $name, $matches);
+
+        return array_map(fn(string $part) => [$part, $q === $part[0]], $matches[1]);
     }
 
     /**

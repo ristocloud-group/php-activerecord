@@ -162,7 +162,7 @@ class RelationshipConditionsPrecedenceTest extends DatabaseTest
     public function test_has_many_through_or_condition_does_not_load_other_owners_rows()
     {
         $this->assert_equals([2], $this->ids(PrecedenceVenueOrHosts::find(2)->hosts));
-        $this->assert_sql_has("WHERE (events.title = 'Blah' OR events.title = 'Yeah Yeah Yeahs') AND venue_id=?", Table::load('Host')->last_sql);
+        $this->assert_sql_has("WHERE (events.title = 'Blah' OR events.title = 'Yeah Yeah Yeahs') AND events.venue_id=?", Table::load('Host')->last_sql);
     }
 
     public function test_composite_keys_or_condition_does_not_load_other_owners_rows()
@@ -205,6 +205,6 @@ class RelationshipConditionsPrecedenceTest extends DatabaseTest
 
         $this->assert_equals([], $this->ids($venues[0]->hosts));
         $this->assert_equals([2], $this->ids($venues[1]->hosts));
-        $this->assert_sql_has("WHERE (events.title = 'Blah' OR events.title = 'Yeah Yeah Yeahs') AND venue_id IN(?,?)", Table::load('Host')->last_sql);
+        $this->assert_sql_has("WHERE (events.title = 'Blah' OR events.title = 'Yeah Yeah Yeahs') AND events.venue_id IN(?,?)", Table::load('Host')->last_sql);
     }
 }

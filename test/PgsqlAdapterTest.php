@@ -71,6 +71,44 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_same(false, $columns['is_retired']->default);
     }
 
+    public function test_eager_reverse_fk_through_keeps_a_target_column_that_differs_in_case_or_has_a_long_name()
+    {
+        $c = $this->conn;
+        $drop = fn() => $c->query('DROP TABLE IF EXISTS t29_ltgts, t29_lmids, t29_tgts, t29_mids, t29_owners');
+        $drop();
+
+        try {
+            $c->query('CREATE TABLE t29_owners (id int PRIMARY KEY)');
+            $c->query('CREATE TABLE t29_mids (id int PRIMARY KEY, owner_ref int)');
+            $c->query('CREATE TABLE t29_tgts (id int PRIMARY KEY, mid_id int, "Owner_Ref" int)');
+            $c->query("CREATE TABLE t29_lmids (id int PRIMARY KEY, owner_reference_column_with_a_deliberately_long_name_x int)");
+            $c->query("CREATE TABLE t29_ltgts (id int PRIMARY KEY, lmid_id int, owner_reference_column_with_a_deliberately_long_name_x int)");
+            $c->query('INSERT INTO t29_owners VALUES (1), (2)');
+            $c->query('INSERT INTO t29_mids VALUES (10, 1), (20, 2)');
+            $c->query('INSERT INTO t29_tgts VALUES (100, 10, 7), (200, 20, 8)');
+            $c->query('INSERT INTO t29_lmids VALUES (10, 1), (20, 2)');
+            $c->query('INSERT INTO t29_ltgts VALUES (100, 10, 7), (200, 20, 8)');
+            ActiveRecord\Table::clear_cache();
+
+            // "Owner_Ref" is fetched as owner_ref (PDO lower-cases names), like the middle key
+            $lazy = T29Owner::find(1)->t29_tgts;
+            $eager = T29Owner::all(['include' => ['t29_tgts'], 'order' => 'id']);
+            $this->assert_equals([100], array_map(fn($t) => $t->id, $lazy));
+            $this->assert_equals([[100], [200]], array_map(fn($o) => array_map(fn($t) => $t->id, $o->t29_tgts), $eager));
+            $this->assert_equals(7, $lazy[0]->owner_ref);
+            $this->assert_equals(7, $eager[0]->t29_tgts[0]->owner_ref);
+
+            // a 54-byte owner key: the private alias stays within 63 bytes (no truncation)
+            $eager = T29LOwner::all(['include' => ['t29_ltgts'], 'order' => 'id']);
+            $this->assert_equals([[100], [200]], array_map(fn($o) => array_map(fn($t) => $t->id, $o->t29_ltgts), $eager));
+            $this->assert_equals(7, $eager[0]->t29_ltgts[0]->owner_reference_column_with_a_deliberately_long_name_x);
+            $this->assert_equals(7, T29LOwner::find(1)->t29_ltgts[0]->owner_reference_column_with_a_deliberately_long_name_x);
+        } finally {
+            $drop();
+            ActiveRecord\Table::clear_cache();
+        }
+    }
+
     public function test_table_without_primary_key_infers_no_sequence()
     {
         // rm-bldg has no primary key, so there is no pk column to derive a

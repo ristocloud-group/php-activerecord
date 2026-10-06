@@ -514,13 +514,503 @@ abstract class AdapterTest extends DatabaseTest
     {
         $c = $this->conn;
         $q = $c::$QUOTE_CHARACTER;
-        $qn = function ($s) use ($c) {
-            return $c->quote_name($s);
-        };
 
-        $this->assert_equals("{$q}string", $qn("{$q}string"));
-        $this->assert_equals("string{$q}", $qn("string{$q}"));
-        $this->assert_equals("{$q}string{$q}", $qn("{$q}string{$q}"));
+        // only a correctly quoted name passes through (#64); a half-quoted one
+        // is no longer trusted: it is wrapped, its quote char doubled
+        $this->assert_equals("{$q}string{$q}", $c->quote_name("{$q}string{$q}"));
+        $this->assert_equals("{$q}{$q}{$q}string{$q}", $c->quote_name("{$q}string"));
+        $this->assert_equals("{$q}string{$q}{$q}{$q}", $c->quote_name("string{$q}"));
+    }
+
+    public function test_quote_name_wraps_a_plain_name()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        $this->assert_equals("{$q}name{$q}", $c->quote_name('name'));
+        $this->assert_equals("{$q}with space{$q}", $c->quote_name('with space'));
+        // quote_name() never splits on dots (#35 splits hash-condition keys only)
+        $this->assert_equals("{$q}db.t{$q}", $c->quote_name('db.t'));
+    }
+
+    public function test_quote_name_keeps_dotted_quoted_names()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        foreach (["{$q}db{$q}.{$q}t{$q}", "{$q}db{$q}.{$q}t{$q}.{$q}c{$q}", "{$q}a.b{$q}"] as $name) {
+            $this->assert_equals($name, $c->quote_name($name));
+        }
+    }
+
+    public function test_quote_name_doubles_embedded_quote_chars()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        $this->assert_equals("{$q}evil{$q}{$q}name{$q}", $c->quote_name("evil{$q}name"));
+        $this->assert_equals("{$q}foo{$q}{$q}{$q}", $c->quote_name("foo{$q}"));
+        // not a dotted name: an inner-quoted one is one identifier
+        $this->assert_equals("{$q}db{$q}{$q}.{$q}{$q}t{$q}", $c->quote_name("db{$q}.{$q}t"));
+    }
+
+    public function test_quote_name_quotes_a_partly_quoted_dotted_name_part_by_part()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        // quoted parts as they are, bare parts (no quote char, no dot) wrapped
+        foreach ([
+            "{$q}db{$q}.t" => "{$q}db{$q}.{$q}t{$q}",
+            "db.{$q}t{$q}" => "{$q}db{$q}.{$q}t{$q}",
+            "{$q}db{$q}.t.{$q}c{$q}" => "{$q}db{$q}.{$q}t{$q}.{$q}c{$q}",
+            "{$q}a.b{$q}.c d" => "{$q}a.b{$q}.{$q}c d{$q}",
+            "{$q}a{$q}{$q}b{$q}.c" => "{$q}a{$q}{$q}b{$q}.{$q}c{$q}",
+        ] as $name => $quoted) {
+            $this->assert_equals($quoted, $c->quote_name($name), $name);
+        }
+
+        // any other shape stays one identifier, every quote char doubled
+        foreach ([
+            "{$q}db{$q}.t{$q}" => "{$q}{$q}{$q}db{$q}{$q}.t{$q}{$q}{$q}",
+            "{$q}db{$q}." => "{$q}{$q}{$q}db{$q}{$q}.{$q}",
+            ".{$q}t{$q}" => "{$q}.{$q}{$q}t{$q}{$q}{$q}",
+            "{$q}db{$q}..t" => "{$q}{$q}{$q}db{$q}{$q}..t{$q}",
+            "{$q}a{$q} OR 1=1.t" => "{$q}{$q}{$q}a{$q}{$q} OR 1=1.t{$q}",
+            "{$q}{$q}.t" => "{$q}{$q}{$q}{$q}{$q}.t{$q}",
+        ] as $name => $quoted) {
+            $this->assert_equals($quoted, $c->quote_name($name), $name);
+        }
+    }
+
+    public function test_partly_quoted_db_qualified_table_name_works()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        if ($c instanceof ActiveRecord\SqliteAdapter) {
+            // SQLite cannot introspect a schema-qualified table (pragma table_info): the rendering only
+            $this->assert_equals("{$q}main{$q}.{$q}authors{$q}", $c->quote_name("{$q}main{$q}.authors"));
+
+            return;
+        }
+
+        $db = $c instanceof ActiveRecord\PgsqlAdapter ? 'public' : (string) $c->query('SELECT DATABASE()')->fetchColumn();
+        MixedQuotedTableAuthor::$table_name = "{$q}{$db}{$q}.authors";
+        ActiveRecord\Table::clear_cache('MixedQuotedTableAuthor');
+
+        try {
+            $this->assert_equals(4, MixedQuotedTableAuthor::count());
+            $this->assert_equals('Tito', MixedQuotedTableAuthor::find(1)->name);
+            $this->assert_sql_has_exact("FROM {$q}{$db}{$q}.{$q}authors{$q} WHERE", MixedQuotedTableAuthor::table()->last_sql);
+            $this->assert_equals([1], array_map(fn($a) => $a->author_id, MixedQuotedTableAuthor::all(['conditions' => ["{$q}authors{$q}.name" => 'Tito']])));
+
+            if (!($c instanceof ActiveRecord\PgsqlAdapter)) {
+                // MySQL/MariaDB introspect it as before, so it can be saved
+                $author = MixedQuotedTableAuthor::find(1);
+                $author->name = 'Tito Two';
+                $author->save();
+                $this->assert_equals('Tito Two', Author::find(1)->name);
+            }
+        } finally {
+            MixedQuotedTableAuthor::$table_name = 'authors';
+            ActiveRecord\Table::clear_cache('MixedQuotedTableAuthor');
+        }
+    }
+
+    public function test_hash_condition_keys_with_mixed_quoting()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        foreach (["{$q}authors{$q}.name", "authors.{$q}name{$q}"] as $key) {
+            $this->assert_equals([1], array_map(fn($a) => $a->author_id, Author::all(['conditions' => [$key => 'Tito']])), $key);
+            $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+
+            // already qualified: joins do not prefix it
+            $this->assert_equals([1], array_map(fn($a) => $a->author_id, Author::all(['joins' => ['books'], 'conditions' => [$key => 'Tito']])), $key);
+            $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+        }
+    }
+
+    public function test_quote_name_keeps_doubled_quote_inside_quoted_identifier()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        foreach (["{$q}a{$q}{$q}b{$q}", "{$q}a{$q}{$q}b{$q}.{$q}c{$q}", "{$q}{$q}{$q}{$q}"] as $name) {
+            $this->assert_equals($name, $c->quote_name($name));
+        }
+    }
+
+    public function test_quote_name_of_empty_string_has_no_warning()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+        $warnings = [];
+
+        set_error_handler(function ($errno, $errstr) use (&$warnings) {
+            $warnings[] = $errstr;
+            return true;
+        });
+
+        try {
+            $quoted = $c->quote_name('');
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assert_equals([], $warnings);
+        $this->assert_equals("{$q}{$q}", $quoted);
+    }
+
+    public function test_identifier_containing_the_quote_char_works_end_to_end()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        foreach (["evil{$q}name", "foo{$q}", "{$q}foo"] as $alias) {
+            $row = $this->conn->query('SELECT 1 AS ' . $this->conn->quote_name($alias))->fetch(PDO::FETCH_ASSOC);
+            $this->assert_equals([$alias], array_keys($row));
+        }
+    }
+
+    public function test_hash_condition_key_cannot_inject_sql()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $key = "author_id{$q} IS NOT NULL OR {$q}author_id";
+
+        // used to render `author_id` IS NOT NULL OR `author_id`=? and return every author
+        $this->assert_hash_condition_fails(Author::class, ['conditions' => [$key => 999]]);
+        $this->assert_sql_has_exact("WHERE {$q}author_id{$q}{$q} IS NOT NULL OR {$q}{$q}author_id{$q}=?", Author::table()->last_sql);
+
+        // the joins path prefixes the base table to the key
+        $key = "parent_author_id{$q} IS NOT NULL OR {$q}parent_author_id";
+        $this->assert_hash_condition_fails(Author::class, ['joins' => ['books'], 'conditions' => [$key => 999]]);
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}parent_author_id{$q}{$q} IS NOT NULL OR {$q}{$q}parent_author_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_hash_condition_expression_key_is_a_single_identifier()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // an SQL expression wrapped in quote chars only ever worked through the
+        // bypass; it is now one (unknown) identifier, i.e. an error (#64)
+        $this->assert_hash_condition_fails(Author::class, ['conditions' => ["{$q}author_id{$q} + {$q}parent_author_id{$q}" => 4]]);
+        $this->assert_sql_has_exact("WHERE {$q}{$q}{$q}author_id{$q}{$q} + {$q}{$q}parent_author_id{$q}{$q}{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_update_all_set_key_cannot_inject_sql()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        try {
+            Author::update_all(['set' => ["parent_author_id{$q} = 99, {$q}name" => 'x'], 'conditions' => ['author_id' => 1]]);
+            $this->fail('the crafted set key must not reach the database as SQL');
+        } catch (ActiveRecord\DatabaseException) {
+        }
+
+        $this->assert_equals(0, Author::count(['conditions' => ['parent_author_id' => 99]]));
+    }
+
+    public function test_hash_condition_with_table_qualified_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $authors = Author::all(['conditions' => ['authors.author_id' => 1]]);
+
+        $this->assert_equals(['Tito'], array_map(fn($author) => $author->name, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}author_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_hash_condition_with_qualified_key_of_joined_table()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $authors = Author::all(['joins' => ['books'], 'conditions' => ['books.name' => 'Another Book']]);
+
+        $this->assert_equals([2], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_hash_condition_with_qualified_base_table_key_and_joins()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // neither an unquoted nor a pre-quoted qualified key gets the base table prepended
+        $authors = Author::all(['joins' => ['books'], 'conditions' => [
+            'authors.name' => 'Tito',
+            "{$q}books{$q}.{$q}book_id{$q}" => 1,
+        ]]);
+
+        $this->assert_equals([1], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=? AND {$q}books{$q}.{$q}book_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_unqualified_hash_key_with_joins_still_gets_the_base_table()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // `name` exists in both tables: the base table is prepended, as before
+        $authors = Author::all(['joins' => ['books'], 'conditions' => ['name' => 'Tito']]);
+
+        $this->assert_equals([1], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_qualified_hash_key_in_list_with_null()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $authors = Author::all(['conditions' => ['authors.parent_author_id' => [3, null]]]);
+        $this->assert_equals([1], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE ({$q}authors{$q}.{$q}parent_author_id{$q} IN(?) OR {$q}authors{$q}.{$q}parent_author_id{$q} IS NULL)", Author::table()->last_sql);
+
+        $authors = Author::all(['joins' => ['books'], 'conditions' => ['books.name' => ['Another Book', null]]]);
+        $this->assert_equals([2], array_map(fn($author) => $author->author_id, $authors));
+        $this->assert_sql_has_exact("WHERE ({$q}books{$q}.{$q}name{$q} IN(?) OR {$q}books{$q}.{$q}name{$q} IS NULL)", Author::table()->last_sql);
+    }
+
+    public function test_relationship_hash_condition_with_qualified_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $condition = "{$q}authors{$q}.{$q}name{$q}=?";
+
+        // lazy load (create_conditions_from_keys)
+        $this->assert_equals('Tito', QualifiedConditionBook::find(1)->author->name);
+        $this->assert_sql_has_exact($condition, Author::table()->last_sql);
+        $this->assert_null(QualifiedConditionBook::find(2)->author);
+
+        // eager load (query_and_attach_related_models_eagerly)
+        $books = QualifiedConditionBook::all(['include' => ['author'], 'order' => 'book_id']);
+        $this->assert_equals('Tito', $books[0]->author->name);
+        $this->assert_null($books[1]->author);
+        $this->assert_sql_has_exact($condition, Author::table()->last_sql);
+    }
+
+    public function test_qualified_hash_key_parts_are_quoted_as_identifiers()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // each dot-separated part is one identifier, never raw SQL
+        $this->assert_hash_condition_fails(Author::class, ['conditions' => ['authors.author_id IS NOT NULL OR authors.author_id' => 999]]);
+        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}author_id IS NOT NULL OR authors{$q}.{$q}author_id{$q}=?", Author::table()->last_sql);
+    }
+
+    public function test_joins_prefix_only_unqualified_hash_keys()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $joins = 'INNER JOIN books ON(books.author_id = authors.author_id)';
+
+        $sql = new ActiveRecord\SQLBuilder($this->conn, "{$q}authors{$q}");
+        $sql->joins($joins);
+        $sql->where(['id' => 1, "{$q}name{$q}" => 2, "{$q}a.b{$q}" => 3, 'books.name' => 4, "{$q}books{$q}.{$q}book_id{$q}" => 5]);
+        $this->assert_equals(
+            "SELECT * FROM {$q}authors{$q} $joins WHERE {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}name{$q}=?"
+            . " AND {$q}authors{$q}.{$q}a.b{$q}=? AND {$q}books{$q}.{$q}name{$q}=? AND {$q}books{$q}.{$q}book_id{$q}=?",
+            $sql->to_s()
+        );
+
+        // a db-qualified base table is prefixed as before
+        $sql = new ActiveRecord\SQLBuilder($this->conn, "{$q}db{$q}.{$q}authors{$q}");
+        $sql->joins($joins);
+        $sql->where(['id' => 1]);
+        $this->assert_equals("SELECT * FROM {$q}db{$q}.{$q}authors{$q} $joins WHERE {$q}db{$q}.{$q}authors{$q}.{$q}id{$q}=?", $sql->to_s());
+    }
+
+    public function test_delete_all_with_table_qualified_hash_key()
+    {
+        Author::delete_all(['conditions' => ['authors.author_id' => 4]]);
+
+        $this->assert_equals(0, Author::count(['conditions' => ['author_id' => 4]]));
+        $this->assert_equals(3, Author::count());
+    }
+
+    public function test_joins_keep_every_hash_key_naming_the_same_column()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // a mandatory scope plus a second key on the same column, spelled another way:
+        // with joins both stay ANDed, exactly as without joins. On master the pre-quoted
+        // `author_id` collapsed with author_id into the last key (the scope was overridden);
+        // the qualified spellings rendered `books`.`books`.`author_id` and failed.
+        foreach (["{$q}author_id{$q}", "{$q}books{$q}.{$q}author_id{$q}", 'books.author_id'] as $key) {
+            $conditions = ['author_id' => 1, $key => 2];
+
+            $this->assert_equals([], Book::all(['conditions' => $conditions]), $key);
+            $this->assert_equals([], Book::all(['joins' => ['author'], 'conditions' => $conditions]), $key);
+        }
+
+        Book::all(['joins' => ['author'], 'conditions' => ['author_id' => 1, "{$q}author_id{$q}" => 2]]);
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}author_id{$q}=?", Book::table()->last_sql);
+    }
+
+    public function test_joins_keep_bind_values_aligned_for_keys_naming_the_same_column()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $conditions = [
+            'author_id' => [1, 2],
+            "{$q}author_id{$q}" => 2,
+            'name' => 'Another Book',
+            "{$q}books{$q}.{$q}author_id{$q}" => [2, null],
+        ];
+
+        $this->assert_equals([2], array_map(fn($book) => $book->book_id, Book::all(['conditions' => $conditions])));
+        $this->assert_equals([2], array_map(fn($book) => $book->book_id, Book::all(['joins' => ['author'], 'conditions' => $conditions])));
+        $this->assert_sql_has_exact(
+            "WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?) AND {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}name{$q}=?"
+            . " AND ({$q}books{$q}.{$q}author_id{$q} IN(?) OR {$q}books{$q}.{$q}author_id{$q} IS NULL)",
+            Book::table()->last_sql
+        );
+    }
+
+    public function test_joins_render_keys_naming_the_same_column_in_order()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $joins = 'INNER JOIN books ON(books.author_id = authors.author_id)';
+
+        $sql = new ActiveRecord\SQLBuilder($this->conn, "{$q}authors{$q}");
+        $sql->joins($joins);
+        $sql->where(['id' => 1, 'name' => 'x', "{$q}id{$q}" => 2, "{$q}authors{$q}.{$q}id{$q}" => 3, 'authors.id' => 4]);
+
+        $this->assert_equals(
+            "SELECT * FROM {$q}authors{$q} $joins WHERE {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}name{$q}=?"
+            . " AND {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}id{$q}=? AND {$q}authors{$q}.{$q}id{$q}=?",
+            $sql->to_s()
+        );
+        $this->assert_equals([1, 'x', 2, 3, 4], $sql->bind_values());
+    }
+
+    public function test_alias_key_and_its_column_are_both_kept_in_hash_conditions()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $ids = fn(array $venues) => array_values(array_unique(array_map(fn($v) => $v->id, $venues)));
+
+        // a scope on the column plus a filter on its alias_attribute name (marquee => name):
+        // both stay ANDed, in either order, with and without joins (the alias used to
+        // replace the column's condition, so 'Blender…' came back)
+        foreach ([['name' => 'Warner Theatre', 'marquee' => 'Blender Theater at Gramercy'], ['marquee' => 'Blender Theater at Gramercy', 'name' => 'Warner Theatre']] as $conditions) {
+            $this->assert_equals([], Venue::all(['conditions' => $conditions]));
+            $this->assert_equals([], Venue::all(['joins' => ['events'], 'conditions' => $conditions]));
+            $this->assert_null(Venue::first(['conditions' => $conditions]));
+        }
+
+        Venue::all(['conditions' => ['name' => 'Warner Theatre', 'marquee' => 'x']]);
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=? AND {$q}name{$q}=?", Venue::table()->last_sql);
+        Venue::all(['joins' => ['events'], 'conditions' => ['name' => 'Warner Theatre', 'marquee' => 'x']]);
+        $this->assert_sql_has_exact("WHERE {$q}venues{$q}.{$q}name{$q}=? AND {$q}venues{$q}.{$q}name{$q}=?", Venue::table()->last_sql);
+
+        // with (A)'s spellings of the same column, and the bind values aligned
+        $conditions = ['name' => ['Warner Theatre', 'x'], "{$q}name{$q}" => 'Warner Theatre', 'marquee' => ['Warner Theatre', null], 'venues.name' => 'Warner Theatre', 'mycity' => 'Washington'];
+        $this->assert_equals([2], $ids(Venue::all(['conditions' => $conditions])));
+        $this->assert_equals([2], $ids(Venue::all(['joins' => ['events'], 'conditions' => $conditions])));
+        $this->assert_sql_has_exact(
+            "WHERE {$q}venues{$q}.{$q}name{$q} IN(?,?) AND {$q}venues{$q}.{$q}name{$q}=? AND ({$q}venues{$q}.{$q}name{$q} IN(?) OR {$q}venues{$q}.{$q}name{$q} IS NULL)"
+            . " AND {$q}venues{$q}.{$q}name{$q}=? AND {$q}venues{$q}.{$q}city{$q}=?",
+            Venue::table()->last_sql
+        );
+    }
+
+    public function test_alias_key_without_its_column_renders_as_before()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $this->assert_equals([2], array_map(fn($v) => $v->id, Venue::all(['conditions' => ['marquee' => 'Warner Theatre', 'mycity' => 'Washington']])));
+        $this->assert_sql_has_exact("WHERE {$q}name{$q}=? AND {$q}city{$q}=?", Venue::table()->last_sql);
+    }
+
+    public function test_reverse_fk_through_qualifies_the_owner_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $ids = fn(array $people) => array_map(fn($p) => $p->id, $people);
+
+        // awesome_people (the target) has its own author_id: the unqualified owner key used
+        // to be ambiguous. Make it differ from the book's author, so that only books.author_id
+        // gives these results.
+        AwesomePerson::update_all(['set' => ['author_id' => 3], 'conditions' => ['id' => 1]]);
+
+        $this->assert_equals([1], $ids(ThroughFkAuthor::find(1)->awesome_people));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=?", AwesomePerson::table()->last_sql);
+        $this->assert_equals([], ThroughFkAuthor::find(3)->awesome_people);
+
+        $authors = ThroughFkAuthor::all(['include' => ['awesome_people'], 'order' => 'author_id']);
+        $this->assert_equals([[1], [2], [], []], array_map(fn($a) => $ids($a->awesome_people), $authors));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?,?,?)", AwesomePerson::table()->last_sql);
+
+        // the target keeps its own author_id when eager loaded, as when lazy loaded
+        $this->assert_equals(3, ThroughFkAuthor::find(1)->awesome_people[0]->author_id);
+        $this->assert_equals(3, $authors[0]->awesome_people[0]->author_id);
+    }
+
+    public function test_reverse_fk_through_without_a_colliding_target_column_keeps_its_select()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        Book::$has_many = [['book_reviews']];
+        Author::$has_many = [['books'], ['book_reviews', 'through' => 'books', 'order' => 'book_reviews.id asc']];
+        ActiveRecord\Table::clear_cache();
+
+        try {
+            $authors = Author::all(['include' => ['book_reviews'], 'order' => 'author_id']);
+            $sql = BookReview::table()->last_sql;
+        } finally {
+            Book::$has_many = [];
+            Author::$has_many = ['books'];
+            ActiveRecord\Table::clear_cache();
+        }
+
+        // book_reviews has no author_id: the middle key is still exposed under its own name
+        $this->assert_sql_has_exact("SELECT {$q}book_reviews{$q}.*, {$q}books{$q}.author_id AS author_id FROM", $sql);
+        $this->assert_equals([1, 1], array_map(fn($r) => $r->author_id, $authors[0]->book_reviews));
+    }
+
+    public function test_belongs_to_shaped_through_qualifies_the_owner_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $ids = fn(array $authors) => array_map(fn($a) => $a->author_id, $authors);
+
+        // books.author_id is the owner key; the target (authors) has an author_id of its own
+        $this->assert_equals([2], $ids(CoauthoredAuthor::find(1)->secondary_authors));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=?", SecondaryAuthor::table()->last_sql);
+        $this->assert_equals([], CoauthoredAuthor::find(3)->secondary_authors);
+
+        // eager: same rows, and each target keeps its own author_id
+        $owners = CoauthoredAuthor::all(['include' => ['secondary_authors'], 'order' => 'author_id']);
+        $this->assert_equals([[2], [2], [], []], array_map(fn($o) => $ids($o->secondary_authors), $owners));
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?,?,?)", SecondaryAuthor::table()->last_sql);
+    }
+
+    public function test_reverse_fk_has_one_through_with_conditions_qualifies_the_owner_key()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        // the declared condition names books.name (the middle table) unqualified
+        $this->assert_equals(1, ThroughFkAuthor::find(1)->awesome_person->id);
+        $this->assert_sql_has_exact("WHERE ({$q}name{$q}=?) AND {$q}books{$q}.{$q}author_id{$q}=?", AwesomePerson::table()->last_sql);
+        $this->assert_null(ThroughFkAuthor::find(2)->awesome_person);
+
+        $authors = ThroughFkAuthor::all(['include' => ['awesome_person'], 'order' => 'author_id']);
+        $this->assert_equals([1, null], [$authors[0]->awesome_person?->id, $authors[1]->awesome_person?->id]);
+    }
+
+    /**
+     * Runs a finder that must fail at the database (unknown identifier) and
+     * must never return rows.
+     *
+     * @param class-string<ActiveRecord\Model> $class
+     * @param array<string, mixed> $options
+     */
+    private function assert_hash_condition_fails(string $class, array $options): void
+    {
+        try {
+            $rows = $class::all($options);
+        } catch (ActiveRecord\DatabaseException) {
+            return;
+        }
+
+        $this->fail('expected a DatabaseException, the query returned ' . count($rows) . ' row(s): ' . $class::table()->last_sql);
+    }
+
+    private function assert_sql_has_exact(string $needle, ?string $sql): void
+    {
+        $this->assert_true(str_contains((string) $sql, $needle), "'$needle' not found in: $sql");
     }
 
     public function test_datetime_to_string()

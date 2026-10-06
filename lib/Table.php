@@ -249,11 +249,17 @@ class Table
 
                 call_user_func_array([$sql,'where'], $options['conditions']);
             } else {
+                $hashes = [$options['conditions']];
+
                 if (!empty($options['mapped_names'])) {
-                    $options['conditions'] = $this->map_names($options['conditions'], $options['mapped_names']);
+                    $hashes = $this->map_names($options['conditions'], $options['mapped_names']);
                 }
 
-                $sql->where($options['conditions']);
+                if (1 === count($hashes)) {
+                    $sql->where($hashes[0]);
+                } else {
+                    $sql->where_hashes($hashes);
+                }
             }
         }
 
@@ -638,12 +644,17 @@ class Table
     /**
      * Replaces any aliases used in a hash based condition.
      *
+     * An alias and its column ('marquee' and 'name') would overwrite each other in one
+     * hash, so a repeated name starts a new hash: every condition is kept, in order, and
+     * the hashes are ANDed. Without a repeated name there is a single hash, as before.
+     *
      * @param array<string, mixed> $hash A hash
      * @param array<string, string> $map Hash of used_name => real_name
-     * @return array<string, mixed> Array with any aliases replaced with their read field name
+     * @return non-empty-list<array<string, mixed>> Hashes with any aliases replaced with their real field name
      */
     private function map_names(array &$hash, array &$map): array
     {
+        $hashes = [];
         $ret = [];
 
         foreach ($hash as $name => &$value) {
@@ -651,9 +662,17 @@ class Table
                 $name = $map[$name];
             }
 
+            if (array_key_exists($name, $ret)) {
+                $hashes[] = $ret;
+                $ret = [];
+            }
+
             $ret[$name] = $value;
         }
-        return $ret;
+
+        $hashes[] = $ret;
+
+        return $hashes;
     }
 
     /**

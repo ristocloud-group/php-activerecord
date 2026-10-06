@@ -146,6 +146,19 @@ class SQLBuilder
     }
 
     /**
+     * WHERE from several conditions hashes, ANDed in order: like where($hash) for each,
+     * without one hash overwriting a key of another.
+     *
+     * @internal Serves Table, for hashes whose keys name the same column; not a supported API.
+     * @param list<array<string, mixed>> $hashes
+     */
+    public function where_hashes(array $hashes): static
+    {
+        $this->apply_where_hashes($hashes);
+        return $this;
+    }
+
+    /**
      * @param string|null $order
      * @return $this
      */
@@ -503,22 +516,78 @@ class SQLBuilder
 
     /**
      * prepends table name to hash of field names to get around ambiguous fields when SQL builder
-     * has joins
+     * has joins. A key that is already table-qualified is kept as is (#35).
+     *
+     * Keys that end up naming the same column ('id' and `id` both become `t`.`id`) would
+     * overwrite each other in one hash, so a repeated key starts a new hash: every
+     * condition is kept, in order, and the caller ANDs the hashes. Without a repeated key
+     * there is a single hash, as before.
      *
      * @param array<string, mixed> $hash
-     * @return array<string, mixed> $new
+     * @return non-empty-list<array<string, mixed>>
      */
     private function prepend_table_name_to_fields(array $hash = []): array
     {
+        $hashes = [];
         $new = [];
         $table = $this->connection->quote_name($this->table ?? '');
 
         foreach ($hash as $key => $value) {
-            $k = $this->connection->quote_name($key);
-            $new[$table . '.' . $k] = $value;
+            $k = $this->is_qualified_key((string) $key) ? (string) $key : $table . '.' . $this->connection->quote_name($key);
+
+            if (array_key_exists($k, $new)) {
+                $hashes[] = $new;
+                $new = [];
+            }
+
+            $new[$k] = $value;
         }
 
-        return $new;
+        $hashes[] = $new;
+
+        return $hashes;
+    }
+
+    /**
+     * Whether a hash-condition key already names its table: an unquoted dotted
+     * key ('events.title', quoted part by part by Expressions), or a dotted name of
+     * two or more parts, quoted or bare (`events`.`title`, `events`.title; see
+     * {@see Connection::split_name_parts()}). A single quoted identifier, even one
+     * containing a dot (`a.b`), is not qualified.
+     */
+    private function is_qualified_key(string $key): bool
+    {
+        $q = $this->connection::$QUOTE_CHARACTER;
+
+        if (!str_contains($key, $q)) {
+            return str_contains($key, '.');
+        }
+
+        return count(Connection::split_name_parts($key, $q) ?? []) > 1;
+    }
+
+    /**
+     * Renders conditions hashes ANDed in order. With joins each hash is prefixed with the
+     * table, which may split it further (see prepend_table_name_to_fields()).
+     *
+     * @param list<array<string, mixed>> $hashes
+     */
+    private function apply_where_hashes(array $hashes): void
+    {
+        require_once 'Expressions.php';
+        $where = [];
+        $values = [];
+
+        foreach ($hashes as $hash) {
+            foreach (is_null($this->joins) ? [$hash] : $this->prepend_table_name_to_fields($hash) as $h) {
+                $e = new Expressions($this->connection, $h);
+                $where[] = $e->to_s();
+                $values[] = $e->values();
+            }
+        }
+
+        $this->where = implode(' AND ', $where);
+        $this->where_values = array_flatten($values);
     }
 
     /**
@@ -530,10 +599,7 @@ class SQLBuilder
         $num_args = count($args);
 
         if ($num_args == 1 && is_hash($args[0])) {
-            $hash = is_null($this->joins) ? $args[0] : $this->prepend_table_name_to_fields($args[0]);
-            $e = new Expressions($this->connection, $hash);
-            $this->where = $e->to_s();
-            $this->where_values = array_flatten($e->values());
+            $this->apply_where_hashes([$args[0]]);
         } elseif ($num_args > 0) {
             // if the values has a nested array then we'll need to use Expressions to expand the bind marker for us
             $values = array_slice($args, 1);
