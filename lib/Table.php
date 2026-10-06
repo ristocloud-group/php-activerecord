@@ -425,7 +425,7 @@ class Table
                 continue;
             }
 
-            $fresh_columns ??= $this->column_names($this->introspect_columns());
+            $fresh_columns ??= $this->column_names($conn->columns($this->get_fully_qualified_table_name(!($conn instanceof PgsqlAdapter))));
 
             if (!$conn->resolves_column_name($name, $this->table, $fresh_columns, $select)) {
                 throw new DatabaseException("Unknown column '$key' in hash conditions for {$this->class->getName()} (table {$this->table})");
@@ -731,33 +731,10 @@ class Table
 
         $table_name = $this->get_fully_qualified_table_name($quote_name);
         $conn = $this->connection();
-        // a Postgres `$db` model is introspected in its schema: its own key, so a pre-quoted
-        // $table_name that spells the same string ('"public".authors') never reuses it
-        if ($conn instanceof PgsqlAdapter && $this->db_name) {
-            $table_name .= '-in-schema';
-        }
-
         // scoped by connection identity: same-named tables on different databases differ (#45)
-        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () {
-            return $this->introspect_columns();
+        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () use ($conn, $table_name) {
+            return $conn->columns($table_name);
         });
-    }
-
-    /**
-     * The table's columns, read from the database (no cache). On Postgres a model with
-     * `$db` is looked up in that schema.
-     *
-     * @return array<string, Column>
-     */
-    private function introspect_columns(): array
-    {
-        $conn = $this->connection();
-
-        if ($conn instanceof PgsqlAdapter && $this->db_name) {
-            return $conn->columns_in_schema($this->table, $this->db_name);
-        }
-
-        return $conn->columns($this->get_fully_qualified_table_name(!($conn instanceof PgsqlAdapter)));
     }
 
     /**
@@ -884,17 +861,6 @@ class Table
             $this->sequence = isset($this->pk[0])
                 ? $this->connection()->get_sequence_name($this->table, $this->pk[0])
                 : null;
-
-            // with `$db` that derived, unqualified name would resolve through search_path,
-            // possibly to a same-named table's sequence in another schema: use the
-            // sequence the pk column's default really draws from (e.g. s26.books_book_id_seq)
-            if ($this->db_name && isset($this->pk[0])) {
-                $column = $this->columns[$this->pk[0]] ?? $this->get_column_by_inflected_name($this->pk[0]);
-
-                if (null !== $column && $column->sequence) {
-                    $this->sequence = $column->sequence;
-                }
-            }
         }
     }
 
