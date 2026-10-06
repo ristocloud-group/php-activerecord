@@ -67,12 +67,13 @@ out('created note id:             ' . $note->id . ' (auto-increment, no sequence
 
 // --- 2. Which primary keys SQLite generates ---
 
-// SQLite generates a pk only for its rowid alias: a single pk column declared
-// exactly INTEGER, like notes.id. Any other pk (INT, BIGINT, a composite key,
-// a WITHOUT ROWID table) holds the value you insert, and the model keeps it:
-// rooms.id is INT PRIMARY KEY, numbered by hand. (Before this was fixed, the
-// model took the internal rowid as its id, so a later save() or delete() hit
-// the row whose id equals that rowid: another room, or none.)
+// SQLite generates a pk only for its rowid alias: a lone INTEGER PRIMARY KEY
+// on an ordinary rowid table, not declared DESC inline, like notes.id. Any
+// other pk (INT, BIGINT, a composite key, a WITHOUT ROWID table) holds the
+// value you insert, and the model keeps it: rooms.id is INT PRIMARY KEY,
+// numbered by hand. (Before this was fixed, the model took the internal rowid
+// as its id, so a later save() or delete() hit the row whose id equals that
+// rowid: another room, or none.)
 out('');
 /** @var Room $room */
 $room = Room::create(['id' => 101, 'name' => 'Lecture hall']);

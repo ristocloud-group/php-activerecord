@@ -96,6 +96,8 @@ class SqliteAdapterTest extends AdapterTest
 
             try {
                 $this->assert_same($expected, $this->conn->columns('rowid_alias_probe')[$pk]->auto_increment, $ddl);
+                // backtick-quoted, as Table passes it
+                $this->assert_same($expected, $this->conn->columns('`rowid_alias_probe`')[$pk]->auto_increment, "$ddl, quoted");
             } finally {
                 $this->conn->query('DROP TABLE rowid_alias_probe');
             }
