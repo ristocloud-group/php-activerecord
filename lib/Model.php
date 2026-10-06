@@ -1122,7 +1122,7 @@ class Model
             $sql->order($options['order']);
         }
 
-        $values = $sql->bind_values();
+        $values = $table->format_date_bind_values($sql->bind_values());
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
         return $ret->rowCount();
     }
@@ -1162,7 +1162,9 @@ class Model
         $conn = static::connection();
         $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        $sql->update($options['set']);
+        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138)
+        $set = $options['set'];
+        $sql->update(is_array($set) ? $table->format_date_bind_values($set) : $set);
 
         if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
             if (is_array($conditions) && !is_hash($conditions)) {
@@ -1192,7 +1194,7 @@ class Model
             $sql->order($options['order']);
         }
 
-        $values = $sql->bind_values();
+        $values = $table->format_date_bind_values($sql->bind_values());
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
         return $ret->rowCount();
 
@@ -2022,7 +2024,7 @@ class Model
 
         $table = static::table();
         $sql = $table->options_to_sql($options);
-        $values = $sql->get_where_values();
+        $values = $table->format_date_bind_values($sql->get_where_values());
         $row = static::connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
 
         return false === $row ? 0 : $row[0];

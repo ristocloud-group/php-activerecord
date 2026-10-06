@@ -316,7 +316,7 @@ class Table
     {
         $conn = $this->connection();
         $sql = $this->options_to_sql($options);
-        $values = $sql->get_where_values();
+        $values = $this->format_date_bind_values($sql->get_where_values());
         $this->last_sql = $conn->exists_sql($sql->to_s());
 
         return (bool) (int) $conn->query_and_fetch_one($this->last_sql, $values);
@@ -826,6 +826,26 @@ class Table
         $hashes[] = $ret;
 
         return $hashes;
+    }
+
+    /**
+     * Bind values with each \DateTimeInterface (\DateTime, \DateTimeImmutable, ActiveRecord\DateTime)
+     * formatted as process_data() formats it for the finders: in the connection's datetime format,
+     * or for a DATE column named by a string key, its date format. The paths that bound them raw
+     * threw an Error for a native date, and bound an ActiveRecord\DateTime as its __toString()
+     * text (RFC 2822 by default), which MySQL rejects and SQLite compares as text (#138).
+     * Every other value is returned unchanged.
+     *
+     * @internal Serves exists(), Model::count(), update_all() and delete_all(); not a supported API.
+     * @template TKey of int|string
+     * @param array<TKey, mixed> $values
+     * @return array<TKey, mixed>
+     */
+    public function format_date_bind_values(array $values): array
+    {
+        $dates = array_filter($values, fn($value) => $value instanceof \DateTimeInterface);
+
+        return [] === $dates ? $values : array_replace($values, $this->process_data($dates));
     }
 
     /**

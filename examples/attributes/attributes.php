@@ -38,6 +38,16 @@ out('is_admin after mass-assign (protected): ' . (int) $m->is_admin);   // 0
 out('password stored as hash: ' . $m->password_hash);
 out('alias_attribute email_address: ' . $m->email_address);
 
+// Integer columns cast to int, except an integer beyond the PHP int range (e.g.
+// a MySQL BIGINT UNSIGNED above PHP_INT_MAX, which PDO returns as a string): it
+// keeps its exact string. (Before #44 it was clamped to PHP_INT_MAX, so a save
+// or delete keyed on it hit the row whose id is PHP_INT_MAX.)
+$n = new Member();
+$n->set_attributes(['company_id' => '42']);
+out("company_id from '42': " . var_export($n->company_id, true));
+$n->set_attributes(['company_id' => '18446744073709551615']);
+out("company_id from '18446744073709551615': " . var_export($n->company_id, true));
+
 // Strict mass assignment (opt-in, global, off by default): a key blocked by
 // $attr_accessible/$attr_protected throws instead of being dropped, before
 // anything is assigned. Assigning one attribute ($m->is_admin = 1) is unaffected.
