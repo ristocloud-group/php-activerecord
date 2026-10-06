@@ -337,7 +337,7 @@ class AndOrInColumnNamesTest extends DatabaseTest
 
     public function test_hash_conditions_on_and_or_column_names()
     {
-        // a key whose name contains _and_/_or_ is one column, accepted by the key check
+        // a key whose name contains _and_/_or_ is one column
         $this->assert_equals(['B match', 'E match'], $this->titles(Swatch::all(['conditions' => ['black_and_white' => 7], 'order' => 'title'])));
         $this->assert_equals(['C pair'], $this->titles(Swatch::all(['conditions' => ['black_or_white' => 7, 'shade_and_tone' => 0]])));
         $this->assert_equals('C pair', SwatchByShade::find(1)->title);
@@ -346,11 +346,6 @@ class AndOrInColumnNamesTest extends DatabaseTest
         $this->assert_equals([], SwatchAliased::all(['conditions' => ['black_and_white' => 7, 'tone_and_shade' => 1]]));
         $this->assert_equals(['B match', 'E match'], $this->titles(SwatchAliased::all(['conditions' => ['tone_and_shade' => 7, 'black_and_white' => 7], 'order' => 'title'])));
         $this->assert_sql_has('WHERE black_and_white=? AND black_and_white=?', Table::load('SwatchAliased')->last_sql);
-
-        // a name that is no column is rejected before the query
-        $this->assert_exception_message_contains("Unknown column 'black_and_nope' in hash conditions for Swatch", function () {
-            Swatch::all(['conditions' => ['black_and_nope' => 1]]);
-        }, ActiveRecord\DatabaseException::class);
     }
 
     public function test_create_hash_from_columns()

@@ -255,13 +255,6 @@ class Table
                     $hashes = $this->map_names($options['conditions'], $options['mapped_names']);
                 }
 
-                // with `from` the query may read another table: the database decides
-                if (!array_key_exists('from', $options)) {
-                    foreach ($hashes as $hash) {
-                        $this->validate_condition_keys($hash, is_string($options['select'] ?? null) ? $options['select'] : null);
-                    }
-                }
-
                 if (1 === count($hashes)) {
                     $sql->where($hashes[0]);
                 } else {
@@ -389,95 +382,6 @@ class Table
             }
             $rel->load_eagerly($models, $attrs, $nested_includes, $this);
         }
-    }
-
-    /**
-     * Rejects a hash-condition key that is unqualified (a plain name or one quoted
-     * identifier) and names no column of this table, before any query is run. A
-     * table-qualified key ('t.c', `t`.`c`) is not checked. Names are compared the
-     * way the database compares them ({@see Connection::resolves_column_name()}); a
-     * name missing from the cached schema is checked again against the live table,
-     * so a column added after the schema was cached is not rejected.
-     *
-     * @internal Serves the finders, update_all/delete_all and relationship conditions.
-     * @param array<int|string, mixed> $conditions A conditions hash
-     * @param string|null $select The query's select list, if one was given
-     * @throws DatabaseException naming the model and the key
-     */
-    public function validate_condition_keys(array $conditions, ?string $select = null): void
-    {
-        $conn = $this->connection();
-        $columns = $this->column_names($this->columns);
-
-        // no introspected column (the table could not be introspected, e.g. a pre-quoted
-        // schema-qualified $table_name on Postgres): the schema is unknown, the database decides
-        if ([] === $columns) {
-            return;
-        }
-
-        $fresh_columns = null;
-
-        foreach (array_keys($conditions) as $key) {
-            $key = (string) $key;
-            $name = $this->unqualified_condition_name($conn, $key);
-
-            if (null === $name || $conn->resolves_column_name($name, $this->table, $columns, $select)) {
-                continue;
-            }
-
-            $fresh_columns ??= $this->column_names($conn->columns($this->get_fully_qualified_table_name(!($conn instanceof PgsqlAdapter))));
-
-            if (!$conn->resolves_column_name($name, $this->table, $fresh_columns, $select)) {
-                throw new DatabaseException("Unknown column '$key' in hash conditions for {$this->class->getName()} (table {$this->table})");
-            }
-        }
-    }
-
-    /**
-     * Whether this table certainly has a column named $name, compared the way its database
-     * compares column names ({@see Connection::column_name_matches()}).
-     *
-     * @internal
-     */
-    public function has_column(string $name): bool
-    {
-        $conn = $this->connection();
-
-        foreach (array_keys($this->columns) as $column) {
-            if (true === $conn->column_name_matches($name, (string) $column)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * The identifier a hash-condition key is rendered as (see Expressions), or null when
-     * the key is table-qualified: an unquoted dotted key, or quoted identifiers joined by '.'.
-     */
-    private function unqualified_condition_name(Connection $conn, string $key): ?string
-    {
-        $q = $conn::$QUOTE_CHARACTER;
-
-        if (str_contains($key, '.') && !str_contains($key, $q)) {
-            return null;
-        }
-
-        // quote_name() gives quoted identifiers joined by '.', each embedded quote doubled:
-        // once the doubled ones are gone, any quote left marks a boundary between parts
-        $inner = substr($conn->quote_name($key), 1, -1);
-
-        return str_contains(str_replace($q . $q, '', $inner), $q) ? null : str_replace($q . $q, $q, $inner);
-    }
-
-    /**
-     * @param array<int|string, Column> $columns
-     * @return list<string>
-     */
-    private function column_names(array $columns): array
-    {
-        return array_map('strval', array_keys($columns));
     }
 
     /**

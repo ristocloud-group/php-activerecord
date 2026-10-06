@@ -113,35 +113,6 @@ class MysqlAdapter extends Connection
     }
 
     /**
-     * MySQL and MariaDB compare column names case-insensitively, with their own Unicode
-     * folding: it is reproduced for ASCII names only, so with any other name (or column)
-     * the database decides. `_rowid` names an integer primary key.
-     *
-     * @internal
-     * @param list<string> $columns
-     */
-    public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
-    {
-        return 1 === preg_match('/[^\x00-\x7F]/', $name)
-            || '_rowid' === strtolower($name)
-            || parent::resolves_column_name($name, $table, $columns, $select);
-    }
-
-    /**
-     * Equal ignoring ASCII case; otherwise undecided when either name is not ASCII.
-     *
-     * @internal
-     */
-    public function column_name_matches(string $name, string $column): ?bool
-    {
-        if (0 === strcasecmp($name, $column)) {
-            return true;
-        }
-
-        return 1 === preg_match('/[^\x00-\x7F]/', $name . $column) ? null : false;
-    }
-
-    /**
      * @return array<string, string|array{name: string, length?: int}>
      */
     public function native_database_types()

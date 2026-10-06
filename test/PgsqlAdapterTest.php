@@ -71,28 +71,6 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_same(false, $columns['is_retired']->default);
     }
 
-    public function test_hash_condition_keys_are_left_to_the_database_when_the_schema_is_unknown()
-    {
-        // a table whose columns could not be introspected: no key is rejected
-        $table = PublicSchemaAuthor::table();
-        $columns = $table->columns;
-        $table->columns = [];
-
-        try {
-            $this->assert_equals(1, PublicSchemaAuthor::count(['conditions' => ['name' => 'Tito']]));
-            $this->assert_equals('Tito', PublicSchemaAuthor::find(1)->name);
-
-            try {
-                PublicSchemaAuthor::all(['conditions' => ['nope' => 1]]);
-                $this->fail('nope must fail at the database');
-            } catch (ActiveRecord\DatabaseException $e) {
-                $this->assert_false(str_starts_with($e->getMessage(), 'Unknown column'), $e->getMessage());
-            }
-        } finally {
-            $table->columns = $columns;
-        }
-    }
-
     public function test_table_without_primary_key_infers_no_sequence()
     {
         // rm-bldg has no primary key, so there is no pk column to derive a

@@ -1098,10 +1098,6 @@ class Model
         if (is_array($conditions) && !is_hash($conditions)) {
             call_user_func_array([$sql, 'delete'], $conditions);
         } else {
-            if (is_array($conditions)) {
-                $table->validate_condition_keys($conditions);
-            }
-
             $sql->delete($conditions);
         }
 
@@ -1161,10 +1157,6 @@ class Model
             if (is_array($conditions) && !is_hash($conditions)) {
                 call_user_func_array([$sql, 'where'], $conditions);
             } else {
-                if (is_array($conditions)) {
-                    $table->validate_condition_keys($conditions);
-                }
-
                 $sql->where($conditions);
             }
         }

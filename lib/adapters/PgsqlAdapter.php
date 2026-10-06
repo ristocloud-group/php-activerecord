@@ -143,21 +143,6 @@ class PgsqlAdapter extends Connection
     }
 
     /**
-     * A quoted identifier is case-sensitive, so names compare exactly. Postgres also
-     * provides the system columns and the table name itself (a whole-row reference),
-     * and truncates a name longer than 63 bytes, which is then left to the database.
-     *
-     * @internal
-     * @param list<string> $columns
-     */
-    public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
-    {
-        return parent::resolves_column_name($name, $table, $columns, $select)
-            || in_array($name, ['ctid', 'xmin', 'xmax', 'cmin', 'cmax', 'tableoid', 'oid', $table], true)
-            || strlen($name) > 63;
-    }
-
-    /**
      * @return array<string, string|array{name: string, length?: int}>
      */
     public function native_database_types()

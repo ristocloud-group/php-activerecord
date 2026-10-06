@@ -740,41 +740,6 @@ abstract class Connection
     }
 
     /**
-     * Whether the WHERE clause of a query that reads only $table may resolve $name, an
-     * unqualified identifier (unquoted), instead of rejecting it as an unknown column:
-     * because it is one of the table's $columns, or a name the database provides itself.
-     * Each adapter compares names the way its database does, and answers true whenever
-     * it cannot be sure. This default compares exactly, as standard SQL does for a quoted
-     * identifier.
-     *
-     * @internal Serves the validation of hash-condition keys; not a supported API.
-     * @param list<string> $columns The table's column names
-     * @param string|null $select The query's select list, if one was given
-     */
-    public function resolves_column_name(string $name, string $table, array $columns, ?string $select = null): bool
-    {
-        foreach ($columns as $column) {
-            if (false !== $this->column_name_matches($name, $column)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Whether the database takes the unqualified identifier $name for the column $column:
-     * true or false, or null when it cannot be told here. This default compares exactly,
-     * as standard SQL does for a quoted identifier.
-     *
-     * @internal Serves resolves_column_name() and the relationship key checks; not a supported API.
-     */
-    public function column_name_matches(string $name, string $column): ?bool
-    {
-        return $name === $column;
-    }
-
-    /**
      * Closes the underlying PDO connection.
      *
      * @return void
