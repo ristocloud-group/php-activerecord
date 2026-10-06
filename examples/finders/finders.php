@@ -100,6 +100,25 @@ Widget::transaction(function (): bool {
     return false;
 });
 
+// delete_all() reads a hash without option keys as its conditions, as count()
+// and exists() do, and update_all() refuses a key beside 'set' that is not an
+// option, before any SQL. (Before #145 both ignored those keys and acted on
+// EVERY row: "DELETE FROM `widgets`" deleted all 4 widgets, and the update set
+// in_stock = 0 on all 4.)
+Widget::transaction(function (): bool {
+    out("count(['category' => 'gizmos']): " . Widget::count(['category' => 'gizmos']));
+    out("delete_all(['category' => 'gizmos']): " . Widget::delete_all(['category' => 'gizmos']) . ' rows (rolled back)');
+    out('  SQL: ' . Widget::table()->last_sql);
+
+    try {
+        Widget::update_all(['set' => ['in_stock' => 0], 'category' => 'gizmos']);
+    } catch (ActiveRecord\ActiveRecordException $e) {
+        out("update_all(['set' => ['in_stock' => 0], 'category' => 'gizmos']): " . $e->getMessage());
+    }
+
+    return false;
+});
+
 // last() reverses the order: only each item's own trailing asc/desc is flipped
 // (an item without one gets DESC), so a column like "description" is left
 // intact. (Before #37 it became "ASCription" and the query failed.)
