@@ -551,9 +551,10 @@ class SQLBuilder
 
     /**
      * Whether a hash-condition key already names its table: an unquoted dotted
-     * key ('events.title', quoted part by part by Expressions), or two or more
-     * quoted identifiers joined by '.' (`events`.`title`). A single quoted
-     * identifier, even one containing a dot (`a.b`), is not qualified.
+     * key ('events.title', quoted part by part by Expressions), or a dotted name of
+     * two or more parts, quoted or bare (`events`.`title`, `events`.title; see
+     * {@see Connection::split_name_parts()}). A single quoted identifier, even one
+     * containing a dot (`a.b`), is not qualified.
      */
     private function is_qualified_key(string $key): bool
     {
@@ -563,10 +564,7 @@ class SQLBuilder
             return str_contains($key, '.');
         }
 
-        // the identifier syntax quote_name() passes through unchanged
-        $identifier = sprintf('%1$s(?:[^%1$s]|%1$s%1$s)+%1$s', preg_quote($q, '/'));
-
-        return 1 === preg_match("/\\A{$identifier}(?:\\.{$identifier})+\\z/", $key);
+        return count(Connection::split_name_parts($key, $q) ?? []) > 1;
     }
 
     /**

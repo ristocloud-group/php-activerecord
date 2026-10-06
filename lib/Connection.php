@@ -571,12 +571,15 @@ abstract class Connection
     /**
      * Quote a name like table names and field names.
      *
-     * A name that already is one or more correctly quoted identifiers joined by
-     * '.' (`t`, `db`.`t`, `a``b` — an embedded quote character doubled) is
-     * returned unchanged. Anything else is wrapped in the quote character with
-     * every embedded quote character doubled, so it is always exactly one
-     * identifier and never raw SQL (#64). Dots are not split: 'db.t' is the
-     * single identifier `db.t`.
+     * The result is always identifiers, never raw SQL (#64):
+     *
+     * - A name that contains the quote character and is a dotted name (see
+     *   {@see split_name_parts()}) is rendered part by part: a quoted part as is,
+     *   a bare part wrapped. So `t`, `db`.`t` and `a``b` are returned unchanged, and
+     *   a partly quoted name such as `db`.t or db.`t` becomes `db`.`t`.
+     * - Anything else is wrapped in the quote character with every embedded quote
+     *   character doubled: exactly one identifier. A name without a quote character
+     *   is never split on dots: 'db.t' is the single identifier `db.t`.
      *
      * @param string $string String to quote.
      * @return string
@@ -586,22 +589,40 @@ abstract class Connection
         $q = static::$QUOTE_CHARACTER;
         $string = (string) $string;
 
-        if ('' !== $string && $q === $string[0] && 1 === preg_match(self::quoted_name_pattern($q), $string)) {
-            return $string;
+        if (str_contains($string, $q) && null !== ($parts = self::split_name_parts($string, $q))) {
+            return implode('.', array_map(fn(array $part) => $part[1] ? $part[0] : $q . $part[0] . $q, $parts));
         }
 
         return $q . str_replace($q, $q . $q, $string) . $q;
     }
 
     /**
-     * Matches one or more identifiers quoted with $q and joined by '.', each
-     * non-empty with any embedded $q doubled.
+     * The parts of a dotted name, or null when $name is not one. The grammar, with Q
+     * the quote character $q:
+     *
+     *     name   := part ( '.' part )*
+     *     part   := quoted | bare
+     *     quoted := Q ( any character but Q | Q Q )+ Q     (an embedded Q doubled)
+     *     bare   := one or more characters, none of them Q or '.'
+     *
+     * Each part is [its text, whether it is quoted]. A bare part can never close a
+     * quote, so wrapping it in Q always gives one identifier.
+     *
+     * @internal Serves quote_name() and SQLBuilder; not a supported API.
+     * @return list<array{0: string, 1: bool}>|null
      */
-    private static function quoted_name_pattern(string $q): string
+    public static function split_name_parts(string $name, string $q): ?array
     {
-        $identifier = sprintf('%1$s(?:[^%1$s]|%1$s%1$s)+%1$s', preg_quote($q, '/'));
+        $quote = preg_quote($q, '/');
+        $part = "{$quote}(?:[^{$quote}]|{$quote}{$quote})+{$quote}|[^{$quote}.]+";
 
-        return "/\\A{$identifier}(?:\\.{$identifier})*\\z/";
+        if (1 !== preg_match("/\\A(?:{$part})(?:\\.(?:{$part}))*\\z/", $name)) {
+            return null;
+        }
+
+        preg_match_all("/\\G({$part})(?:\\.|\\z)/", $name, $matches);
+
+        return array_map(fn(string $part) => [$part, $q === $part[0]], $matches[1]);
     }
 
     /**

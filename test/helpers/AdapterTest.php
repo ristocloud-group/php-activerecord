@@ -550,10 +550,86 @@ abstract class AdapterTest extends DatabaseTest
 
         $this->assert_equals("{$q}evil{$q}{$q}name{$q}", $c->quote_name("evil{$q}name"));
         $this->assert_equals("{$q}foo{$q}{$q}{$q}", $c->quote_name("foo{$q}"));
-        // not a quoted sequence: neither half of a "half-quoted" dotted name
-        // nor an inner-quoted one passes through
-        $this->assert_equals("{$q}{$q}{$q}db{$q}{$q}.t{$q}", $c->quote_name("{$q}db{$q}.t"));
+        // not a dotted name: an inner-quoted one is one identifier
         $this->assert_equals("{$q}db{$q}{$q}.{$q}{$q}t{$q}", $c->quote_name("db{$q}.{$q}t"));
+    }
+
+    public function test_quote_name_quotes_a_partly_quoted_dotted_name_part_by_part()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        // quoted parts as they are, bare parts (no quote char, no dot) wrapped
+        foreach ([
+            "{$q}db{$q}.t" => "{$q}db{$q}.{$q}t{$q}",
+            "db.{$q}t{$q}" => "{$q}db{$q}.{$q}t{$q}",
+            "{$q}db{$q}.t.{$q}c{$q}" => "{$q}db{$q}.{$q}t{$q}.{$q}c{$q}",
+            "{$q}a.b{$q}.c d" => "{$q}a.b{$q}.{$q}c d{$q}",
+            "{$q}a{$q}{$q}b{$q}.c" => "{$q}a{$q}{$q}b{$q}.{$q}c{$q}",
+        ] as $name => $quoted) {
+            $this->assert_equals($quoted, $c->quote_name($name), $name);
+        }
+
+        // any other shape stays one identifier, every quote char doubled
+        foreach ([
+            "{$q}db{$q}.t{$q}" => "{$q}{$q}{$q}db{$q}{$q}.t{$q}{$q}{$q}",
+            "{$q}db{$q}." => "{$q}{$q}{$q}db{$q}{$q}.{$q}",
+            ".{$q}t{$q}" => "{$q}.{$q}{$q}t{$q}{$q}{$q}",
+            "{$q}db{$q}..t" => "{$q}{$q}{$q}db{$q}{$q}..t{$q}",
+            "{$q}a{$q} OR 1=1.t" => "{$q}{$q}{$q}a{$q}{$q} OR 1=1.t{$q}",
+            "{$q}{$q}.t" => "{$q}{$q}{$q}{$q}{$q}.t{$q}",
+        ] as $name => $quoted) {
+            $this->assert_equals($quoted, $c->quote_name($name), $name);
+        }
+    }
+
+    public function test_partly_quoted_db_qualified_table_name_works()
+    {
+        $c = $this->conn;
+        $q = $c::$QUOTE_CHARACTER;
+
+        if ($c instanceof ActiveRecord\SqliteAdapter) {
+            // SQLite cannot introspect a schema-qualified table (pragma table_info): the rendering only
+            $this->assert_equals("{$q}main{$q}.{$q}authors{$q}", $c->quote_name("{$q}main{$q}.authors"));
+
+            return;
+        }
+
+        $db = $c instanceof ActiveRecord\PgsqlAdapter ? 'public' : (string) $c->query('SELECT DATABASE()')->fetchColumn();
+        MixedQuotedTableAuthor::$table_name = "{$q}{$db}{$q}.authors";
+        ActiveRecord\Table::clear_cache('MixedQuotedTableAuthor');
+
+        try {
+            $this->assert_equals(4, MixedQuotedTableAuthor::count());
+            $this->assert_equals('Tito', MixedQuotedTableAuthor::find(1)->name);
+            $this->assert_sql_has_exact("FROM {$q}{$db}{$q}.{$q}authors{$q} WHERE", MixedQuotedTableAuthor::table()->last_sql);
+            $this->assert_equals([1], array_map(fn($a) => $a->author_id, MixedQuotedTableAuthor::all(['conditions' => ["{$q}authors{$q}.name" => 'Tito']])));
+
+            if (!($c instanceof ActiveRecord\PgsqlAdapter)) {
+                // MySQL/MariaDB introspect it as before, so it can be saved
+                $author = MixedQuotedTableAuthor::find(1);
+                $author->name = 'Tito Two';
+                $author->save();
+                $this->assert_equals('Tito Two', Author::find(1)->name);
+            }
+        } finally {
+            MixedQuotedTableAuthor::$table_name = 'authors';
+            ActiveRecord\Table::clear_cache('MixedQuotedTableAuthor');
+        }
+    }
+
+    public function test_hash_condition_keys_with_mixed_quoting()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        foreach (["{$q}authors{$q}.name", "authors.{$q}name{$q}"] as $key) {
+            $this->assert_equals([1], array_map(fn($a) => $a->author_id, Author::all(['conditions' => [$key => 'Tito']])), $key);
+            $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+
+            // already qualified: joins do not prefix it
+            $this->assert_equals([1], array_map(fn($a) => $a->author_id, Author::all(['joins' => ['books'], 'conditions' => [$key => 'Tito']])), $key);
+            $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
+        }
     }
 
     public function test_quote_name_keeps_doubled_quote_inside_quoted_identifier()
