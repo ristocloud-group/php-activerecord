@@ -3,6 +3,10 @@
 use ActiveRecord\DateTime as DateTime;
 use ActiveRecord\DatabaseException;
 
+/**
+ * Expectations are derived from a single instant ($this->date, or a fixed string), never from a
+ * second reading of the clock: the clock may tick in between (#148).
+ */
 class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
 {
     /** @var DateTime */
@@ -69,10 +73,10 @@ class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     public function test_set_iso_date()
     {
-        $a = new \DateTime();
+        $a = new \DateTime('2010-01-02 03:04:05');
         $a->setISODate(2001, 1);
 
-        $b = new DateTime();
+        $b = new DateTime('2010-01-02 03:04:05');
         $b->setISODate(2001, 1);
 
         $this->assert_datetime_equals($a, $b);
@@ -80,10 +84,10 @@ class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     public function test_set_time()
     {
-        $a = new \DateTime();
+        $a = new \DateTime('2010-01-02 03:04:05');
         $a->setTime(1, 1);
 
-        $b = new DateTime();
+        $b = new DateTime('2010-01-02 03:04:05');
         $b->setTime(1, 1);
 
         $this->assert_datetime_equals($a, $b);
@@ -112,43 +116,43 @@ class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     public function test_format_by_friendly_name()
     {
-        $d = date(DateTime::get_format('db'));
+        $d = date(DateTime::get_format('db'), $this->date->getTimestamp());
         $this->assert_equals($d, $this->date->format('db'));
     }
 
     public function test_format_by_custom_format()
     {
         $format = 'Y/m/d';
-        $this->assert_equals(date($format), $this->date->format($format));
+        $this->assert_equals(date($format, $this->date->getTimestamp()), $this->date->format($format));
     }
 
     public function test_format_uses_default()
     {
-        $d = date(DateTime::$FORMATS[DateTime::$DEFAULT_FORMAT]);
+        $d = date(DateTime::$FORMATS[DateTime::$DEFAULT_FORMAT], $this->date->getTimestamp());
         $this->assert_equals($d, $this->date->format());
     }
 
     public function test_all_formats()
     {
         foreach (DateTime::$FORMATS as $name => $format) {
-            $this->assert_equals(date($format), $this->date->format($name));
+            $this->assert_equals(date($format, $this->date->getTimestamp()), $this->date->format($name));
         }
     }
 
     public function test_change_default_format_to_format_string()
     {
         DateTime::$DEFAULT_FORMAT = 'H:i:s';
-        $this->assert_equals(date(DateTime::$DEFAULT_FORMAT), $this->date->format());
+        $this->assert_equals(date(DateTime::$DEFAULT_FORMAT, $this->date->getTimestamp()), $this->date->format());
     }
 
     public function test_change_default_format_to_friently()
     {
         DateTime::$DEFAULT_FORMAT = 'short';
-        $this->assert_equals(date(DateTime::$FORMATS['short']), $this->date->format());
+        $this->assert_equals(date(DateTime::$FORMATS['short'], $this->date->getTimestamp()), $this->date->format());
     }
 
     public function test_to_string()
     {
-        $this->assert_equals(date(DateTime::get_format()), "" . $this->date);
+        $this->assert_equals(date(DateTime::get_format(), $this->date->getTimestamp()), "" . $this->date);
     }
 }
