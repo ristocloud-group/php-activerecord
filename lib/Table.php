@@ -434,40 +434,6 @@ class Table
     }
 
     /**
-     * A conditions hash with the model's $alias_attribute names replaced by their columns,
-     * split like {@see map_names()} where an alias and its column would collide. An alias
-     * named like a real column of the table is not mapped: these paths (count, exists,
-     * update_all, delete_all, relationship conditions) always sent that name to the
-     * database as the column, and still do.
-     *
-     * @internal Serves count/exists, update_all/delete_all and relationship hash conditions.
-     * @param array<string, mixed> $conditions
-     * @return non-empty-list<array<string, mixed>>
-     */
-    public function alias_condition_hashes(array $conditions): array
-    {
-        $map = $this->condition_alias_map();
-
-        return [] === $map ? [$conditions] : $this->map_names($conditions, $map);
-    }
-
-    /**
-     * The model's $alias_attribute map without the aliases named like a real column
-     * (see {@see alias_condition_hashes()}).
-     *
-     * @internal
-     * @return array<string, string>
-     */
-    public function condition_alias_map(): array
-    {
-        return array_filter(
-            (array) $this->class->getStaticPropertyValue('alias_attribute', []),
-            fn($alias) => !$this->has_column((string) $alias),
-            ARRAY_FILTER_USE_KEY
-        );
-    }
-
-    /**
      * Whether this table certainly has a column named $name, compared the way its database
      * compares column names ({@see Connection::column_name_matches()}).
      *

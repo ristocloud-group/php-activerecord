@@ -1097,20 +1097,11 @@ class Model
 
         if (is_array($conditions) && !is_hash($conditions)) {
             call_user_func_array([$sql, 'delete'], $conditions);
-        } elseif (is_array($conditions)) {
-            $hashes = $table->alias_condition_hashes($conditions);
-
-            foreach ($hashes as $hash) {
-                $table->validate_condition_keys($hash);
-            }
-
-            if (1 === count($hashes)) {
-                $sql->delete($hashes[0]);
-            } else {
-                $sql->delete();
-                $sql->where_hashes($hashes);
-            }
         } else {
+            if (is_array($conditions)) {
+                $table->validate_condition_keys($conditions);
+            }
+
             $sql->delete($conditions);
         }
 
@@ -1169,19 +1160,11 @@ class Model
         if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
             if (is_array($conditions) && !is_hash($conditions)) {
                 call_user_func_array([$sql, 'where'], $conditions);
-            } elseif (is_array($conditions)) {
-                $hashes = $table->alias_condition_hashes($conditions);
-
-                foreach ($hashes as $hash) {
-                    $table->validate_condition_keys($hash);
-                }
-
-                if (1 === count($hashes)) {
-                    $sql->where($hashes[0]);
-                } else {
-                    $sql->where_hashes($hashes);
-                }
             } else {
+                if (is_array($conditions)) {
+                    $table->validate_condition_keys($conditions);
+                }
+
                 $sql->where($conditions);
             }
         }
@@ -1998,10 +1981,6 @@ class Model
                 $options['conditions'] = call_user_func_array([static::class, 'pk_conditions'], $args);
             }
         }
-
-        // alias_attribute names in a conditions hash are mapped, as by find(), except an
-        // alias named like a real column, which these callers always sent as the column
-        $options['mapped_names'] = static::table()->condition_alias_map();
 
         return $options;
     }
