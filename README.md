@@ -247,6 +247,15 @@ The identifiers-only guarantee relies on doubling the quote character, so it ass
 that byte cannot belong to a multibyte character: `utf8mb4` / `utf8` (the default) or a single-byte charset. Legacy
 multibyte MySQL charsets (`gbk`, `big5`, `sjis` / `cp932`, `gb18030`) are not covered.
 
+`delete_all()` and `update_all()` read their argument as the finders do. `delete_all()` takes an options hash
+(`conditions`, `limit`, `order`), a conditions string, or, as `count()` / `exists()` do, a bare conditions hash:
+`Author::delete_all(['name' => 'Tito'])` deletes only the matching rows, and with no argument (or `null` / `[]`) it
+still deletes every row. `update_all()` takes an options hash with `set`. The other finder options are ignored, as
+before. An argument that could be misread throws `ActiveRecordException` before any SQL runs: a positional list
+(write `['conditions' => ['name = ?', 'Tito']]`), a hash mixing option keys with other keys (`Unknown key(s): …`), an
+int, float or bool, and, for `update_all()`, a key beside `set` that is not an option, such as a column name, or an
+argument without `set`.
+
 ## Examples ##
 
 Rather than inline snippets, every major feature is shown as a **runnable,
@@ -260,7 +269,7 @@ php examples/simple/simple.php
 | Example | Demonstrates |
 |---|---|
 | [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete), tables without a primary key, the never-saved- and deleted-record update/delete guard, and convention overrides (`$table_name`, `$primary_key`) |
-| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes |
+| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes, `delete_all()`/`update_all()` arguments (a bare hash is the conditions; an unknown key beside `set` throws) |
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner, a `has_many` keyed by a declared `primary_key` (lazy load, eager `include` and `create_*` agree, a declared `limit` applies per owner) |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |

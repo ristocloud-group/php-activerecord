@@ -1061,20 +1061,30 @@ class Model
      * Delete all using a hash:
      *
      * <code>
-     * YourModel::delete_all(array('conditions' => array('name' => 'Tito')));
+     * YourModel::delete_all(['conditions' => ['name' => 'Tito']]);
      * </code>
      *
      * Delete all using an array:
      *
      * <code>
-     * YourModel::delete_all(array('conditions' => array('name = ?', 'Tito')));
+     * YourModel::delete_all(['conditions' => ['name = ?', 'Tito']]);
      * </code>
      *
      * Delete all using a string:
      *
      * <code>
-     * YourModel::delete_all(array('conditions' => 'name = "Tito"));
+     * YourModel::delete_all(['conditions' => 'name = "Tito"']);
      * </code>
+     *
+     * A hash without any option key is the conditions, as in count() and exists(),
+     * and a string is the conditions too:
+     *
+     * <code>
+     * YourModel::delete_all(['name' => 'Tito']);
+     * YourModel::delete_all('name = "Tito"');
+     * </code>
+     *
+     * Without $options (or with null or []) every record is deleted.
      *
      * An options array takes the following parameters:
      *
@@ -1086,14 +1096,18 @@ class Model
      *
      * @param mixed $options
      * @return int Number of rows affected
+     * @throws ActiveRecordException before any SQL for an argument that could be misread: a positional
+     *   list (pass it as ['conditions' => [...]]), a hash mixing option keys with other keys
+     *   ("Unknown key(s): ..."), or an int, float or bool
      */
     public static function delete_all($options = [])
     {
+        $options = self::bulk_write_options($options, 'delete_all');
         $table = static::table();
         $conn = static::connection();
         $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        $conditions = is_array($options) ? ($options['conditions'] ?? null) : $options;
+        $conditions = $options['conditions'] ?? null;
 
         if (is_array($conditions) && !is_hash($conditions)) {
             call_user_func_array([$sql, 'delete'], $conditions);
@@ -1122,19 +1136,19 @@ class Model
      * Update all using a hash:
      *
      * <code>
-     * YourModel::update_all(array('set' => array('name' => "Bob")));
+     * YourModel::update_all(['set' => ['name' => "Bob"]]);
      * </code>
      *
      * Update all using a string:
      *
      * <code>
-     * YourModel::update_all(array('set' => 'name = "Bob"'));
+     * YourModel::update_all(['set' => 'name = "Bob"']);
      * </code>
      *
      * An options array takes the following parameters:
      *
      * <ul>
-     * <li><b>set:</b> String/hash of field names and their values to be updated with
+     * <li><b>set:</b> String/hash of field names and their values to be updated with</li>
      * <li><b>conditions:</b> Conditions using a string/hash/array</li>
      * <li><b>limit:</b> Limit number of records to update (MySQL & Sqlite only)</li>
      * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
@@ -1142,9 +1156,13 @@ class Model
      *
      * @param array<string, mixed> $options
      * @return int Number of rows affected
+     * @throws ActiveRecordException before any SQL when $options is not a hash with 'set'
+     *   ("Updating requires a hash or string."), or has a key beside 'set' that is not an
+     *   option, such as a column name ("Unknown key(s): ...")
      */
     public static function update_all($options = [])
     {
+        $options = self::bulk_write_options($options, 'update_all');
         $table = static::table();
         $conn = static::connection();
         $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
@@ -1173,6 +1191,58 @@ class Model
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
         return $ret->rowCount();
 
+    }
+
+    /**
+     * Normalizes the argument of delete_all() / update_all() into an options hash, as the
+     * finders do, or throws before any SQL when it could be misread (#145): both read only
+     * their option keys, so any other shape used to act on every row.
+     *
+     * The option keys are those of $VALID_OPTIONS, plus 'set' for update_all(); the finder
+     * options among them that a bulk write does not use stay ignored. For delete_all(),
+     * nothing, null and [] still mean every row, a string (or another non-scalar) is the
+     * conditions, and a hash without any option key is the conditions, as in count() and exists().
+     *
+     * @param 'delete_all'|'update_all' $method the caller, named in the messages
+     * @return array<string, mixed> with 'conditions' when there is a condition, and always
+     *   with 'set' for update_all()
+     * @throws ActiveRecordException
+     */
+    private static function bulk_write_options(mixed $options, string $method): array
+    {
+        if ('update_all' === $method && (!is_array($options) || !isset($options['set']))) {
+            throw new ActiveRecordException('Updating requires a hash or string.');
+        }
+
+        if (null === $options || [] === $options) {
+            return [];
+        }
+
+        if (!is_array($options)) {
+            if (is_scalar($options) && !is_string($options)) {
+                throw new ActiveRecordException("Invalid options for $method(): expected an options hash or a conditions string");
+            }
+
+            return ['conditions' => $options];
+        }
+
+        if (!is_hash($options)) {
+            throw new ActiveRecordException("Invalid options for $method(): pass positional conditions as ['conditions' => [...]]");
+        }
+
+        $keys = array_keys($options);
+        $unknown = array_diff($keys, 'update_all' === $method ? [...self::$VALID_OPTIONS, 'set'] : self::$VALID_OPTIONS);
+
+        if (count($unknown) === count($keys)) {
+            // not a single option key: a bare conditions hash
+            return ['conditions' => $options];
+        }
+
+        if ([] !== $unknown) {
+            throw new ActiveRecordException("Unknown key(s): " . join(', ', $unknown));
+        }
+
+        return $options;
     }
 
     /**
