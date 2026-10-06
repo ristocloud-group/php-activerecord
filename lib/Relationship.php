@@ -803,12 +803,22 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
     /**
      * The name the eager `through` query selects the middle table's key under. It is the
-     * key itself, unless the target table has a column of that name: the alias would
-     * overwrite it on every target row, so a private alias is used for the matching.
+     * key itself, unless a target column is fetched under the same name (PDO lower-cases
+     * fetched names on every adapter, so "Owner_Ref" collides with owner_ref): the alias
+     * would overwrite it on every target row, so a private alias is used for the matching.
+     * The private alias stays within 63 bytes, Postgres' identifier limit.
      */
     protected function middle_key_alias(string $key): string
     {
-        return self::table_has_column($this->get_table(), $key) ? "ar_through_$key" : $key;
+        foreach (array_keys($this->get_table()->columns) as $name) {
+            if (0 === strcasecmp((string) $name, $key)) {
+                $alias = "ar_through_$key";
+
+                return strlen($alias) > 63 ? 'ar_through_' . md5($key) : $alias;
+            }
+        }
+
+        return $key;
     }
 
     /**
