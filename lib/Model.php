@@ -1156,9 +1156,10 @@ class Model
      *
      * @param array<string, mixed> $options
      * @return int Number of rows affected
-     * @throws ActiveRecordException before any SQL when $options is not a hash with 'set'
-     *   ("Updating requires a hash or string."), or has a key beside 'set' that is not an
-     *   option, such as a column name ("Unknown key(s): ...")
+     * @throws ActiveRecordException before any SQL: when $options is not an array or has no
+     *   'set' ("Updating requires a hash or string."), is a positional list ("Invalid options
+     *   for update_all(): pass positional conditions as ['conditions' => [...]]"), or has a key
+     *   beside 'set' that is not an option, such as a column name ("Unknown key(s): ...")
      */
     public static function update_all($options = [])
     {

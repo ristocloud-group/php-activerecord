@@ -17,6 +17,18 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * Fixture authors: 4 rows, parent_author_id 3, 2, 1, 2
  * (Tito, George W. Bush, Bill Clinton, Uncle Bob).
  */
+
+// a query-fragment value object: as any non-scalar, delete_all() takes it as the conditions
+final class BulkWriteStringCondition implements Stringable
+{
+    public function __construct(private string $sql) {}
+
+    public function __toString(): string
+    {
+        return $this->sql;
+    }
+}
+
 class BulkWriteOptionsTest extends DatabaseTest
 {
     /**
@@ -132,6 +144,46 @@ class BulkWriteOptionsTest extends DatabaseTest
         $this->assert_equals(0, Author::count(['conditions' => ['name' => 'X']]));
     }
 
+    public function test_update_all_positional_list_with_set_throws()
+    {
+        $this->assert_refused(
+            "Invalid options for update_all(): pass positional conditions as ['conditions' => [...]]",
+            fn() => Author::update_all(['name = ?', 'Tito', 'set' => ['name' => 'X']]),
+        );
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'X']]));
+    }
+
+    /**
+     * @return array<string, array{\Closure(): int}>
+     */
+    public static function writes_with_an_int_key_beside_option_keys(): array
+    {
+        return [
+            'delete_all with conditions' => [fn() => Author::delete_all(['conditions' => ['name' => 'Tito'], "name = 'Tito'"])],
+            'delete_all with limit' => [fn() => Author::delete_all(['limit' => 1, "name = 'Tito'"])],
+            'update_all with set' => [fn() => Author::update_all(['set' => ['name' => 'X'], "name = 'Tito'"])],
+        ];
+    }
+
+    #[DataProvider('writes_with_an_int_key_beside_option_keys')]
+    public function test_int_key_beside_option_keys_throws(\Closure $write)
+    {
+        $this->assert_refused('Unknown key(s): 0', $write);
+        $this->assert_equals(4, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'X']]));
+    }
+
+    public function test_update_all_array_access_object_throws()
+    {
+        // only an array is an options hash (maintainer decision, 2026-10-06)
+        $this->assert_refused(
+            'Updating requires a hash or string.',
+            fn() => Author::update_all(new ArrayObject(['set' => ['name' => 'X'], 'conditions' => ['name' => 'Tito']])),
+        );
+        $this->assert_equals(4, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'X']]));
+    }
+
     /**
      * @return array<string, array{\Closure(): int}>
      */
@@ -178,5 +230,62 @@ class BulkWriteOptionsTest extends DatabaseTest
     {
         $this->assert_equals(4, Author::update_all(['set' => ['name' => 'Y']]));
         $this->assert_equals(4, Author::count(['conditions' => ['name' => 'Y']]));
+    }
+
+    public function test_delete_all_stringable_object_is_conditions()
+    {
+        $this->assert_equals(1, Author::delete_all(new BulkWriteStringCondition("name = 'Tito'")));
+        $this->assert_sql_has("WHERE name = 'Tito'", Author::table()->last_sql);
+        $this->assert_equals(3, Author::count());
+        $this->assert_equals(0, Author::count(['conditions' => ['name' => 'Tito']]));
+    }
+
+    /**
+     * Finder options a bulk write has no use for: accepted and ignored, as before.
+     *
+     * @return array<string, array{array<string, mixed>}>
+     */
+    public static function ignored_finder_options(): array
+    {
+        return [
+            'select' => [['select' => 'author_id']],
+            'joins' => [['joins' => 'INNER JOIN books ON books.author_id = authors.author_id']],
+            'from' => [['from' => 'authors a']],
+            'offset' => [['offset' => 1]],
+            'include' => [['include' => ['books']]],
+            'readonly' => [['readonly' => true]],
+            'group' => [['group' => 'name']],
+            'having' => [['having' => 'COUNT(*) > 1']],
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $finder_option
+     */
+    #[DataProvider('ignored_finder_options')]
+    public function test_delete_all_ignores_finder_options(array $finder_option)
+    {
+        $this->assert_equals(1, Author::delete_all(['conditions' => ['name' => 'Tito']] + $finder_option));
+        $sql = Author::table()->last_sql;
+        $this->assert_equals(3, Author::count());
+
+        // the very statement of the plain ['conditions' => ...] form
+        Author::delete_all(['conditions' => ['name' => 'Tito']]);
+        $this->assert_same($sql, Author::table()->last_sql);
+    }
+
+    /**
+     * @param array<string, mixed> $finder_option
+     */
+    #[DataProvider('ignored_finder_options')]
+    public function test_update_all_ignores_finder_options(array $finder_option)
+    {
+        $this->assert_equals(1, Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['name' => 'Tito']] + $finder_option));
+        $sql = Author::table()->last_sql;
+        $this->assert_equals(1, Author::count(['conditions' => ['name' => 'X']]));
+
+        // the very statement of the plain 'set' + 'conditions' form
+        Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['name' => 'Tito']]);
+        $this->assert_same($sql, Author::table()->last_sql);
     }
 }

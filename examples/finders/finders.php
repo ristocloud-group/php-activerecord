@@ -85,10 +85,12 @@ Widget::transaction(function (): bool {
     out("delete_all(['category' => 'gizmos']): " . Widget::delete_all(['category' => 'gizmos']) . ' rows (rolled back)');
     out('  SQL: ' . Widget::table()->last_sql);
 
+    $call = "update_all(['set' => ['in_stock' => 0], 'category' => 'gizmos'])";
     try {
-        Widget::update_all(['set' => ['in_stock' => 0], 'category' => 'gizmos']);
+        $updated = Widget::update_all(['set' => ['in_stock' => 0], 'category' => 'gizmos']);
+        out("$call: no exception, $updated rows updated");
     } catch (ActiveRecord\ActiveRecordException $e) {
-        out("update_all(['set' => ['in_stock' => 0], 'category' => 'gizmos']): " . $e->getMessage());
+        out("$call: " . $e->getMessage());
     }
 
     return false;
