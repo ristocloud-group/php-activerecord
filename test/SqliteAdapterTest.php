@@ -4,6 +4,12 @@ use ActiveRecord\Column;
 
 require_once __DIR__ . '/../lib/adapters/SqliteAdapter.php';
 
+// a model on the table that test_omitted_pk_that_is_not_the_rowid_alias_stays_null() creates
+class SqliteRowidAliasProbe extends ActiveRecord\Model
+{
+    public static $table_name = 'rowid_alias_probe';
+}
+
 class SqliteAdapterTest extends AdapterTest
 {
     public function set_up($connection_name = null)
@@ -63,9 +69,65 @@ class SqliteAdapterTest extends AdapterTest
         $columns = $this->conn->columns('`rm-bldg`');
         $this->assert_false($columns['rm-id']->auto_increment);
 
-        // defined using int: id INT NOT NULL PRIMARY KEY
+        // defined using int: id INT NOT NULL PRIMARY KEY is not the rowid alias,
+        // so SQLite never fills it (GH #66)
         $columns = $this->conn->columns('hosts');
-        $this->assert_true($columns['id']->auto_increment);
+        $this->assert_false($columns['id']->auto_increment);
+    }
+
+    public function test_auto_increment_only_for_the_rowid_alias()
+    {
+        // GH #66: SQLite fills a pk only when it is the rowid alias; any other pk holds
+        // the value inserted, which the model must keep instead of taking the rowid
+        $forms = [
+            '(id INTEGER PRIMARY KEY, n TEXT)' => ['id', true],
+            '(id integer not null primary key, n TEXT)' => ['id', true],
+            '(id INTEGER PRIMARY KEY AUTOINCREMENT, n TEXT)' => ['id', true],
+            '(id INTEGER, n TEXT, PRIMARY KEY(id DESC))' => ['id', true],
+            '(id INT PRIMARY KEY, n TEXT)' => ['id', false],
+            '(id INTEGER PRIMARY KEY DESC, n TEXT)' => ['id', false],
+            '(id INTEGER PRIMARY KEY, n TEXT) WITHOUT ROWID' => ['id', false],
+            '(a INTEGER, b INTEGER, n TEXT, PRIMARY KEY(a, b))' => ['a', false],
+            '(id BIGINT PRIMARY KEY, n TEXT)' => ['id', false],
+        ];
+
+        foreach ($forms as $ddl => [$pk, $expected]) {
+            $this->conn->query("CREATE TABLE rowid_alias_probe $ddl");
+
+            try {
+                $this->assert_same($expected, $this->conn->columns('rowid_alias_probe')[$pk]->auto_increment, $ddl);
+            } finally {
+                $this->conn->query('DROP TABLE rowid_alias_probe');
+            }
+        }
+    }
+
+    public function test_omitted_pk_that_is_not_the_rowid_alias_stays_null()
+    {
+        // SQLite stores NULL in an omitted nullable INT PRIMARY KEY: the model took the
+        // rowid as its id, and a later save() matched no row (GH #66). Now the id stays
+        // null and the writes are refused like on any record without a pk value (#41)
+        $this->conn->query('CREATE TABLE rowid_alias_probe (id INT PRIMARY KEY, n TEXT)');
+
+        try {
+            $probe = SqliteRowidAliasProbe::create(['n' => 'no id']);
+            $this->assert_null($probe->id);
+
+            $probe->n = 'renamed';
+            $this->assert_exception_message_contains(
+                'Cannot update, primary key value is null for: SqliteRowidAliasProbe (id)',
+                fn() => $probe->save(),
+                ActiveRecord\ActiveRecordException::class
+            );
+            $this->assert_exception_message_contains(
+                'Cannot delete, primary key value is null for: SqliteRowidAliasProbe (id)',
+                fn() => $probe->delete(),
+                ActiveRecord\ActiveRecordException::class
+            );
+            $this->assert_same('no id', SqliteRowidAliasProbe::first()->n);
+        } finally {
+            $this->conn->query('DROP TABLE rowid_alias_probe');
+        }
     }
 
     public function test_boolean_column_introspection()

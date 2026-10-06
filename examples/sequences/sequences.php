@@ -4,21 +4,24 @@
 //
 // Sequences are a Postgres-only concept in this library
 // (Connection::supports_sequences() is true only for the pgsql adapter).
-// This example shows both sides:
+// This example shows:
 //
 //   1. on adapters WITHOUT sequences (the SQLite default here, same for
 //      MySQL/MariaDB) a declared static $sequence is harmlessly ignored and
 //      the pk comes from the regular auto-increment;
-//   2. on Postgres, the {table}_{pk}_seq convention, an explicit
+//   2. on SQLite, which primary keys get that auto-increment: only the rowid
+//      alias; any other pk keeps the value a record is created with;
+//   3. on Postgres, the {table}_{pk}_seq convention, an explicit
 //      static $sequence for a non-convention name, and how an insert pulls
 //      nextval() for the pk.
 //
-// Part 2 needs a reachable Postgres and is skipped otherwise: set PHPAR_PGSQL
+// Part 3 needs a reachable Postgres and is skipped otherwise: set PHPAR_PGSQL
 // to a pgsql:// URL (this repo's Docker setup already does).
 
 require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Note.php';
+require_once __DIR__ . '/models/Room.php';
 require_once __DIR__ . '/models/Event.php';
 require_once __DIR__ . '/models/EventLog.php';
 require_once __DIR__ . '/models/Ticket.php';
@@ -62,7 +65,27 @@ out('next_sequence_value():       ' . var_export($conn->next_sequence_value('not
 $note = Note::create(['body' => 'sequences are ignored here']);
 out('created note id:             ' . $note->id . ' (auto-increment, no sequence involved)');
 
-// --- 2. Adapter with sequences (Postgres) ---
+// --- 2. Which primary keys SQLite generates ---
+
+// SQLite generates a pk only for its rowid alias: a single pk column declared
+// exactly INTEGER, like notes.id. Any other pk (INT, BIGINT, a composite key,
+// a WITHOUT ROWID table) holds the value you insert, and the model keeps it:
+// rooms.id is INT PRIMARY KEY, numbered by hand. (Before this was fixed, the
+// model took the internal rowid as its id, so a later save() or delete() hit
+// the row whose id equals that rowid: another room, or none.)
+out('');
+/** @var Room $room */
+$room = Room::create(['id' => 101, 'name' => 'Lecture hall']);
+out('created room id:             ' . $room->id . ' (as given: rooms.id is INT PRIMARY KEY)');
+
+$room->name = 'Lecture hall A';
+$room->save();
+out('Room::find(101)->name:       ' . Room::find(101)->name);
+
+$note = Note::create(['body' => 'no id given']);
+out('created note id:             ' . $note->id . ' (the rowid: notes.id is INTEGER PRIMARY KEY)');
+
+// --- 3. Adapter with sequences (Postgres) ---
 
 if ('' === $pgsql_url) {
     out('');
