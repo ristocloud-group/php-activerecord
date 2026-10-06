@@ -151,9 +151,8 @@ class SQLBuilder
      *
      * @internal Serves Table, for hashes whose keys name the same column; not a supported API.
      * @param list<array<string, mixed>> $hashes
-     * @return $this
      */
-    public function where_hashes(array $hashes)
+    public function where_hashes(array $hashes): static
     {
         $this->apply_where_hashes($hashes);
         return $this;

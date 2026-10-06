@@ -829,8 +829,9 @@ abstract class AdapterTest extends DatabaseTest
         $q = $this->conn::$QUOTE_CHARACTER;
 
         // a mandatory scope plus a second key on the same column, spelled another way:
-        // with joins both stay ANDed, exactly as without joins (they used to collapse
-        // into one key, the last one, so the scope was overridden)
+        // with joins both stay ANDed, exactly as without joins. On master the pre-quoted
+        // `author_id` collapsed with author_id into the last key (the scope was overridden);
+        // the qualified spellings rendered `books`.`books`.`author_id` and failed.
         foreach (["{$q}author_id{$q}", "{$q}books{$q}.{$q}author_id{$q}", 'books.author_id'] as $key) {
             $conditions = ['author_id' => 1, $key => 2];
 

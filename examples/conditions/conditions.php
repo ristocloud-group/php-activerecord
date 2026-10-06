@@ -83,13 +83,14 @@ try {
 }
 out('  SQL: ' . Task::table()->last_sql);
 
-// 4c. Keys that name the same column ('flag', `flag`, `tasks`.`flag`) are all kept and
-//     ANDed with `joins`, exactly as without joins, so a caller's filter cannot replace a
-//     mandatory scope. (They used to collapse into the last key: 'review PR' came back.)
+// 4c. Keys that name the same column ('flag', `flag`, tasks.flag, `tasks`.`flag`) are all
+//     kept and ANDed with `joins`, exactly as without joins, so a caller's filter cannot
+//     replace a mandatory scope. (Before, 'flag' and the pre-quoted `flag` collapsed into
+//     the last key with `joins`, and 'review PR' came back.)
 $scope = ['flag' => 1];
 $rows = Task::all([
     'joins' => 'JOIN labels ON (labels.task_id = tasks.id)',
-    'conditions' => $scope + ['`tasks`.`flag`' => 2],
+    'conditions' => $scope + ['`flag`' => 2],
 ]);
 out('scope + same column:    ' . names($rows) . '   <- both conditions apply');
 out('  SQL: ' . Task::table()->last_sql);

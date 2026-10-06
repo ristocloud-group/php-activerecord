@@ -96,7 +96,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      *
      * @var array<string, string>
      */
-    protected $qualified_keys = [];
+    protected array $qualified_keys = [];
 
     /**
      * Is the relationship single or multi.
