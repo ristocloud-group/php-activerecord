@@ -75,8 +75,9 @@ class Table
     private array $relationships = [];
 
     /**
-     * The real name of each column whose attribute (inflected) name differs from it:
-     * inflected_name => name ('some_date' => 'some_Date', 'space_name' => 'space name').
+     * The real name of each column whose attribute (inflected) name does not name it on
+     * this connection: inflected_name => name ('space_name' => 'space name'; 'some_date'
+     * => 'some_Date' only where column names are case-sensitive).
      * @var array<string, string>
      */
     private array $real_column_names = [];
@@ -404,10 +405,11 @@ class Table
     }
 
     /**
-     * The column an attribute name stands for: 'some_date' => 'some_Date', 'space_name'
-     * => 'space name' (#92). A column's own name, a qualified or quoted key, an expression
-     * or anything else that is not the attribute name of a differently named column is
-     * returned unchanged.
+     * The column an attribute name stands for: 'space_name' => 'space name' (#92), and on
+     * a connection whose column names are case-sensitive (Postgres) 'some_date' =>
+     * 'some_Date'; MySQL/SQLite match that one as is, so it is returned unchanged there.
+     * A column's own name, a qualified or quoted key, an expression or anything else that
+     * is not the attribute name of a differently named column is returned unchanged.
      *
      * @internal Serves the library's persistence and finder paths; not a supported API.
      */
@@ -713,9 +715,14 @@ class Table
             return $conn->columns($table_name);
         });
 
-        // two columns with one inflected name: the first wins, as in get_column_by_inflected_name()
+        // A name differing only by case (some_Date) is mapped only where column names are
+        // case-sensitive (Postgres): MySQL/SQLite already match it, and their SQL stays as it
+        // was. Two columns with one inflected name: the first wins, as in
+        // get_column_by_inflected_name().
+        $case_sensitive = $conn->column_names_are_case_sensitive();
+
         foreach ($this->columns as $name => $column) {
-            if ($column->inflected_name !== $name) {
+            if ($column->inflected_name !== $name && ($case_sensitive || strtolower($name) !== $column->inflected_name)) {
                 $this->real_column_names[$column->inflected_name] ??= $name;
             }
         }
@@ -731,7 +738,7 @@ class Table
      * are ANDed. Without a repeated name there is a single hash, as before.
      *
      * @param array<string, mixed> $hash A hash
-     * @param array<string, string> $map Hash of used_name => real_name
+     * @param array<string, mixed> $map Hash of used_name => real_name (a model's $alias_attribute, as configured)
      * @return non-empty-list<array<string, mixed>> Hashes with any aliases replaced with their real field name
      */
     private function map_names(array &$hash, array &$map): array
@@ -744,7 +751,8 @@ class Table
                 $name = $map[$name];
             }
 
-            $name = $this->real_column_name($name);
+            // a misconfigured alias target that is not a string stays as it was
+            $name = is_string($name) ? $this->real_column_name($name) : $name;
 
             if (array_key_exists($name, $ret)) {
                 $hashes[] = $ret;

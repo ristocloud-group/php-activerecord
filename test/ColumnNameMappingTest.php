@@ -5,15 +5,24 @@
  *
  * An attribute is the inflected column name (lowercased, '-' and ' ' => '_'), so
  * odd_columns has the attributes camelcase ("camelCase"), space_name ("space name"),
- * dash_name ("dash-name") and some_day ("some_Day", a DATE). Postgres folds nothing
- * in a quoted name and MySQL/SQLite match any case, but no adapter knows "space_name"
- * or "dash_name": every query must use the real column name.
+ * dash_name ("dash-name") and some_day ("some day", a DATE). No adapter knows
+ * "space_name", "dash_name" or "some_day": every query uses the real column name. A
+ * name differing only by case (camelcase) is mapped on Postgres only, which matches a
+ * quoted name's case; MySQL/SQLite match it as is, and their SQL stays as it was.
+ * (No column here has both a capital and a space or dash, "some Day": PDO::CASE_LOWER
+ * returns its value under 'some day', which names no column nor attribute, so a found
+ * record would not read it. That predates #92.)
  */
 class ColumnNameMappingTest extends DatabaseTest
 {
     private function quote(string $name): string
     {
         return $this->conn->quote_name($name);
+    }
+
+    private function case_sensitive(): bool
+    {
+        return 'pgsql' === $this->conn->protocol;
     }
 
     /**
@@ -84,23 +93,30 @@ class ColumnNameMappingTest extends DatabaseTest
 
     public function test_attribute_and_real_column_keys_are_both_kept()
     {
-        OddColumn::create(['camelcase' => 'a']);
+        OddColumn::create(['space_name' => 'a', 'camelcase' => 'a']);
 
-        // both name the column "camelCase": two conditions, ANDed, none dropped
-        $this->assert_equals([], OddColumn::all(['conditions' => ['camelcase' => 'a', 'camelCase' => 'zzz']]));
-        $this->assert_equals(1, count(OddColumn::all(['conditions' => ['camelcase' => 'a', 'camelCase' => 'a']])));
+        // both name the column "space name": two conditions, ANDed, none dropped
+        $this->assert_equals([], OddColumn::all(['conditions' => ['space_name' => 'a', 'space name' => 'zzz']]));
+        $this->assert_equals(1, count(OddColumn::all(['conditions' => ['space_name' => 'a', 'space name' => 'a']])));
 
-        $sql = OddColumn::table()->options_to_sql(['conditions' => ['camelcase' => 'a', 'camelCase' => 'zzz']]);
-        $column = $this->quote('camelCase');
+        $sql = OddColumn::table()->options_to_sql(['conditions' => ['space_name' => 'a', 'space name' => 'zzz']]);
+        $column = $this->quote('space name');
         $this->assert_equals('SELECT * FROM ' . $this->quote('odd_columns') . " WHERE $column=? AND $column=?", $sql->to_s());
         $this->assert_equals(['a', 'zzz'], $sql->get_where_values());
+
+        // a name differing only by case: mapped on Postgres, matched as is by MySQL/SQLite;
+        // either way both conditions stay
+        $this->assert_equals([], OddColumn::all(['conditions' => ['camelcase' => 'a', 'camelCase' => 'zzz']]));
+        $this->assert_equals(1, count(OddColumn::all(['conditions' => ['camelcase' => 'a', 'camelCase' => 'a']])));
+        $first = $this->quote($this->case_sensitive() ? 'camelCase' : 'camelcase');
+        $this->assert_string_contains_string(" WHERE $first=? AND " . $this->quote('camelCase') . '=?', OddColumn::table()->last_sql);
 
         // the WHERE hash of a record update/delete keeps both conditions too (the later
         // one alone would match the row): nothing matches
         $table = OddColumn::table();
         $set = ['dash_name' => 'z'];
-        $this->assert_equals(0, $table->update($set, ['camelCase' => 'zzz', 'camelcase' => 'a'])->rowCount());
-        $this->assert_equals(0, $table->delete(['camelCase' => 'zzz', 'camelcase' => 'a'])->rowCount());
+        $this->assert_equals(0, $table->update($set, ['space name' => 'zzz', 'space_name' => 'a'])->rowCount());
+        $this->assert_equals(0, $table->delete(['space name' => 'zzz', 'space_name' => 'a'])->rowCount());
         $this->assert_null(OddColumn::first()->dash_name);
     }
 
@@ -109,7 +125,6 @@ class ColumnNameMappingTest extends DatabaseTest
         $table = Author::table();
         $this->assert_same('authors.some_date', $table->real_column_name('authors.some_date'));
         $this->assert_same('nope', $table->real_column_name('nope'));
-        $this->assert_same('some_Date', $table->real_column_name('some_date'));
         $this->assert_same('some_Date', $table->real_column_name('some_Date'));
         $this->assert_same('"some_Date"', $table->real_column_name('"some_Date"'));
         $this->assert_same('`some_Date`', $table->real_column_name('`some_Date`'));
@@ -128,15 +143,49 @@ class ColumnNameMappingTest extends DatabaseTest
         );
     }
 
+    public function test_case_only_names_are_mapped_where_column_names_are_case_sensitive()
+    {
+        $case_sensitive = $this->case_sensitive();
+        $this->assert_same($case_sensitive, $this->conn->column_names_are_case_sensitive());
+
+        // only the case differs: mapped on Postgres, unchanged on MySQL/SQLite
+        $this->assert_same($case_sensitive ? 'some_Date' : 'some_date', Author::table()->real_column_name('some_date'));
+        $this->assert_same($case_sensitive ? 'camelCase' : 'camelcase', OddColumn::table()->real_column_name('camelcase'));
+
+        // more than the case differs: mapped on every adapter
+        $this->assert_same('space name', OddColumn::table()->real_column_name('space_name'));
+        $this->assert_same('dash-name', OddColumn::table()->real_column_name('dash_name'));
+        $this->assert_same('some day', OddColumn::table()->real_column_name('some_day'));
+    }
+
     public function test_real_column_keys_maps_string_keys_and_keeps_the_later_value()
     {
         $table = OddColumn::table();
 
         $this->assert_same(
-            ['camelCase' => 'b', 'space name' => 'c', 'id' => 1, 0 => 'x'],
-            $table->real_column_keys(['camelcase' => 'a', 'space_name' => 'c', 'camelCase' => 'b', 'id' => 1, 0 => 'x'])
+            ['space name' => 'b', 'dash-name' => 'c', 'id' => 1, 0 => 'x'],
+            $table->real_column_keys(['space_name' => 'a', 'dash_name' => 'c', 'space name' => 'b', 'id' => 1, 0 => 'x'])
         );
-        $this->assert_same([['camelCase' => 'a'], ['camelCase' => 'b', 'dash-name' => 'c']], $table->condition_hashes(['camelcase' => 'a', 'camelCase' => 'b', 'dash_name' => 'c']));
+        $this->assert_same([['space name' => 'a'], ['space name' => 'b', 'dash-name' => 'c']], $table->condition_hashes(['space_name' => 'a', 'space name' => 'b', 'dash_name' => 'c']));
+    }
+
+    public function test_datetime_for_a_case_only_date_column_binds_as_before_on_mysql_and_sqlite()
+    {
+        $date = new DateTime('2026-01-02 15:00:00');
+
+        // some_date is the column some_Date: on MySQL/SQLite it is not mapped, so a DateTime
+        // binds in the datetime format as it always has; Postgres maps it to the DATE format
+        $expected = $this->case_sensitive() ? $this->conn->date_to_string($date) : $this->conn->datetime_to_string($date);
+        $this->assert_same(['some_date' => $expected], Author::table()->format_date_bind_values(['some_date' => $date]));
+
+        // SQLite stores the text it is given; MySQL/MariaDB and Postgres store the date
+        $author = Author::create(['name' => 'dated', 'some_date' => $date]);
+        $values = [$author->id];
+        $stored = Author::connection()->query_and_fetch_one(
+            'SELECT ' . $this->quote('some_Date') . ' FROM ' . $this->quote('authors') . ' WHERE ' . $this->quote('author_id') . '=?',
+            $values
+        );
+        $this->assert_same('sqlite' === $this->conn->protocol ? $this->conn->datetime_to_string($date) : '2026-01-02', $stored);
     }
 
     public function test_date_value_for_odd_date_column_is_bound_as_date()
@@ -158,6 +207,23 @@ class ColumnNameMappingTest extends DatabaseTest
         $this->assert_not_null($duplicate->errors->on('space_name'));
 
         $this->assert_true((new OddColumnUnique(['space_name' => 'c']))->save());
+    }
+
+    public function test_validates_uniqueness_of_with_an_odd_primary_key_column()
+    {
+        $first = OddColumnUniqueBySpace::create(['space_name' => 'a', 'dash_name' => 'c']);
+        $this->assert_true($first->is_valid());
+
+        // another row has dash_name c: the check excludes this record by its pk column
+        $duplicate = new OddColumnUniqueBySpace(['space_name' => 'b', 'dash_name' => 'c']);
+        $this->assert_false($duplicate->save());
+        $this->assert_not_null($duplicate->errors->on('dash_name'));
+        $this->assert_string_contains_string($this->quote('space name') . ' != ? AND ' . $this->quote('dash-name') . '=?', OddColumnUniqueBySpace::table()->last_sql);
+
+        // the record itself is not its own duplicate
+        $first->camelcase = 'x';
+        $this->assert_true($first->save());
+        $this->assert_equals(1, OddColumnUniqueBySpace::count());
     }
 
     public function test_last_default_order_sql_is_unchanged_for_a_plain_pk()

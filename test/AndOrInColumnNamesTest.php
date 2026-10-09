@@ -154,11 +154,9 @@ class AndOrInColumnNamesTest extends DatabaseTest
 
     public function test_the_attribute_name_of_a_column_matches()
     {
-        // the column is Shade_and_Tone on MySQL/SQLite: its attribute is shade_and_tone,
-        // and the query names the column (#92)
+        // the column is Shade_and_Tone on MySQL/SQLite: its attribute is shade_and_tone
         $this->assert_equals(['B match'], $this->titles(Swatch::find_all_by_shade_and_tone(3)));
-        $column = Swatch::table()->get_column_by_inflected_name('shade_and_tone')->name;
-        $this->assert_sql_has("WHERE $column=?", $this->last_sql());
+        $this->assert_sql_has('WHERE shade_and_tone=?', $this->last_sql());
     }
 
     public function test_separators_stay_case_insensitive()

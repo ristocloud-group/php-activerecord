@@ -25,6 +25,16 @@ class PgsqlAdapter extends Connection
         return true;
     }
 
+    /**
+     * A quoted identifier keeps its case: "some_Date" is not some_date (#92).
+     *
+     * @internal Serves Table's attribute-to-column mapping; not a supported API.
+     */
+    public function column_names_are_case_sensitive(): bool
+    {
+        return true;
+    }
+
     public function get_sequence_name($table, $column_name)
     {
         return "{$table}_{$column_name}_seq";

@@ -1830,6 +1830,8 @@ class Model
     private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map, ?array $split): ?array
     {
         $table = static::table();
+        // the names create_conditions_from_underscored_string() splits out of $attributes: keep
+        // this pattern in step with its preg_split('/(_and_|_or_)/i', ...) in SQLBuilder
         $names = null === $split ? (preg_split('/_and_|_or_/i', $attributes) ?: []) : $split[0];
         $columns = [];
 

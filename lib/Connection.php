@@ -761,6 +761,18 @@ abstract class Connection
     }
 
     /**
+     * Whether a column name in a query must match the column's case: 'some_date' then
+     * misses the column some_Date. False by default: MySQL, MariaDB and SQLite match
+     * column names case-insensitively (#92).
+     *
+     * @internal Serves Table's attribute-to-column mapping; not a supported API.
+     */
+    public function column_names_are_case_sensitive(): bool
+    {
+        return false;
+    }
+
+    /**
      * Closes the underlying PDO connection.
      *
      * @return void

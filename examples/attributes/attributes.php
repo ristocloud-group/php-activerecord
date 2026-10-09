@@ -87,10 +87,11 @@ $m->save();
 out('is_dirty() after save? ' . ($m->is_dirty() ? 'yes' : 'no'));
 
 // Columns whose names are not attribute names: the column "first name" is the
-// attribute first_name, the column lastName the attribute lastname. Every query
-// names the real column, so save(), the finders and count() take the attribute
-// names. (Before #92 they sent first_name as a column name and failed, here as on
-// MySQL; on Postgres, which matches a quoted name's case, lastname too.)
+// attribute first_name, the column lastName the attribute lastname. Queries name
+// the real column, so save(), the finders and count() take the attribute names.
+// (Before #92 they sent first_name as a column name and failed on every database.)
+// A name that differs only by case, like lastName, is renamed only on Postgres,
+// which matches a quoted name's case; SQLite and MySQL match lastname as it is.
 $contact = new Contact(['first_name' => 'Ada', 'lastname' => 'Byron']);
 $contact->save();
 $found = Contact::find_by_first_name('Ada');
