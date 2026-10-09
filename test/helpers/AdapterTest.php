@@ -839,8 +839,10 @@ abstract class AdapterTest extends DatabaseTest
             $this->assert_equals([], Book::all(['joins' => ['author'], 'conditions' => $conditions]), $key);
         }
 
+        // the attribute author_id names its column (Author_Id on MySQL/SQLite, #92); a quoted key is kept as written
+        $author_id = Book::table()->get_column_by_inflected_name('author_id')->name;
         Book::all(['joins' => ['author'], 'conditions' => ['author_id' => 1, "{$q}author_id{$q}" => 2]]);
-        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}author_id{$q}=?", Book::table()->last_sql);
+        $this->assert_sql_has_exact("WHERE {$q}books{$q}.{$q}{$author_id}{$q}=? AND {$q}books{$q}.{$q}author_id{$q}=?", Book::table()->last_sql);
     }
 
     public function test_joins_keep_bind_values_aligned_for_keys_naming_the_same_column()
@@ -855,8 +857,10 @@ abstract class AdapterTest extends DatabaseTest
 
         $this->assert_equals([2], array_map(fn($book) => $book->book_id, Book::all(['conditions' => $conditions])));
         $this->assert_equals([2], array_map(fn($book) => $book->book_id, Book::all(['joins' => ['author'], 'conditions' => $conditions])));
+        // the attribute author_id names its column (Author_Id on MySQL/SQLite, #92); quoted keys are kept as written
+        $author_id = Book::table()->get_column_by_inflected_name('author_id')->name;
         $this->assert_sql_has_exact(
-            "WHERE {$q}books{$q}.{$q}author_id{$q} IN(?,?) AND {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}name{$q}=?"
+            "WHERE {$q}books{$q}.{$q}{$author_id}{$q} IN(?,?) AND {$q}books{$q}.{$q}author_id{$q}=? AND {$q}books{$q}.{$q}name{$q}=?"
             . " AND ({$q}books{$q}.{$q}author_id{$q} IN(?) OR {$q}books{$q}.{$q}author_id{$q} IS NULL)",
             Book::table()->last_sql
         );

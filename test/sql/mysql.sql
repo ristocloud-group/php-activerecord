@@ -172,3 +172,12 @@ CREATE TABLE composite_items (
   `parent_ref` INT,
   `title` VARCHAR(20)
 ) ENGINE=InnoDB;
+
+-- column names that differ from their attribute names (#92): camelcase, space_name, dash_name, some_day
+CREATE TABLE odd_columns (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `camelCase` VARCHAR(20),
+  `space name` VARCHAR(20),
+  `dash-name` VARCHAR(20),
+  `some_Day` DATE
+) ENGINE=InnoDB;

@@ -810,7 +810,9 @@ class RelationshipTest extends DatabaseTest
             $this->assert_true(empty($v->events));
         }
 
-        $this->assert_sql_has("WHERE id IN(?,?)", ActiveRecord\Table::load('Venue')->last_sql);
+        // a find by pk names the pk column: Id on MySQL/SQLite (#92)
+        $id = ActiveRecord\Table::load('Venue')->get_column_by_inflected_name('id')->name;
+        $this->assert_sql_has("WHERE $id IN(?,?)", ActiveRecord\Table::load('Venue')->last_sql);
         $this->assert_sql_has("WHERE venue_id IN(?,?)", ActiveRecord\Table::load('Event')->last_sql);
     }
 
@@ -855,7 +857,9 @@ class RelationshipTest extends DatabaseTest
             }
         }
 
-        $this->assert_sql_has("WHERE id IN(?,?)", ActiveRecord\Table::load('Venue')->last_sql);
+        // a find by pk names the pk column: Id on MySQL/SQLite (#92)
+        $id = ActiveRecord\Table::load('Venue')->get_column_by_inflected_name('id')->name;
+        $this->assert_sql_has("WHERE $id IN(?,?)", ActiveRecord\Table::load('Venue')->last_sql);
         $this->assert_sql_has("WHERE venue_id IN(?,?)", ActiveRecord\Table::load('Event')->last_sql);
         $this->assert_sql_has("WHERE id IN(?,?,?)", ActiveRecord\Table::load('Host')->last_sql);
     }
@@ -877,7 +881,9 @@ class RelationshipTest extends DatabaseTest
             }
         }
 
-        $this->assert_sql_has("WHERE id IN(?,?)", ActiveRecord\Table::load('Venue')->last_sql);
+        // a find by pk names the pk column: Id on MySQL/SQLite (#92)
+        $id = ActiveRecord\Table::load('Venue')->get_column_by_inflected_name('id')->name;
+        $this->assert_sql_has("WHERE $id IN(?,?)", ActiveRecord\Table::load('Venue')->last_sql);
         $this->assert_sql_has("WHERE venue_id IN(?,?)", ActiveRecord\Table::load('Event')->last_sql);
     }
 

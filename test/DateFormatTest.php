@@ -9,7 +9,8 @@ class DateFormatTest extends DatabaseTest
         $author->some_date = new DateTime();
         $author->save();
 
-        $author = Author::first();
+        // the same row: without an order, Postgres returns the updated row last (#92)
+        $author = Author::find($author->id);
         $this->assert_is_a("ActiveRecord\\DateTime", $author->some_date);
     }
 

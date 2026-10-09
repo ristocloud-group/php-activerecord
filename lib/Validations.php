@@ -599,6 +599,8 @@ class Validations
         ]);
         // Retrieve connection from model for quote_name method
         $connection = $this->klass->getMethod('connection')->invoke(null);
+        // the query names the columns: some_date is the column some_Date (#92)
+        $table = $this->model::table();
 
         foreach ($attrs as $attr) {
             $options = array_merge($configuration, $attr);
@@ -616,7 +618,7 @@ class Validations
 
             $sql = "";
             $conditions = [""];
-            $pk_quoted = $connection->quote_name($pk[0]);
+            $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
             if ($pk_value === null) {
                 $sql = "{$pk_quoted} IS NOT NULL";
             } else {
@@ -626,7 +628,7 @@ class Validations
 
             foreach ($fields as $field) {
                 $field = $this->model->get_real_attribute_name($field);
-                $quoted_field = $connection->quote_name($field);
+                $quoted_field = $connection->quote_name($table->real_column_name((string) $field));
                 $sql .= " AND {$quoted_field}=?";
                 array_push($conditions, $this->model->$field);
             }

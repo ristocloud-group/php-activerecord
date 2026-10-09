@@ -174,3 +174,12 @@ CREATE TABLE composite_items (
   parent_ref int,
   title varchar(20)
 );
+
+-- column names that differ from their attribute names (#92): camelcase, space_name, dash_name, some_day
+CREATE TABLE odd_columns (
+  id serial primary key,
+  "camelCase" varchar(20),
+  "space name" varchar(20),
+  "dash-name" varchar(20),
+  "some_Day" date
+);

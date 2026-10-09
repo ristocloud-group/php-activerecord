@@ -1819,6 +1819,8 @@ class Model
     /**
      * The conditions of a dynamic finder: split as split_dynamic_finder_attributes() said ($split),
      * or at every separator as create_conditions_from_underscored_string() does when it said null.
+     * Each name is resolved through the alias map, then to its column (find_by_space_name looks
+     * up the column "space name", #92).
      *
      * @param list<mixed> $args
      * @param array<string, string>|null $map
@@ -1827,9 +1829,17 @@ class Model
      */
     private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map, ?array $split): ?array
     {
+        $table = static::table();
+        $names = null === $split ? (preg_split('/_and_|_or_/i', $attributes) ?: []) : $split[0];
+        $columns = [];
+
+        foreach ($names as $name) {
+            $columns[$name] = $table->real_column_name($map[$name] ?? $name);
+        }
+
         return null === $split
-            ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $map)
-            : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $map, $split[1]);
+            ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $columns)
+            : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $columns, $split[1]);
     }
 
     /**
@@ -2123,7 +2133,17 @@ class Model
 
                 case 'last':
                     if (!array_key_exists('order', $options)) {
-                        $options['order'] = join(' DESC, ', static::table()->pk) . ' DESC';
+                        // a pk attribute named like its column stays unquoted, as it always
+                        // has; one standing for another column orders by that column (#92)
+                        $table = static::table();
+                        $order = [];
+
+                        foreach ($table->pk as $name) {
+                            $column = $table->real_column_name($name);
+                            $order[] = $column === $name ? $name : static::connection()->quote_name($column);
+                        }
+
+                        $options['order'] = join(' DESC, ', $order) . ' DESC';
                     } else {
                         $options['order'] = SQLBuilder::reverse_order($options['order']);
                     }
