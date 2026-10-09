@@ -251,4 +251,110 @@ class ColumnNameMappingTest extends DatabaseTest
         $r->delete();
         $this->assert_equals(['a'], array_map(fn($record) => $record->space_name, OddColumnBySpace::all()));
     }
+
+    public function test_update_all_set_and_conditions_by_attribute_name()
+    {
+        OddColumn::create(['space_name' => 'x', 'dash_name' => 'k']);
+        OddColumn::create(['space_name' => 'y', 'dash_name' => 'k']);
+        $this->assert_equals(1, OddColumn::update_all(['set' => ['camelcase' => 'Z'], 'conditions' => ['space_name' => 'x']]));
+        $this->assert_equals(1, OddColumn::count(['conditions' => ['camelcase' => 'Z']]));
+
+        // a 'set' hash is data: two keys naming one column leave the later value
+        $this->assert_equals(2, OddColumn::update_all(['set' => ['dash_name' => 'p', 'dash-name' => 'q']]));
+        $this->assert_equals(2, OddColumn::count_by_dash_name('q'));
+    }
+
+    public function test_delete_all_conditions_by_attribute_name()
+    {
+        OddColumn::create(['space_name' => 'x', 'dash_name' => 'k']);
+        OddColumn::create(['space_name' => 'y', 'dash_name' => 'k']);
+        $this->assert_equals(1, OddColumn::delete_all(['conditions' => ['dash_name' => 'k', 'space_name' => 'y']]));
+        $this->assert_equals(['x'], array_map(fn($record) => $record->space_name, OddColumn::all()));
+    }
+
+    public function test_delete_all_keeps_both_attribute_and_real_column_conditions()
+    {
+        OddColumn::create(['space_name' => 'x', 'dash_name' => 'k']);
+
+        // both name the column "space name": two conditions, ANDed, none dropped (the
+        // later one alone would match the row in the second call)
+        $this->assert_equals(0, OddColumn::delete_all(['conditions' => ['space_name' => 'x', 'space name' => 'nope']]));
+        $this->assert_equals(0, OddColumn::delete_all(['conditions' => ['space name' => 'nope', 'space_name' => 'x']]));
+        $column = $this->quote('space name');
+        $this->assert_equals('DELETE FROM ' . $this->quote('odd_columns') . " WHERE $column=? AND $column=?", OddColumn::table()->last_sql);
+        $this->assert_equals(1, OddColumn::count());
+
+        $this->assert_equals(1, OddColumn::delete_all(['conditions' => ['space name' => 'x', 'space_name' => 'x']]));
+        $this->assert_equals(0, OddColumn::count());
+    }
+
+    public function test_update_all_keeps_both_attribute_and_real_column_conditions()
+    {
+        OddColumn::create(['space_name' => 'x', 'dash_name' => 'k']);
+
+        // the SET value binds first, then both conditions on "space name", ANDed
+        $this->assert_equals(0, OddColumn::update_all(['set' => ['dash_name' => 'z'], 'conditions' => ['space name' => 'nope', 'space_name' => 'x']]));
+        $column = $this->quote('space name');
+        $this->assert_equals(
+            'UPDATE ' . $this->quote('odd_columns') . ' SET ' . $this->quote('dash-name') . "=? WHERE $column=? AND $column=?",
+            OddColumn::table()->last_sql
+        );
+        $this->assert_equals('k', OddColumn::first()->dash_name);
+
+        $this->assert_equals(1, OddColumn::update_all(['set' => ['dash_name' => 'z'], 'conditions' => ['space name' => 'x', 'space_name' => 'x']]));
+        $this->assert_equals('z', OddColumn::first()->dash_name);
+    }
+
+    public function test_update_all_set_date_on_odd_date_column()
+    {
+        OddColumn::create(['space_name' => 'x']);
+        OddColumn::create(['space_name' => 'y']);
+
+        // some_day is the DATE column "some day": the DateTime binds in the date format
+        $this->assert_equals(2, OddColumn::update_all(['set' => ['some_day' => new DateTime('2026-03-04 10:00:00')]]));
+        $this->assert_not_null(OddColumn::find_by_some_day('2026-03-04'));
+        $this->assert_equals(2, OddColumn::count_by_some_day('2026-03-04'));
+    }
+
+    public function test_update_all_and_delete_all_sql_is_unchanged_for_plain_columns()
+    {
+        $this->assert_equals(1, Author::update_all(['set' => ['name' => 'x'], 'conditions' => ['author_id' => 1, 'parent_author_id' => 3]]));
+        $this->assert_equals(
+            'UPDATE ' . $this->quote('authors') . ' SET ' . $this->quote('name') . '=? WHERE ' . $this->quote('author_id') . '=? AND ' . $this->quote('parent_author_id') . '=?',
+            Author::table()->last_sql
+        );
+
+        $this->assert_equals(1, Author::delete_all(['conditions' => ['author_id' => 1, 'name' => 'x']]));
+        $this->assert_equals(
+            'DELETE FROM ' . $this->quote('authors') . ' WHERE ' . $this->quote('author_id') . '=? AND ' . $this->quote('name') . '=?',
+            Author::table()->last_sql
+        );
+    }
+
+    public function test_upsert_by_attribute_names()
+    {
+        OddColumn::upsert([['id' => 1, 'space_name' => 'u']], 'id');
+        OddColumn::upsert([['id' => 1, 'space_name' => 'u2']], 'id');
+
+        $this->assert_equals(['u2'], array_map(fn($record) => $record->space_name, OddColumn::all()));
+    }
+
+    public function test_upsert_unique_by_and_update_by_attribute_names()
+    {
+        // ON CONFLICT on Postgres/SQLite needs a unique index on "dash-name"; dropped below
+        $index = $this->quote('odd_columns_dash_name');
+        $table = $this->quote('odd_columns');
+        $this->conn->query("CREATE UNIQUE INDEX $index ON $table (" . $this->quote('dash-name') . ')');
+
+        try {
+            OddColumn::upsert([['dash_name' => 'k', 'space_name' => 'a', 'camelcase' => 'c']], 'dash_name');
+            OddColumn::upsert([['dash_name' => 'k', 'space_name' => 'b', 'camelcase' => 'd']], ['dash_name'], ['space_name']);
+
+            // one row: space_name overwritten, camelcase (not in the update list) kept
+            $r = OddColumn::first();
+            $this->assert_equals([1, 'b', 'c'], [OddColumn::count(), $r->space_name, $r->camelcase]);
+        } finally {
+            $this->conn->query('mysql' === $this->conn->protocol ? "DROP INDEX $index ON $table" : "DROP INDEX $index");
+        }
+    }
 }

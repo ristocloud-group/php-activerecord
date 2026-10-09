@@ -541,6 +541,14 @@ class Table
             return 0;
         }
 
+        // The statement names the columns (#92): row keys, $unique_by and $update are
+        // mapped from attribute names first, so everything below works on column names.
+        // (string): a name that is not a string renders as quote_name() always cast it.
+        $column_name = fn(mixed $name): string => $this->real_column_name((string) $name);
+        $values = array_map(fn(array $row): array => $this->real_column_keys($row), $values);
+        $unique_by = array_map($column_name, $unique_by);
+        $update = null === $update ? null : array_map($column_name, $update);
+
         // Every row must share the same set of keys.
         $first_keys = array_keys(reset($values));
         $sorted = $first_keys;

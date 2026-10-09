@@ -1097,6 +1097,9 @@ class Model
 
         if (is_array($conditions) && !is_hash($conditions)) {
             call_user_func_array([$sql, 'delete'], $conditions);
+        } elseif (is_hash($conditions)) {
+            // the keys name the columns (#92); two keys naming one column both stay conditions
+            $sql->delete()->where_hashes($table->condition_hashes($conditions));
         } else {
             $sql->delete($conditions);
         }
@@ -1149,13 +1152,17 @@ class Model
         $conn = static::connection();
         $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138)
+        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138);
+        // the keys name the columns (#92)
         $set = $options['set'];
-        $sql->update(is_array($set) ? $table->format_date_bind_values($set) : $set);
+        $sql->update(is_array($set) ? $table->format_date_bind_values($table->real_column_keys($set)) : $set);
 
         if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
             if (is_array($conditions) && !is_hash($conditions)) {
                 call_user_func_array([$sql, 'where'], $conditions);
+            } elseif (is_hash($conditions)) {
+                // the keys name the columns (#92); two keys naming one column both stay conditions
+                $sql->where_hashes($table->condition_hashes($conditions));
             } else {
                 $sql->where($conditions);
             }
