@@ -1080,8 +1080,11 @@ class Model
      *
      * <ul>
      * <li><b>conditions:</b> Conditions using a string/hash/array</li>
-     * <li><b>limit:</b> Limit number of records to delete (MySQL & Sqlite only)</li>
-     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
+     * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
+     * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
+     * and a table without a primary key by its row identity (tableoid, ctid)</li>
+     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc'. With a
+     * limit it picks the records to delete; on Postgres an order without a limit is ignored</li>
      * </ul>
      *
      * @param mixed $options
@@ -1112,6 +1115,9 @@ class Model
             $sql->order($options['order']);
         }
 
+        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
+        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
+
         $values = $table->format_date_bind_values($sql->bind_values());
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
         return $ret->rowCount();
@@ -1139,8 +1145,11 @@ class Model
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with
      * <li><b>conditions:</b> Conditions using a string/hash/array</li>
-     * <li><b>limit:</b> Limit number of records to update (MySQL & Sqlite only)</li>
-     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
+     * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
+     * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
+     * and a table without a primary key by its row identity (tableoid, ctid)</li>
+     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc'. With a
+     * limit it picks the records to update; on Postgres an order without a limit is ignored</li>
      * </ul>
      *
      * @param array<string, mixed> $options
@@ -1175,6 +1184,9 @@ class Model
         if (isset($options['order'])) {
             $sql->order($options['order']);
         }
+
+        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
+        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
 
         $values = $table->format_date_bind_values($sql->bind_values());
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);

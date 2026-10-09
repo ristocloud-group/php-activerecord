@@ -35,6 +35,32 @@ class PgsqlAdapter extends Connection
         return true;
     }
 
+    /**
+     * Postgres has no LIMIT/ORDER BY on UPDATE and DELETE, so the rows are picked by key
+     * in a subquery, as Rails does (#92): "id" IN (SELECT "id" FROM t WHERE ... ORDER BY
+     * ... LIMIT n). A table without a primary key is keyed by its row identity
+     * (tableoid, ctid): ctid alone repeats across the partitions of a partitioned table.
+     *
+     * @internal Serves SQLBuilder; not a supported API.
+     * @param list<string> $key
+     */
+    public function limited_rows_condition(string $table, ?string $where, ?string $order, int $limit, array $key): ?string
+    {
+        $select = [] === $key ? 'tableoid, ctid' : implode(', ', $key);
+        $columns = 1 === count($key) ? $select : "($select)";
+        $sql = "SELECT $select FROM $table";
+
+        if (null !== $where) {
+            $sql .= " WHERE $where";
+        }
+
+        if (null !== $order) {
+            $sql .= " ORDER BY $order";
+        }
+
+        return "$columns IN ($sql LIMIT $limit)";
+    }
+
     public function get_sequence_name($table, $column_name)
     {
         return "{$table}_{$column_name}_seq";

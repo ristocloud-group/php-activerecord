@@ -195,12 +195,16 @@ class SQLBuilderTest extends DatabaseTest
 
     public function test_update_with_limit_and_order()
     {
-        if (!$this->conn->accepts_limit_and_order_for_update_and_delete()) {
-            $this->mark_test_skipped('Only MySQL & Sqlite accept limit/order with UPDATE operation');
+        $this->sql->update(['id' => 1])->order('name asc')->limit(1);
+
+        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+            $this->assert_sql_has("UPDATE authors SET id=? ORDER BY name asc LIMIT 1", $this->sql->to_s());
+        } else {
+            // Postgres: the rows are picked in a subquery (#92); no key columns given, so by row identity
+            $this->assert_equals('UPDATE authors SET "id"=? WHERE (tableoid, ctid) IN (SELECT tableoid, ctid FROM authors ORDER BY name asc LIMIT 1)', $this->sql->to_s());
         }
 
-        $this->sql->update(['id' => 1])->order('name asc')->limit(1);
-        $this->assert_sql_has("UPDATE authors SET id=? ORDER BY name asc LIMIT 1", $this->sql->to_s());
+        $this->assert_equals([1], $this->sql->bind_values());
     }
 
     public function test_update_with_string()
@@ -237,12 +241,45 @@ class SQLBuilderTest extends DatabaseTest
 
     public function test_delete_with_limit_and_order()
     {
-        if (!$this->conn->accepts_limit_and_order_for_update_and_delete()) {
-            $this->mark_test_skipped('Only MySQL & Sqlite accept limit/order with DELETE operation');
+        $this->sql->delete(['id' => 1])->order('name asc')->limit(1);
+
+        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+            $this->assert_sql_has("DELETE FROM authors WHERE id=? ORDER BY name asc LIMIT 1", $this->sql->to_s());
+        } else {
+            // Postgres: the WHERE moves into the subquery that picks the rows (#92)
+            $this->assert_equals('DELETE FROM authors WHERE (tableoid, ctid) IN (SELECT tableoid, ctid FROM authors WHERE "id"=? ORDER BY name asc LIMIT 1)', $this->sql->to_s());
         }
 
-        $this->sql->delete(['id' => 1])->order('name asc')->limit(1);
-        $this->assert_sql_has("DELETE FROM authors WHERE id=? ORDER BY name asc LIMIT 1", $this->sql->to_s());
+        $this->assert_equals([1], $this->sql->bind_values());
+    }
+
+    public function test_update_with_limit_and_order_and_key_columns_keeps_set_values_before_where_values()
+    {
+        $this->sql->update(['name' => 'X'])->where('parent_author_id = ?', 2)->order('name asc')->limit(1)->key_columns(['author_id']);
+
+        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+            // MySQL / SQLite: the key columns are not used
+            $this->assert_sql_has('UPDATE authors SET name=? WHERE parent_author_id = ? ORDER BY name asc LIMIT 1', $this->sql->to_s());
+        } else {
+            $this->assert_equals('UPDATE authors SET "name"=? WHERE "author_id" IN (SELECT "author_id" FROM authors WHERE parent_author_id = ? ORDER BY name asc LIMIT 1)', $this->sql->to_s());
+        }
+
+        $this->assert_equals(['X', 2], $this->sql->bind_values());
+    }
+
+    public function test_update_and_delete_with_order_but_no_limit()
+    {
+        $update = (new SQLBuilder($this->conn, 'authors'))->update(['id' => 1])->order('name asc');
+        $delete = (new SQLBuilder($this->conn, 'authors'))->delete(['id' => 1])->order('name asc');
+
+        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+            $this->assert_sql_has('UPDATE authors SET id=? ORDER BY name asc', $update->to_s());
+            $this->assert_sql_has('DELETE FROM authors WHERE id=? ORDER BY name asc', $delete->to_s());
+        } else {
+            // Postgres: an order without a limit picks no rows, so it is left out, as before
+            $this->assert_equals('UPDATE authors SET "id"=?', $update->to_s());
+            $this->assert_equals('DELETE FROM authors WHERE "id"=?', $delete->to_s());
+        }
     }
 
     public function test_gh34_update_and_delete_with_limit_zero()
@@ -254,9 +291,9 @@ class SQLBuilderTest extends DatabaseTest
             $this->assert_sql_has('UPDATE authors SET id=? ORDER BY name asc LIMIT 0', $update->to_s());
             $this->assert_sql_has('DELETE FROM authors WHERE id=? ORDER BY name asc LIMIT 0', $delete->to_s());
         } else {
-            // Postgres: no ORDER BY / LIMIT on UPDATE and DELETE, as before
-            $this->assert_sql_doesnt_has('LIMIT', $update->to_s());
-            $this->assert_sql_doesnt_has('LIMIT', $delete->to_s());
+            // Postgres: LIMIT 0 in the subquery picks no row (#92)
+            $this->assert_equals('UPDATE authors SET "id"=? WHERE (tableoid, ctid) IN (SELECT tableoid, ctid FROM authors ORDER BY name asc LIMIT 0)', $update->to_s());
+            $this->assert_equals('DELETE FROM authors WHERE (tableoid, ctid) IN (SELECT tableoid, ctid FROM authors WHERE "id"=? ORDER BY name asc LIMIT 0)', $delete->to_s());
         }
     }
 

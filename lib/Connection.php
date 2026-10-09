@@ -761,6 +761,24 @@ abstract class Connection
     }
 
     /**
+     * For an adapter without LIMIT/ORDER BY on UPDATE and DELETE (see
+     * accepts_limit_and_order_for_update_and_delete()): a WHERE condition that keeps the
+     * statement to the first $limit rows in $order, which replaces the statement's own
+     * WHERE. Null by default: the statement is built without the limit and the order, as
+     * it always has been (#92).
+     *
+     * @internal Serves SQLBuilder; not a supported API.
+     * @param string $table The table as the statement names it (already quoted)
+     * @param string|null $where The statement's WHERE condition, if any: it moves into the result
+     * @param string|null $order The ORDER BY fragment, if any
+     * @param list<string> $key The quoted columns that identify a row (the primary key), or none
+     */
+    public function limited_rows_condition(string $table, ?string $where, ?string $order, int $limit, array $key): ?string
+    {
+        return null;
+    }
+
+    /**
      * Whether a column name in a query must match the column's case: 'some_date' then
      * misses the column some_Date. False by default: MySQL, MariaDB and SQLite match
      * column names case-insensitively (#92).

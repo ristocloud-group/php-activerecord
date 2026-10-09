@@ -400,22 +400,13 @@ abstract class AdapterTest extends DatabaseTest
     {
         $options = ['conditions' => ['author_id > ?', 1], 'order' => 'author_id'];
 
-        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
-            // MySQL / MariaDB / SQLite: LIMIT 0 touches no row
-            $this->assert_equals(0, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
-            $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
-            $this->assert_equals(0, Author::delete_all(['limit' => '0'] + $options));
-            $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
-            $this->assert_equals(0, Author::count(['conditions' => ['name = ?', 'X']]));
-            $this->assert_equals(4, Author::count());
-        } else {
-            // Postgres has no LIMIT on UPDATE/DELETE: the limit is ignored, as it always was
-            $this->assert_equals(3, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
-            $this->assert_sql_doesnt_has('LIMIT', Author::table()->last_sql);
-            $this->assert_equals(3, Author::delete_all(['limit' => '0'] + $options));
-            $this->assert_sql_doesnt_has('LIMIT', Author::table()->last_sql);
-            $this->assert_equals(1, Author::count());
-        }
+        // LIMIT 0 touches no row, on Postgres too: there the limit is in the subquery that picks the rows (#92)
+        $this->assert_equals(0, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
+        $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+        $this->assert_equals(0, Author::delete_all(['limit' => '0'] + $options));
+        $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+        $this->assert_equals(0, Author::count(['conditions' => ['name = ?', 'X']]));
+        $this->assert_equals(4, Author::count());
     }
 
     public function test_gh34_count_is_zero_when_the_count_query_returns_no_row()

@@ -68,6 +68,10 @@ class SQLBuilder
     /** @var list<string>|null */
     private ?array $upsert_update = null;
 
+    // for a limited update/delete where the adapter has no LIMIT on them
+    /** @var list<string> */
+    private array $key_columns = [];
+
     /**
      * Constructor.
      *
@@ -165,6 +169,21 @@ class SQLBuilder
     public function order($order)
     {
         $this->order = $order;
+        return $this;
+    }
+
+    /**
+     * The columns that identify a row of the table (its primary key), unquoted. An adapter
+     * without LIMIT/ORDER BY on UPDATE and DELETE (Postgres) picks the rows of a limited
+     * UPDATE/DELETE by these columns in a subquery; without any it uses the adapter's own
+     * row identity (#92). Other adapters do not use them.
+     *
+     * @internal Serves Model::update_all() and Model::delete_all(); not a supported API.
+     * @param list<string> $columns
+     */
+    public function key_columns(array $columns): static
+    {
+        $this->key_columns = $columns;
         return $this;
     }
 
@@ -623,9 +642,10 @@ class SQLBuilder
     private function build_delete(): string
     {
         $sql = "DELETE FROM $this->table";
+        $where = $this->limited_rows_condition() ?? $this->where;
 
-        if ($this->where) {
-            $sql .= " WHERE $this->where";
+        if ($where) {
+            $sql .= " WHERE $where";
         }
 
         if ($this->connection->accepts_limit_and_order_for_update_and_delete()) {
@@ -728,9 +748,10 @@ class SQLBuilder
         }
 
         $sql = "UPDATE $this->table SET $set";
+        $where = $this->limited_rows_condition() ?? $this->where;
 
-        if ($this->where) {
-            $sql .= " WHERE $this->where";
+        if ($where) {
+            $sql .= " WHERE $where";
         }
 
         if ($this->connection->accepts_limit_and_order_for_update_and_delete()) {
@@ -744,6 +765,27 @@ class SQLBuilder
         }
 
         return $sql;
+    }
+
+    /**
+     * Where the adapter has no LIMIT/ORDER BY on UPDATE and DELETE, the WHERE of a limited
+     * one: the adapter's condition picking the rows, with the statement's own WHERE inside
+     * it, so the bind values keep their order (#92). Null when there is no limit (an order
+     * alone is left out, as before) or the adapter offers no such condition.
+     */
+    private function limited_rows_condition(): ?string
+    {
+        if (null === $this->limit || $this->connection->accepts_limit_and_order_for_update_and_delete()) {
+            return null;
+        }
+
+        return $this->connection->limited_rows_condition(
+            $this->table ?? '',
+            $this->where ?: null,
+            $this->order ?: null,
+            $this->limit,
+            array_map($this->connection->quote_name(...), $this->key_columns),
+        );
     }
 
     /**
