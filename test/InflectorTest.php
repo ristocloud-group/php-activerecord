@@ -41,6 +41,15 @@ class InflectorTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals('angry_people', $this->inflector->tableize('AngryPerson'));
     }
 
+    public function test_tableize_ex_and_ix_words()
+    {
+        // #151
+        $this->assert_equals('complexes', $this->inflector->tableize('Complex'));
+        $this->assert_equals('regexes', $this->inflector->tableize('Regex'));
+        $this->assert_equals('matrix_rows', $this->inflector->tableize('MatrixRow'));
+        $this->assert_equals('indices', $this->inflector->tableize('Index'));
+    }
+
     public function test_keyify()
     {
         $this->assert_equals('building_type_id', $this->inflector->keyify('BuildingType'));

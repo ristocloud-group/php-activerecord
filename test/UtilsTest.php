@@ -211,6 +211,44 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         }
     }
 
+    public function test_pluralize_ex_and_ix_words()
+    {
+        // #151: only matrix/vertex/index (and their -ix/-ex twins) take the
+        // Latin -ices, and only at the end of the word
+        $expected = [
+            'complex' => 'complexes',
+            'annex' => 'annexes',
+            'mutex' => 'mutexes',
+            'regex' => 'regexes',
+            'reflex' => 'reflexes',
+            'duplex' => 'duplexes',
+            'cortex' => 'cortexes',
+            'matrix_row' => 'matrix_rows',
+            'index_entry' => 'index_entries',
+            'index' => 'indices',
+            'vertex' => 'vertices',
+            'matrix' => 'matrices',
+        ];
+
+        foreach ($expected as $singular => $plural) {
+            $this->assert_equals($plural, AR\Utils::pluralize($singular), $singular);
+        }
+    }
+
+    public function test_singularize_ex_and_ix_words()
+    {
+        $expected = [
+            'complexes' => 'complex',
+            'indices' => 'index',
+            'vertices' => 'vertex',
+            'matrices' => 'matrix',
+        ];
+
+        foreach ($expected as $plural => $singular) {
+            $this->assert_equals($singular, AR\Utils::singularize($plural), $plural);
+        }
+    }
+
     public function test_is_odd_returns_bool()
     {
         // is_odd() is a boolean predicate: it must return a real bool,
