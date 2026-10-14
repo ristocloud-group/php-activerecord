@@ -401,6 +401,56 @@ class Utils
         'person' => 'people',
     ];
 
+    /**
+     * Words that end like an irregular form (…man, …men, …goose) but inflect
+     * regularly, so the irregular pass is skipped for them: human → humans
+     * (not humen), abdomen stays abdomen (not abdoman) (#48). An entry
+     * matches the whole string or its last segment after a non-letter
+     * (sales_human); compounds that are not listed keep the irregulars'
+     * suffix match (fireman → firemen, superhuman → superhumen).
+     *
+     * @var list<string>
+     */
+    private static array $irregular_exceptions = [
+        'abdomen',
+        'acumen',
+        'albumen',
+        'ataman',
+        'bitumen',
+        'brahman',
+        'caiman',
+        'cayman',
+        'cerumen',
+        'cognomen',
+        'desman',
+        'doberman',
+        'dolman',
+        'dolmen',
+        'foramen',
+        'german',
+        'gravamen',
+        'hetman',
+        'human',
+        'hymen',
+        'lumen',
+        'mongoose',
+        'nomen',
+        'numen',
+        'omen',
+        'ottoman',
+        'ramen',
+        'regimen',
+        'roman',
+        'rumen',
+        'semen',
+        'shaman',
+        'specimen',
+        'stamen',
+        'talisman',
+        'tegmen',
+        'walkman',
+    ];
+
     /** @var list<string> */
     private static array $uncountable = [
         'sheep',
@@ -425,12 +475,14 @@ class Utils
             return $string;
         }
 
-        // check for irregular singular forms
-        foreach (self::$irregular as $pattern => $result) {
-            $pattern = '/' . $pattern . '$/i';
+        // check for irregular singular forms, unless the word only looks irregular
+        if (!self::is_irregular_exception($string)) {
+            foreach (self::$irregular as $pattern => $result) {
+                $pattern = '/' . $pattern . '$/i';
 
-            if (preg_match($pattern, $string)) {
-                return preg_replace($pattern, $result, $string) ?? $string;
+                if (preg_match($pattern, $string)) {
+                    return preg_replace($pattern, $result, $string) ?? $string;
+                }
             }
         }
 
@@ -455,12 +507,14 @@ class Utils
             return $string;
         }
 
-        // check for irregular plural forms
-        foreach (self::$irregular as $result => $pattern) {
-            $pattern = '/' . $pattern . '$/i';
+        // check for irregular plural forms, unless the word only looks irregular
+        if (!self::is_irregular_exception($string)) {
+            foreach (self::$irregular as $result => $pattern) {
+                $pattern = '/' . $pattern . '$/i';
 
-            if (preg_match($pattern, $string)) {
-                return preg_replace($pattern, $result, $string) ?? $string;
+                if (preg_match($pattern, $string)) {
+                    return preg_replace($pattern, $result, $string) ?? $string;
+                }
             }
         }
 
@@ -472,6 +526,16 @@ class Utils
         }
 
         return $string;
+    }
+
+    /**
+     * Is $string a listed regular look-alike of an irregular word, as the
+     * whole string or as its last segment after a non-letter? (#48)
+     * Nullable because pluralize()/singularize() do not type their parameter.
+     */
+    private static function is_irregular_exception(?string $string): bool
+    {
+        return preg_match('/(?<![a-z])(?:' . implode('|', self::$irregular_exceptions) . ')$/i', $string ?? '') === 1;
     }
 
     /**

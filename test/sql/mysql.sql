@@ -92,6 +92,12 @@ CREATE TABLE awesome_people(
 	is_awesome int default 1
 );
 
+CREATE TABLE humans(
+	id int not null primary key auto_increment,
+	author_id int,
+	name varchar(50)
+);
+
 CREATE TABLE amenities(
   `amenity_id` int(11) NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `type` varchar(40) NOT NULL DEFAULT ''
