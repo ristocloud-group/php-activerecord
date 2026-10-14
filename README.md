@@ -243,7 +243,9 @@ and in `find` / `all` / `first` / `last` an `$alias_attribute` name and its colu
 attribute name whose column is named differently is mapped to that column, also for `update_all` / `delete_all` (and
 for the keys of an `update_all` `set` hash and of `upsert`): `'space_name'` → `space name`, `'dash_name'` →
 `dash-name`, and on Postgres, whose quoted names are case-sensitive, a mixed-case `'some_date'` → `some_Date` (MySQL
-and SQLite match it as is); written next to the column's own name, both conditions are kept and ANDed. An
+and SQLite match it as is); the other differences (space, hyphen) are mapped on every adapter, and `upsert`'s
+`$unique_by` / `$update` names are mapped too. Written next to the column's own name, two conditions are kept and
+ANDed, whereas in a `set` hash or an `upsert` row the later key wins. An
 expression such as `'LOWER(name)' => 'tito'` is one (unknown) column name, not a function call, so the database rejects
 it: write expressions as a positional condition instead, `['conditions' => ['LOWER(name) = ?', 'tito']]`.
 
