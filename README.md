@@ -274,6 +274,7 @@ php examples/simple/simple.php
 | [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |
 | [`upsert/`](examples/upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and managed timestamps |
 | [`orders/`](examples/orders/) | A fuller app combining validations, a callback, and relationships |
+| [`inflection/`](examples/inflection/) | Table names derived from class names (`Human` → `humans`, `Fireman` → `firemen`, `Complex` → `complexes`, `MatrixRow` → `matrix_rows`), the `has_many` builders that follow, and `$table_name` as the escape hatch |
 
 See [`examples/README.md`](examples/README.md) for the full index.
 
