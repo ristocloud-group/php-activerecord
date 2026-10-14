@@ -63,9 +63,10 @@ ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
 });
 
 // Derived table names. Compounds of an irregular word keep the irregular
-// plural (Fireman, AngryPerson); only matrix/vertex/index take the Latin
-// -ices, and only as the last word (up to 2.1.0: Complex → complices, Regex →
-// regices, MatrixRow → matrices_row).
+// plural (Fireman, AngryPerson); only a name ending in matrix/vertex/index
+// (Index, but also Reindex) takes the Latin -ices, and a matrix earlier in the
+// name is left alone (up to 2.1.0: Complex → complices, Regex → regices,
+// MatrixRow → matrices_row).
 echo "tableize():\n";
 foreach (['Human', 'Fireman', 'AngryPerson', 'Complex', 'Regex', 'MatrixRow', 'Index'] as $class) {
     printf("  %-11s -> %s\n", $class, ActiveRecord\Inflector::instance()->tableize($class));
