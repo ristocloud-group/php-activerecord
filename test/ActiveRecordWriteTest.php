@@ -503,6 +503,16 @@ class ActiveRecordWriteTest extends DatabaseTest
         // dated_counts: primary key (day, at); hits 1 and 2
         $num_affected = DatedCount::delete_all(['conditions' => ['hits > ?', 0], 'order' => 'hits desc', 'limit' => 1]);
         $this->assert_equals(1, $num_affected);
+
+        if ('pgsql' === $this->conn->protocol) {
+            // Postgres picks the rows by every pk column in a key subquery (#92)
+            $q = fn(string $name): string => $this->conn->quote_name($name);
+            $this->assert_string_contains_string(
+                "({$q('day')}, {$q('at')}) IN (SELECT {$q('day')}, {$q('at')} FROM {$q('dated_counts')}",
+                DatedCount::table()->last_sql
+            );
+        }
+
         $counts = DatedCount::all(['order' => 'hits']);
         $this->assert_equals([1], ActiveRecord\collect($counts, 'hits'));
     }

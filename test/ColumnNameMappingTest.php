@@ -238,6 +238,23 @@ class ColumnNameMappingTest extends DatabaseTest
         $this->assert_equals(1, OddColumnUniqueBySpace::count());
     }
 
+    public function test_limited_delete_all_keys_on_an_odd_primary_key_column()
+    {
+        OddColumnBySpace::create(['space_name' => 'a']);
+        OddColumnBySpace::create(['space_name' => 'k']);
+        OddColumnBySpace::create(['space_name' => 'z']);
+
+        $this->assert_equals(1, OddColumnBySpace::delete_all(['order' => 'id desc', 'limit' => 1]));
+
+        if ($this->case_sensitive()) {
+            // the Postgres key subquery selects the pk column, not the attribute (#92)
+            $column = $this->quote('space name');
+            $this->assert_string_contains_string("$column IN (SELECT $column", OddColumnBySpace::table()->last_sql);
+        }
+
+        $this->assert_equals(['a', 'k'], array_map(fn($record) => $record->space_name, OddColumnBySpace::all(['order' => 'id'])));
+    }
+
     public function test_last_default_order_sql_is_unchanged_for_a_plain_pk()
     {
         Author::last();

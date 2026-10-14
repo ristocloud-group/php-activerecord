@@ -243,7 +243,7 @@ and in `find` / `all` / `first` / `last` an `$alias_attribute` name and its colu
 attribute name whose column is named differently is mapped to that column, also for `update_all` / `delete_all` (and
 for the keys of an `update_all` `set` hash and of `upsert`): `'space_name'` → `space name`, `'dash_name'` →
 `dash-name`, and on Postgres, whose quoted names are case-sensitive, a mixed-case `'some_date'` → `some_Date` (MySQL
-and SQLite match it as is); the other differences (space, hyphen) are mapped on every adapter, and `upsert`'s
+and SQLite match it as is); space and hyphen differences are mapped on every adapter, and `upsert`'s
 `$unique_by` / `$update` names are mapped too. Written next to the column's own name, two conditions are kept and
 ANDed, whereas in a `set` hash or an `upsert` row the later key wins. An
 expression such as `'LOWER(name)' => 'tito'` is one (unknown) column name, not a function call, so the database rejects
@@ -266,11 +266,11 @@ php examples/simple/simple.php
 | Example | Demonstrates |
 |---|---|
 | [`simple/`](examples/simple/) | Basic CRUD (find/first/create/update/delete), tables without a primary key, the never-saved- and deleted-record update/delete guard, and convention overrides (`$table_name`, `$primary_key`) |
-| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes |
+| [`finders/`](examples/finders/) | Dynamic finders, the `conditions`/`order`/`limit`/`offset`/`group`/`having`/`select` options, `last()` (reversed `order`), `find_by_sql`, static scopes, `find('abc')` → `RecordNotFound` (on Postgres without querying), `update_all`/`delete_all` with `order` + `limit` (emulated on Postgres with a primary-key subquery) |
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner, a `has_many` keyed by a declared `primary_key` (lazy load, eager `include` and `create_*` agree, a declared `limit` applies per owner) |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |
-| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking, integers beyond `PHP_INT_MAX` |
+| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking, integers beyond `PHP_INT_MAX`, columns whose names are not attribute names (`"first name"` is `first_name`) |
 | [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |
 | [`upsert/`](examples/upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and managed timestamps |
 | [`orders/`](examples/orders/) | A fuller app combining validations, a callback, and relationships |
