@@ -1172,7 +1172,7 @@ abstract class AdapterTest extends DatabaseTest
         $this->conn->rollback();
     }
 
-    public function test_accepts_integer_value_on_non_strict_adapters()
+    public function test_accepts_integer_value_by_adapter()
     {
         if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
             $this->check_pgsql_accepts_integer_value();
@@ -1192,11 +1192,12 @@ abstract class AdapterTest extends DatabaseTest
      */
     protected function check_pgsql_accepts_integer_value(): void
     {
-        foreach ([1, '1', ' 12 ', '+3', '-4', 2.0, null] as $value) {
+        foreach ([1, '1', ' 12 ', '+3', '-4', 2.0, -0.0, null] as $value) {
             $this->assert_true($this->conn->accepts_integer_value($value), var_export($value, true));
         }
 
-        foreach (['abc', '1abc', '1.5', '', 'name = 123123123', '0x1A', 1.5, INF] as $value) {
+        // a float is sent as its string form: 1e15 goes as '1.0E+15', which Postgres rejects
+        foreach (['abc', '1abc', '1.5', '', 'name = 123123123', '0x1A', 1.5, INF, NAN, 1e15, 1e20] as $value) {
             $this->assert_false($this->conn->accepts_integer_value($value), var_export($value, true));
         }
     }

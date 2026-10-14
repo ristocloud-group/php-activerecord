@@ -2269,6 +2269,8 @@ class Model
      * cannot compare with an INTEGER pk column: on Postgres 'abc' fails the query (22P02)
      * and aborts the open transaction, while it can only match no row (#92). Values for
      * another column type, and values that are all accepted, are left as they are.
+     * When no value is left no query runs, so the table's last_sql still shows the
+     * previous query.
      *
      * @return bool False when no value is left, so there is nothing to query
      */
