@@ -791,6 +791,18 @@ abstract class Connection
     }
 
     /**
+     * Whether $value can be compared with an INTEGER column without a database error.
+     * True by default: MySQL, MariaDB and SQLite compare any value with an INTEGER
+     * column, so 'abc' simply matches no row (#92).
+     *
+     * @internal Serves Model::find_by_pk(); not a supported API.
+     */
+    public function accepts_integer_value(mixed $value): bool
+    {
+        return true;
+    }
+
+    /**
      * Closes the underlying PDO connection.
      *
      * @return void

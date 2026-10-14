@@ -1171,4 +1171,33 @@ abstract class AdapterTest extends DatabaseTest
         $this->expect_exception(PDOException::class);
         $this->conn->rollback();
     }
+
+    public function test_accepts_integer_value_on_non_strict_adapters()
+    {
+        if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
+            $this->check_pgsql_accepts_integer_value();
+
+            return;
+        }
+
+        // MySQL/MariaDB/SQLite compare any value with an INTEGER column: nothing is left out
+        foreach (['abc', '1abc', '1.5', '', 'name = 123123123', 1.5, INF, 1, '1', null] as $value) {
+            $this->assert_true($this->conn->accepts_integer_value($value), var_export($value, true));
+        }
+    }
+
+    /**
+     * Postgres rejects a string that is not an integer literal, and a float that is not a
+     * whole finite number, when it compares them with an INTEGER column (#92).
+     */
+    protected function check_pgsql_accepts_integer_value(): void
+    {
+        foreach ([1, '1', ' 12 ', '+3', '-4', 2.0, null] as $value) {
+            $this->assert_true($this->conn->accepts_integer_value($value), var_export($value, true));
+        }
+
+        foreach (['abc', '1abc', '1.5', '', 'name = 123123123', '0x1A', 1.5, INF] as $value) {
+            $this->assert_false($this->conn->accepts_integer_value($value), var_export($value, true));
+        }
+    }
 }

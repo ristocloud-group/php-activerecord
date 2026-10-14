@@ -126,6 +126,16 @@ out('in-stock via find_by_sql: ' . count($raw));
 $cheap = Widget::cheap();
 out('cheap(): ' . implode(', ', ActiveRecord\collect($cheap, 'name')));
 
+// find() by a pk value that is not an integer finds nothing: RecordNotFound,
+// on every adapter (Postgres included, see the end of this example).
+foreach (['abc', 'name = 123123123'] as $id) {
+    try {
+        Widget::find($id);
+    } catch (ActiveRecord\RecordNotFound $e) {
+        out("find('$id'): " . $e->getMessage());
+    }
+}
+
 // --- Postgres: limit/order on delete_all()/update_all() ---
 //
 // Postgres has no LIMIT/ORDER BY on DELETE and UPDATE, so the library picks the
@@ -169,5 +179,29 @@ out('  out of stock: ' . implode(', ', ActiveRecord\collect($out_of_stock, 'name
 out('Postgres delete_all on a table without a primary key (order widget_id, limit 1): ' . PgWidgetLog::delete_all(['order' => 'widget_id', 'limit' => 1]) . ' row');
 out('  SQL: ' . PgWidgetLog::table()->last_sql);
 out('  log rows left: ' . PgWidgetLog::count());
+
+// find() by a pk value Postgres cannot compare with the INTEGER pk ('abc',
+// '1.5', 'name = 123123123') throws RecordNotFound without querying, so an open
+// transaction stays usable. (Before #92 the query failed with a DatabaseException,
+// SQLSTATE 22P02, and every later query in the transaction with 25P02.)
+PgWidget::transaction(function (): bool {
+    foreach (['abc', '1.5'] as $id) {
+        try {
+            PgWidget::find($id);
+        } catch (ActiveRecord\RecordNotFound $e) {
+            out("Postgres find('$id') in a transaction: " . $e->getMessage());
+        }
+    }
+
+    try {
+        PgWidget::find(1, 'abc');
+    } catch (ActiveRecord\RecordNotFound $e) {
+        out("Postgres find(1, 'abc'): " . $e->getMessage());
+        out('  SQL: ' . PgWidget::table()->last_sql);
+    }
+    out('  the transaction goes on: find(1) -> ' . PgWidget::find(1)->name);
+
+    return false;
+});
 
 $pg->query('DROP TABLE IF EXISTS pg_widgets, pg_widget_logs');

@@ -36,6 +36,22 @@ class PgsqlAdapter extends Connection
     }
 
     /**
+     * Postgres rejects a value that is not an integer when it compares it with an INTEGER
+     * column (22P02, which also aborts the open transaction): a string that is not an
+     * integer literal, or a float that is not a whole finite number (#92).
+     *
+     * @internal Serves Model::find_by_pk(); not a supported API.
+     */
+    public function accepts_integer_value(mixed $value): bool
+    {
+        return match (true) {
+            is_string($value) => 1 === preg_match('/\A\s*[+-]?\d+\s*\z/', $value),
+            is_float($value) => is_finite($value) && floor($value) === $value,
+            default => true,
+        };
+    }
+
+    /**
      * Postgres has no LIMIT/ORDER BY on UPDATE and DELETE, so the rows are picked by key
      * in a subquery, as Rails does (#92): "id" IN (SELECT "id" FROM t WHERE ... ORDER BY
      * ... LIMIT n). A table without a primary key is keyed by its row identity

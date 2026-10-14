@@ -2213,8 +2213,12 @@ class Model
         $bound = null === $pk ? $values : (is_array($values)
             ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
             : self::date_pk_finder_value($pk, $values));
-        $options['conditions'] = static::pk_conditions($bound);
-        $list = static::table()->find($options);
+        $list = [];
+
+        if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
+            $options['conditions'] = static::pk_conditions($bound);
+            $list = static::table()->find($options);
+        }
         $results = count($list);
 
         if ($results != ($expected = is_array($values) ? count($values) : 1)) {
@@ -2258,6 +2262,39 @@ class Model
         $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
 
         return null !== $column && Column::DATE === $column->type ? static::connection()->date_to_string($value) : $value;
+    }
+
+    /**
+     * Leaves out of $values (a finder's pk value, or list of values) those the connection
+     * cannot compare with an INTEGER pk column: on Postgres 'abc' fails the query (22P02)
+     * and aborts the open transaction, while it can only match no row (#92). Values for
+     * another column type, and values that are all accepted, are left as they are.
+     *
+     * @return bool False when no value is left, so there is nothing to query
+     */
+    private static function keep_integer_pk_finder_values(string $name, mixed &$values): bool
+    {
+        $table = static::table();
+        $column = $table->columns[$table->real_column_name($name)] ?? null;
+
+        if (null === $column || Column::INTEGER !== $column->type) {
+            return true;
+        }
+
+        $connection = static::connection();
+
+        if (!is_array($values)) {
+            return $connection->accepts_integer_value($values);
+        }
+
+        $accepted = array_filter($values, $connection->accepts_integer_value(...));
+
+        if (count($accepted) === count($values)) {
+            return true;
+        }
+        $values = array_values($accepted);
+
+        return [] !== $values;
     }
 
     /**

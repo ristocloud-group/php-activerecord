@@ -32,6 +32,11 @@ class PgsqlAdapterTest extends AdapterTest
         $this->assert_equals('SELECT * FROM "authors" ORDER BY author_id OFFSET 2', Author::table()->last_sql);
     }
 
+    public function test_accepts_integer_value()
+    {
+        $this->check_pgsql_accepts_integer_value();
+    }
+
     public function test_limited_rows_condition_shapes()
     {
         $c = $this->conn;
