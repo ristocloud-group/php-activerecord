@@ -24,6 +24,32 @@ class InflectorTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals('my_sqls', $this->inflector->tableize('MySQL'));
     }
 
+    public function test_tableize_regular_look_alikes_of_irregulars()
+    {
+        // #48: a class named like a regular word that ends like an irregular
+        $this->assert_equals('humans', $this->inflector->tableize('Human'));
+        $this->assert_equals('sales_humans', $this->inflector->tableize('SalesHuman'));
+        $this->assert_equals('mongooses', $this->inflector->tableize('Mongoose'));
+        $this->assert_equals('germans', $this->inflector->tableize('German'));
+    }
+
+    public function test_tableize_keeps_irregular_suffix_match_for_compounds()
+    {
+        $this->assert_equals('firemen', $this->inflector->tableize('Fireman'));
+        $this->assert_equals('women', $this->inflector->tableize('Woman'));
+        $this->assert_equals('sales_men', $this->inflector->tableize('SalesMan'));
+        $this->assert_equals('angry_people', $this->inflector->tableize('AngryPerson'));
+    }
+
+    public function test_tableize_ex_and_ix_words()
+    {
+        // #151
+        $this->assert_equals('complexes', $this->inflector->tableize('Complex'));
+        $this->assert_equals('regexes', $this->inflector->tableize('Regex'));
+        $this->assert_equals('matrix_rows', $this->inflector->tableize('MatrixRow'));
+        $this->assert_equals('indices', $this->inflector->tableize('Index'));
+    }
+
     public function test_keyify()
     {
         $this->assert_equals('building_type_id', $this->inflector->keyify('BuildingType'));

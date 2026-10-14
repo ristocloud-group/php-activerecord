@@ -122,6 +122,133 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals('pass', AR\Utils::singularize('passes'));
     }
 
+    public function test_pluralize_regular_look_alikes_of_irregulars()
+    {
+        // #48: these end like an irregular singular (…man, …goose) but inflect
+        // regularly, as the whole word or the last segment after a non-letter
+        $expected = [
+            'ataman' => 'atamans',
+            'brahman' => 'brahmans',
+            'caiman' => 'caimans',
+            'cayman' => 'caymans',
+            'desman' => 'desmans',
+            'doberman' => 'dobermans',
+            'dolman' => 'dolmans',
+            'german' => 'germans',
+            'hetman' => 'hetmans',
+            'human' => 'humans',
+            'mongoose' => 'mongooses',
+            'ottoman' => 'ottomans',
+            'roman' => 'romans',
+            'shaman' => 'shamans',
+            'talisman' => 'talismans',
+            'walkman' => 'walkmans',
+            'Human' => 'Humans',
+            'sales_human' => 'sales_humans',
+        ];
+
+        foreach ($expected as $singular => $plural) {
+            $this->assert_equals($plural, AR\Utils::pluralize($singular), $singular);
+        }
+    }
+
+    public function test_singularize_regular_look_alikes_of_irregulars()
+    {
+        // #48: these end like an irregular plural (…men) but are singular
+        $words = [
+            'abdomen', 'acumen', 'albumen', 'bitumen', 'cerumen', 'cognomen',
+            'dolmen', 'foramen', 'gravamen', 'hymen', 'lumen', 'nomen', 'numen',
+            'omen', 'ramen', 'regimen', 'rumen', 'semen', 'specimen', 'stamen',
+            'tegmen', 'lower_abdomen',
+        ];
+
+        foreach ($words as $word) {
+            $this->assert_equals($word, AR\Utils::singularize($word), $word);
+        }
+    }
+
+    public function test_pluralize_keeps_irregular_suffix_match_for_compounds()
+    {
+        $expected = [
+            'man' => 'men',
+            'woman' => 'women',
+            'fireman' => 'firemen',
+            'policeman' => 'policemen',
+            'sales_man' => 'sales_men',
+            'person' => 'people',
+            'salesperson' => 'salespeople',
+            'angry_person' => 'angry_people',
+            'child' => 'children',
+            'grandchild' => 'grandchildren',
+            'foot' => 'feet',
+            'goose' => 'geese',
+            'tooth' => 'teeth',
+            // a look-alike only inside a longer word is not an exception
+            'superhuman' => 'superhumen',
+        ];
+
+        foreach ($expected as $singular => $plural) {
+            $this->assert_equals($plural, AR\Utils::pluralize($singular), $singular);
+        }
+    }
+
+    public function test_singularize_keeps_irregular_suffix_match_for_compounds()
+    {
+        $expected = [
+            'men' => 'man',
+            // ends in "omen", but only as part of a longer word
+            'women' => 'woman',
+            'firemen' => 'fireman',
+            'people' => 'person',
+            'salespeople' => 'salesperson',
+            'children' => 'child',
+            'humans' => 'human',
+            'mongooses' => 'mongoose',
+        ];
+
+        foreach ($expected as $plural => $singular) {
+            $this->assert_equals($singular, AR\Utils::singularize($plural), $plural);
+        }
+    }
+
+    public function test_pluralize_ex_and_ix_words()
+    {
+        // #151: only matrix/vertex/index (and their -ix/-ex twins) take the
+        // Latin -ices, and only at the end of the word
+        $expected = [
+            'complex' => 'complexes',
+            'annex' => 'annexes',
+            'mutex' => 'mutexes',
+            'regex' => 'regexes',
+            'reflex' => 'reflexes',
+            'duplex' => 'duplexes',
+            'cortex' => 'cortexes',
+            'matrix_row' => 'matrix_rows',
+            'index_entry' => 'index_entries',
+            'index' => 'indices',
+            'vertex' => 'vertices',
+            'matrix' => 'matrices',
+        ];
+
+        foreach ($expected as $singular => $plural) {
+            $this->assert_equals($plural, AR\Utils::pluralize($singular), $singular);
+        }
+    }
+
+    public function test_singularize_ex_and_ix_words()
+    {
+        $expected = [
+            'complexes' => 'complex',
+            'indices' => 'index',
+            'vertices' => 'vertex',
+            'matrices' => 'matrix',
+        ];
+
+        foreach ($expected as $plural => $singular) {
+            $this->assert_equals($singular, AR\Utils::singularize($plural), $plural);
+        }
+    }
+
     public function test_is_odd_returns_bool()
     {
         // is_odd() is a boolean predicate: it must return a real bool,

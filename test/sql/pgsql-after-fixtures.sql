@@ -7,6 +7,7 @@ SELECT setval('hosts_id_seq', max(id)) FROM hosts;
 SELECT setval('employees_id_seq', max(id)) FROM employees;
 SELECT setval('positions_id_seq', max(id)) FROM positions;
 SELECT setval('awesome_people_id_seq', max(id)) FROM awesome_people;
+SELECT setval('humans_id_seq', max(id)) FROM humans;
 SELECT setval('amenities_amenity_id_seq', max(amenity_id)) FROM amenities;
 SELECT setval('property_property_id_seq', max(property_id)) FROM property;
 SELECT setval('property_amenities_id_seq', max(id)) FROM property_amenities;

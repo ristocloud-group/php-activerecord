@@ -298,6 +298,34 @@ class RelationshipTest extends DatabaseTest
         $this->assert_equals($author->id, $book->author_id);
     }
 
+    public function test_model_named_like_an_irregular_look_alike_reads_its_derived_table()
+    {
+        // #48: Human declares no $table_name, so its table is derived: humans, not humen
+        $this->assert_equals('humans', Human::table()->table);
+        $this->assert_equals('Ada', Human::find(1)->name);
+    }
+
+    public function test_has_many_of_an_irregular_look_alike_loads_builds_and_creates()
+    {
+        Author::$has_many = [['humans']];
+        $author = Author::find(1);
+
+        $ids = array_map(fn(Human $human) => $human->id, $author->humans);
+        sort($ids);
+        $this->assert_equals([1, 2], $ids);
+
+        // build_human/create_human find has_many 'humans' through pluralize('human') (#48)
+        $built = $author->build_human(['name' => 'Alan']);
+        $this->assert_true($built instanceof Human);
+        $this->assert_true($built->is_new_record());
+        $this->assert_equals(1, $built->author_id);
+
+        $created = $author->create_human(['name' => 'Barbara']);
+        $this->assert_false($created->is_new_record());
+        $this->assert_equals(1, Human::find($created->id)->author_id);
+        $this->assert_equals('Barbara', Human::find($created->id)->name);
+    }
+
     public function test_belongs_to_create_association()
     {
         $event = $this->get_relationship();
