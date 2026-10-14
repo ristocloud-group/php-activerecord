@@ -515,8 +515,9 @@ class Table
     {
         $data = $this->process_data($data);
 
-        // the statement names the columns; $data keeps its attribute names for the caller (#92)
-        $row = $this->real_column_keys($data);
+        // the statement names the columns; $data keeps its attribute names for the caller (#92).
+        // Anything but a hash (null, a list) goes to SQLBuilder as before, which rejects it.
+        $row = is_hash($data) ? $this->real_column_keys($data) : $data;
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
         $sql->insert($row, null === $pk ? $pk : $this->real_column_name($pk), $sequence_name);
 
@@ -662,7 +663,8 @@ class Table
 
         // the statement names the columns; $data keeps its attribute names for the caller (#92)
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-        $sql->update($this->real_column_keys($data));
+        // anything but a hash (null: nothing to write) goes to SQLBuilder as before, which rejects it
+        $sql->update(is_hash($data) ? $this->real_column_keys($data) : $data);
 
         // two keys naming one column both stay conditions
         if (is_array($where) && is_hash($where)) {

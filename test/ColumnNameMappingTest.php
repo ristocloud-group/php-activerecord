@@ -198,6 +198,18 @@ class ColumnNameMappingTest extends DatabaseTest
         $this->assert_equals('2026-01-02', $found->some_day->format('Y-m-d'));
     }
 
+    public function test_a_save_with_nothing_to_write_throws_as_before()
+    {
+        // dirty but nothing to write (books has no timestamps to touch): the library's
+        // exception, not a TypeError from the mapping
+        $book = Book::first();
+        $book->flag_dirty('not_a_column');
+        $this->assert_exception_message_contains('Updating requires a hash or string.', fn() => $book->save(), ActiveRecord\ActiveRecordException::class);
+
+        $data = null;
+        $this->assert_exception_message_contains('Inserting requires a hash.', fn() => Author::table()->insert($data), ActiveRecord\ActiveRecordException::class);
+    }
+
     public function test_validates_uniqueness_of_on_odd_column()
     {
         $this->assert_true(OddColumnUnique::create(['space_name' => 'b'])->is_valid());
