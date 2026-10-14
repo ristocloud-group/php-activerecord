@@ -39,7 +39,8 @@ class PgsqlAdapter extends Connection
      * Postgres rejects a value that is not an integer when it compares it with an INTEGER
      * column (22P02, which also aborts the open transaction): a string that is not an
      * integer literal (#92). A float is judged by the string it is sent as: 2.0 goes as
-     * '2', but 1.5, INF and 1e15 (sent as '1.0E+15') are rejected.
+     * '2', but 1.5, INF and 1e15 (sent as '1.0E+15') are rejected. NAN and INF are
+     * rejected before the cast, which warns for NAN on PHP 8.5.
      *
      * @internal Serves Model::find_by_pk(); not a supported API.
      */
@@ -47,7 +48,7 @@ class PgsqlAdapter extends Connection
     {
         return match (true) {
             is_string($value) => 1 === preg_match('/\A\s*[+-]?\d+\s*\z/', $value),
-            is_float($value) => $this->accepts_integer_value((string) $value),
+            is_float($value) => is_finite($value) && $this->accepts_integer_value((string) $value),
             default => true,
         };
     }
