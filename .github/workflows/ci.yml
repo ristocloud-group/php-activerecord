@@ -106,6 +106,9 @@ jobs:
       - name: Tests (sqlite)
         run: PHPAR_CONNECTION=sqlite composer run test
 
+      - name: Tests (pgsql)
+        run: PHPAR_CONNECTION=pgsql composer run test
+
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4

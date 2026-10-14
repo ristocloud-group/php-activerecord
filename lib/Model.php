@@ -1080,8 +1080,11 @@ class Model
      *
      * <ul>
      * <li><b>conditions:</b> Conditions using a string/hash/array</li>
-     * <li><b>limit:</b> Limit number of records to delete (MySQL & Sqlite only)</li>
-     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
+     * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
+     * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
+     * and a table without a primary key by its row identity (tableoid, ctid)</li>
+     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc'. With a
+     * limit it picks the records to delete; on Postgres an order without a limit is ignored</li>
      * </ul>
      *
      * @param mixed $options
@@ -1097,6 +1100,9 @@ class Model
 
         if (is_array($conditions) && !is_hash($conditions)) {
             call_user_func_array([$sql, 'delete'], $conditions);
+        } elseif (is_hash($conditions)) {
+            // the keys name the columns (#92); two keys naming one column both stay conditions
+            $sql->delete()->where_hashes($table->condition_hashes($conditions));
         } else {
             $sql->delete($conditions);
         }
@@ -1108,6 +1114,9 @@ class Model
         if (isset($options['order'])) {
             $sql->order($options['order']);
         }
+
+        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
+        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
 
         $values = $table->format_date_bind_values($sql->bind_values());
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
@@ -1136,8 +1145,11 @@ class Model
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with
      * <li><b>conditions:</b> Conditions using a string/hash/array</li>
-     * <li><b>limit:</b> Limit number of records to update (MySQL & Sqlite only)</li>
-     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc' (MySQL & Sqlite only)</li>
+     * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
+     * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
+     * and a table without a primary key by its row identity (tableoid, ctid)</li>
+     * <li><b>order:</b> A SQL fragment for ordering such as: 'name asc', 'id desc, name asc'. With a
+     * limit it picks the records to update; on Postgres an order without a limit is ignored</li>
      * </ul>
      *
      * @param array<string, mixed> $options
@@ -1149,13 +1161,17 @@ class Model
         $conn = static::connection();
         $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138)
+        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138);
+        // the keys name the columns (#92)
         $set = $options['set'];
-        $sql->update(is_array($set) ? $table->format_date_bind_values($set) : $set);
+        $sql->update(is_array($set) ? $table->format_date_bind_values($table->real_column_keys($set)) : $set);
 
         if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
             if (is_array($conditions) && !is_hash($conditions)) {
                 call_user_func_array([$sql, 'where'], $conditions);
+            } elseif (is_hash($conditions)) {
+                // the keys name the columns (#92); two keys naming one column both stay conditions
+                $sql->where_hashes($table->condition_hashes($conditions));
             } else {
                 $sql->where($conditions);
             }
@@ -1168,6 +1184,9 @@ class Model
         if (isset($options['order'])) {
             $sql->order($options['order']);
         }
+
+        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
+        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
 
         $values = $table->format_date_bind_values($sql->bind_values());
         $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
@@ -1819,6 +1838,8 @@ class Model
     /**
      * The conditions of a dynamic finder: split as split_dynamic_finder_attributes() said ($split),
      * or at every separator as create_conditions_from_underscored_string() does when it said null.
+     * Each name is resolved through the alias map, then to its column (find_by_space_name looks
+     * up the column "space name", #92).
      *
      * @param list<mixed> $args
      * @param array<string, string>|null $map
@@ -1827,9 +1848,19 @@ class Model
      */
     private static function dynamic_finder_conditions(string $attributes, array $args, ?array $map, ?array $split): ?array
     {
+        $table = static::table();
+        // the names create_conditions_from_underscored_string() splits out of $attributes: keep
+        // this pattern in step with its preg_split('/(_and_|_or_)/i', ...) in SQLBuilder
+        $names = null === $split ? (preg_split('/_and_|_or_/i', $attributes) ?: []) : $split[0];
+        $columns = [];
+
+        foreach ($names as $name) {
+            $columns[$name] = $table->real_column_name($map[$name] ?? $name);
+        }
+
         return null === $split
-            ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $map)
-            : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $map, $split[1]);
+            ? SQLBuilder::create_conditions_from_underscored_string(static::connection(), $attributes, $args, $columns)
+            : SQLBuilder::create_conditions_from_columns(static::connection(), $split[0], $args, $columns, $split[1]);
     }
 
     /**
@@ -2123,7 +2154,17 @@ class Model
 
                 case 'last':
                     if (!array_key_exists('order', $options)) {
-                        $options['order'] = join(' DESC, ', static::table()->pk) . ' DESC';
+                        // a pk attribute named like its column stays unquoted, as it always
+                        // has; one standing for another column orders by that column (#92)
+                        $table = static::table();
+                        $order = [];
+
+                        foreach ($table->pk as $name) {
+                            $column = $table->real_column_name($name);
+                            $order[] = $column === $name ? $name : static::connection()->quote_name($column);
+                        }
+
+                        $options['order'] = join(' DESC, ', $order) . ' DESC';
                     } else {
                         $options['order'] = SQLBuilder::reverse_order($options['order']);
                     }
@@ -2172,8 +2213,12 @@ class Model
         $bound = null === $pk ? $values : (is_array($values)
             ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
             : self::date_pk_finder_value($pk, $values));
-        $options['conditions'] = static::pk_conditions($bound);
-        $list = static::table()->find($options);
+        $list = [];
+
+        if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
+            $options['conditions'] = static::pk_conditions($bound);
+            $list = static::table()->find($options);
+        }
         $results = count($list);
 
         if ($results != ($expected = is_array($values) ? count($values) : 1)) {
@@ -2217,6 +2262,41 @@ class Model
         $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
 
         return null !== $column && Column::DATE === $column->type ? static::connection()->date_to_string($value) : $value;
+    }
+
+    /**
+     * Leaves out of $values (a finder's pk value, or list of values) those the connection
+     * cannot compare with an INTEGER pk column: on Postgres 'abc' fails the query (22P02)
+     * and aborts the open transaction, while it can only match no row (#92). Values for
+     * another column type, and values that are all accepted, are left as they are.
+     * When no value is left no query runs, so the table's last_sql still shows the
+     * previous query.
+     *
+     * @return bool False when no value is left, so there is nothing to query
+     */
+    private static function keep_integer_pk_finder_values(string $name, mixed &$values): bool
+    {
+        $table = static::table();
+        $column = $table->columns[$table->real_column_name($name)] ?? null;
+
+        if (null === $column || Column::INTEGER !== $column->type) {
+            return true;
+        }
+
+        $connection = static::connection();
+
+        if (!is_array($values)) {
+            return $connection->accepts_integer_value($values);
+        }
+
+        $accepted = array_filter($values, $connection->accepts_integer_value(...));
+
+        if (count($accepted) === count($values)) {
+            return true;
+        }
+        $values = array_values($accepted);
+
+        return [] !== $values;
     }
 
     /**

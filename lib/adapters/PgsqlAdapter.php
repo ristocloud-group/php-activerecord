@@ -25,6 +25,60 @@ class PgsqlAdapter extends Connection
         return true;
     }
 
+    /**
+     * A quoted identifier keeps its case: "some_Date" is not some_date (#92).
+     *
+     * @internal Serves Table's attribute-to-column mapping; not a supported API.
+     */
+    public function column_names_are_case_sensitive(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Postgres rejects a value that is not an integer when it compares it with an INTEGER
+     * column (22P02, which also aborts the open transaction): a string that is not an
+     * integer literal (#92). A float is judged by the string it is sent as: 2.0 goes as
+     * '2', but 1.5, INF and 1e15 (sent as '1.0E+15') are rejected. NAN and INF are
+     * rejected before the cast, which warns for NAN on PHP 8.5.
+     *
+     * @internal Serves Model::find_by_pk(); not a supported API.
+     */
+    public function accepts_integer_value(mixed $value): bool
+    {
+        return match (true) {
+            is_string($value) => 1 === preg_match('/\A\s*[+-]?\d+\s*\z/', $value),
+            is_float($value) => is_finite($value) && $this->accepts_integer_value((string) $value),
+            default => true,
+        };
+    }
+
+    /**
+     * Postgres has no LIMIT/ORDER BY on UPDATE and DELETE, so the rows are picked by key
+     * in a subquery, as Rails does (#92): "id" IN (SELECT "id" FROM t WHERE ... ORDER BY
+     * ... LIMIT n). A table without a primary key is keyed by its row identity
+     * (tableoid, ctid): ctid alone repeats across the partitions of a partitioned table.
+     *
+     * @internal Serves SQLBuilder; not a supported API.
+     * @param list<string> $key
+     */
+    public function limited_rows_condition(string $table, ?string $where, ?string $order, int $limit, array $key): ?string
+    {
+        $select = [] === $key ? 'tableoid, ctid' : implode(', ', $key);
+        $columns = 1 === count($key) ? $select : "($select)";
+        $sql = "SELECT $select FROM $table";
+
+        if (null !== $where) {
+            $sql .= " WHERE $where";
+        }
+
+        if (null !== $order) {
+            $sql .= " ORDER BY $order";
+        }
+
+        return "$columns IN ($sql LIMIT $limit)";
+    }
+
     public function get_sequence_name($table, $column_name)
     {
         return "{$table}_{$column_name}_seq";

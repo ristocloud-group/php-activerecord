@@ -10,3 +10,5 @@ CREATE TABLE members (
 );
 INSERT INTO companies (name, country) VALUES ('Acme', 'IT');
 CREATE TABLE badges (badge_no INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT);
+-- column names that are not attribute names: "first name" => first_name, lastName => lastname
+CREATE TABLE contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, "first name" TEXT, "lastName" TEXT);

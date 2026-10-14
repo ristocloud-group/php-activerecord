@@ -400,22 +400,13 @@ abstract class AdapterTest extends DatabaseTest
     {
         $options = ['conditions' => ['author_id > ?', 1], 'order' => 'author_id'];
 
-        if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
-            // MySQL / MariaDB / SQLite: LIMIT 0 touches no row
-            $this->assert_equals(0, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
-            $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
-            $this->assert_equals(0, Author::delete_all(['limit' => '0'] + $options));
-            $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
-            $this->assert_equals(0, Author::count(['conditions' => ['name = ?', 'X']]));
-            $this->assert_equals(4, Author::count());
-        } else {
-            // Postgres has no LIMIT on UPDATE/DELETE: the limit is ignored, as it always was
-            $this->assert_equals(3, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
-            $this->assert_sql_doesnt_has('LIMIT', Author::table()->last_sql);
-            $this->assert_equals(3, Author::delete_all(['limit' => '0'] + $options));
-            $this->assert_sql_doesnt_has('LIMIT', Author::table()->last_sql);
-            $this->assert_equals(1, Author::count());
-        }
+        // LIMIT 0 touches no row, on Postgres too: there the limit is in the subquery that picks the rows (#92)
+        $this->assert_equals(0, Author::update_all(['set' => ['name' => 'X'], 'limit' => 0] + $options));
+        $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+        $this->assert_equals(0, Author::delete_all(['limit' => '0'] + $options));
+        $this->assert_sql_has('ORDER BY author_id LIMIT 0', Author::table()->last_sql);
+        $this->assert_equals(0, Author::count(['conditions' => ['name = ?', 'X']]));
+        $this->assert_equals(4, Author::count());
     }
 
     public function test_gh34_count_is_zero_when_the_count_query_returns_no_row()
@@ -1179,5 +1170,35 @@ abstract class AdapterTest extends DatabaseTest
     {
         $this->expect_exception(PDOException::class);
         $this->conn->rollback();
+    }
+
+    public function test_accepts_integer_value_by_adapter()
+    {
+        if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
+            $this->check_pgsql_accepts_integer_value();
+
+            return;
+        }
+
+        // MySQL/MariaDB/SQLite compare any value with an INTEGER column: nothing is left out
+        foreach (['abc', '1abc', '1.5', '', 'name = 123123123', 1.5, INF, 1, '1', null] as $value) {
+            $this->assert_true($this->conn->accepts_integer_value($value), var_export($value, true));
+        }
+    }
+
+    /**
+     * Postgres rejects a string that is not an integer literal, and a float that is not a
+     * whole finite number, when it compares them with an INTEGER column (#92).
+     */
+    protected function check_pgsql_accepts_integer_value(): void
+    {
+        foreach ([1, '1', ' 12 ', '+3', '-4', 2.0, -0.0, null] as $value) {
+            $this->assert_true($this->conn->accepts_integer_value($value), var_export($value, true));
+        }
+
+        // a float is sent as its string form: 1e15 goes as '1.0E+15', which Postgres rejects
+        foreach (['abc', '1abc', '1.5', '', 'name = 123123123', '0x1A', 1.5, INF, NAN, 1e15, 1e20] as $value) {
+            $this->assert_false($this->conn->accepts_integer_value($value), var_export($value, true));
+        }
     }
 }

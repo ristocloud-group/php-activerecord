@@ -5,6 +5,7 @@ require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Company.php';
 require_once __DIR__ . '/models/Member.php';
 require_once __DIR__ . '/models/Badge.php';
+require_once __DIR__ . '/models/Contact.php';
 
 $db = __DIR__ . '/attributes.db';
 @unlink($db);
@@ -84,3 +85,20 @@ out('is_dirty()? ' . ($m->is_dirty() ? 'yes' : 'no'));
 out('dirty_attributes: ' . implode(', ', array_keys($m->dirty_attributes())));
 $m->save();
 out('is_dirty() after save? ' . ($m->is_dirty() ? 'yes' : 'no'));
+
+// Columns whose names are not attribute names: the column "first name" is the
+// attribute first_name, the column lastName the attribute lastname. Queries name
+// the real column, so save(), the finders and count() take the attribute names.
+// (Before #92 they sent first_name as a column name and failed on every database.)
+// A name that differs only by case, like lastName, is renamed only on Postgres,
+// which matches a quoted name's case; SQLite and MySQL match lastname as it is.
+$contact = new Contact(['first_name' => 'Ada', 'lastname' => 'Byron']);
+$contact->save();
+$found = Contact::find_by_first_name('Ada');
+if (null !== $found) {
+    $found->lastname = 'Lovelace';
+    $found->save();
+}
+$contact->reload();
+out('contact (column "first name"): ' . $contact->first_name . ' ' . $contact->lastname);
+out("count(['first_name' => 'Ada']): " . Contact::count(['conditions' => ['first_name' => 'Ada']]));

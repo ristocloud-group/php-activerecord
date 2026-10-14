@@ -10,6 +10,12 @@ class RmBldgExplicitSequence extends ActiveRecord\Model
     public static $sequence = 'rm-bldg_explicit_seq';
 }
 
+// a partitioned table without a primary key, created and dropped in-test (#92)
+class T92PartedItem extends ActiveRecord\Model
+{
+    public static $table_name = 't92_parted_items';
+}
+
 class PgsqlAdapterTest extends AdapterTest
 {
     public function set_up($connection_name = null)
@@ -24,6 +30,81 @@ class PgsqlAdapterTest extends AdapterTest
 
         Author::all(['order' => 'author_id', 'offset' => 2]);
         $this->assert_equals('SELECT * FROM "authors" ORDER BY author_id OFFSET 2', Author::table()->last_sql);
+    }
+
+    public function test_accepts_integer_value()
+    {
+        $this->check_pgsql_accepts_integer_value();
+    }
+
+    public function test_limited_rows_condition_shapes()
+    {
+        $c = $this->conn;
+
+        // one key column
+        $this->assert_equals(
+            '"id" IN (SELECT "id" FROM "t" WHERE a = ? ORDER BY b desc LIMIT 2)',
+            $c->limited_rows_condition('"t"', 'a = ?', 'b desc', 2, ['"id"'])
+        );
+        // a composite key
+        $this->assert_equals(
+            '("a", "b") IN (SELECT "a", "b" FROM "t" LIMIT 1)',
+            $c->limited_rows_condition('"t"', null, null, 1, ['"a"', '"b"'])
+        );
+        // no key: the row identity, tableoid included so a partitioned table's rows stay apart
+        $this->assert_equals(
+            '(tableoid, ctid) IN (SELECT tableoid, ctid FROM "t" ORDER BY k LIMIT 0)',
+            $c->limited_rows_condition('"t"', null, 'k', 0, [])
+        );
+    }
+
+    public function test_limited_update_all_and_delete_all_pick_the_rows_by_primary_key()
+    {
+        Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['parent_author_id = ?', 2], 'order' => 'name asc', 'limit' => 1]);
+        $this->assert_equals(
+            'UPDATE "authors" SET "name"=? WHERE "author_id" IN (SELECT "author_id" FROM "authors" WHERE parent_author_id = ? ORDER BY name asc LIMIT 1)',
+            Author::table()->last_sql
+        );
+
+        Author::delete_all(['conditions' => ['name' => 'X'], 'limit' => 1]);
+        $this->assert_equals(
+            'DELETE FROM "authors" WHERE "author_id" IN (SELECT "author_id" FROM "authors" WHERE "name"=? LIMIT 1)',
+            Author::table()->last_sql
+        );
+    }
+
+    public function test_limited_delete_on_a_partitioned_table_without_pk_touches_one_row()
+    {
+        $c = $this->conn;
+        $drop = fn() => $c->query('DROP TABLE IF EXISTS t92_parted_items');
+        $fill = function () use ($c): void {
+            $c->query('TRUNCATE t92_parted_items');
+            $c->query("INSERT INTO t92_parted_items VALUES (1, 'low'), (11, 'high')");
+            // one row in each partition: both sit at the same ctid, only tableoid tells them apart
+            $this->assert_equals(1, $c->query_and_fetch_one('SELECT COUNT(DISTINCT ctid) FROM t92_parted_items'));
+        };
+        $drop();
+
+        try {
+            $c->query('CREATE TABLE t92_parted_items (k int NOT NULL, name varchar(10)) PARTITION BY RANGE (k)');
+            $c->query('CREATE TABLE t92_parted_items_low PARTITION OF t92_parted_items FOR VALUES FROM (0) TO (10)');
+            $c->query('CREATE TABLE t92_parted_items_high PARTITION OF t92_parted_items FOR VALUES FROM (10) TO (20)');
+            ActiveRecord\Table::clear_cache();
+            $this->assert_same([], T92PartedItem::table()->pk);
+
+            $fill();
+            $this->assert_equals(1, T92PartedItem::delete_all(['order' => 'k', 'limit' => 1]));
+            $items = T92PartedItem::all(['order' => 'k']);
+            $this->assert_equals([11], ActiveRecord\collect($items, 'k'));
+
+            $fill();
+            $this->assert_equals(1, T92PartedItem::update_all(['set' => ['name' => 'X'], 'order' => 'k', 'limit' => 1]));
+            $items = T92PartedItem::all(['order' => 'k']);
+            $this->assert_equals(['X', 'high'], ActiveRecord\collect($items, 'name'));
+        } finally {
+            $drop();
+            ActiveRecord\Table::clear_cache();
+        }
     }
 
     public function test_insert_id()

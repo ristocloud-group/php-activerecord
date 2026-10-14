@@ -3,6 +3,8 @@
 require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Widget.php';
+require_once __DIR__ . '/models/PgWidget.php';
+require_once __DIR__ . '/models/PgWidgetLog.php';
 
 $db = __DIR__ . '/finders.db';
 @unlink($db);
@@ -10,8 +12,18 @@ $pdo = new PDO('sqlite:' . $db);
 $pdo->exec((string) file_get_contents(__DIR__ . '/finders.sql'));
 $pdo = null;
 
-ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
-    $cfg->set_connections(['development' => 'sqlite://unix(' . $db . ')']);
+// The last part needs a reachable Postgres and is skipped otherwise: set
+// PHPAR_PGSQL to a pgsql:// URL (this repo's Docker setup already does).
+$pgsql_url = getenv('PHPAR_PGSQL') ?: '';
+
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db, $pgsql_url) {
+    $connections = ['development' => 'sqlite://unix(' . $db . ')'];
+
+    if ('' !== $pgsql_url) {
+        $connections['pgsql'] = $pgsql_url;
+    }
+
+    $cfg->set_connections($connections);
     $cfg->set_logger(new Psr\Log\NullLogger());
 });
 
@@ -75,6 +87,19 @@ Widget::transaction(function () use ($stale): bool {
 $restocked = Widget::update_all(['set' => ['restocked_at' => new DateTime('2026-03-02 09:30:00')], 'conditions' => $stale]);
 out("update_all(set restocked_at, stale): $restocked rows -> stale now " . Widget::count(['conditions' => $stale]));
 
+// 'limit' and 'order' on delete_all()/update_all() touch only the first rows in
+// that order: SQLite and MySQL/MariaDB render ORDER BY ... LIMIT on the
+// statement itself. (Postgres has neither: see the end of this example.)
+Widget::transaction(function (): bool {
+    $gadgets = ['category = ?', 'gadgets'];
+    out('delete_all(gadgets, order price desc, limit 1): ' . Widget::delete_all(['conditions' => $gadgets, 'order' => 'price desc', 'limit' => 1]) . ' row (rolled back)');
+    out('  SQL: ' . Widget::table()->last_sql);
+    $left = Widget::all(['conditions' => $gadgets]);
+    out('  gadgets left: ' . implode(', ', ActiveRecord\collect($left, 'name')));
+
+    return false;
+});
+
 // last() reverses the order: only each item's own trailing asc/desc is flipped
 // (an item without one gets DESC), so a column like "description" is left
 // intact. (Before #37 it became "ASCription" and the query failed.)
@@ -100,3 +125,83 @@ out('in-stock via find_by_sql: ' . count($raw));
 // Static scope.
 $cheap = Widget::cheap();
 out('cheap(): ' . implode(', ', ActiveRecord\collect($cheap, 'name')));
+
+// find() by a pk value that is not an integer finds nothing: RecordNotFound,
+// on every adapter (Postgres included, see the end of this example).
+foreach (['abc', 'name = 123123123'] as $id) {
+    try {
+        Widget::find($id);
+    } catch (ActiveRecord\RecordNotFound $e) {
+        out("find('$id'): " . $e->getMessage());
+    }
+}
+
+// --- Postgres: limit/order on delete_all()/update_all() ---
+//
+// Postgres has no LIMIT/ORDER BY on DELETE and UPDATE, so the library picks the
+// rows by primary key in a subquery, as Rails does, and a table without a
+// primary key by its row identity (tableoid, ctid). (Before #92 the limit and
+// the order were silently dropped there: a limited delete_all() deleted EVERY
+// matching row.)
+
+if ('' === $pgsql_url) {
+    out('');
+    out('Postgres half skipped: set PHPAR_PGSQL to a pgsql:// URL to run it.');
+    exit(0);
+}
+
+try {
+    $pg = ActiveRecord\ConnectionManager::get_connection('pgsql');
+} catch (ActiveRecord\DatabaseException $e) {
+    out('');
+    out('Postgres half skipped: connection failed (' . strtok($e->getMessage(), "\n") . ')');
+    exit(0);
+}
+
+$statements = array_filter(array_map('trim', explode(';', (string) file_get_contents(__DIR__ . '/finders-pgsql.sql'))));
+foreach ($statements as $statement) {
+    $pg->query($statement);
+}
+
+out('');
+$gadgets = ['category = ?', 'gadgets'];
+out('Postgres delete_all(gadgets, order price desc, limit 1): ' . PgWidget::delete_all(['conditions' => $gadgets, 'order' => 'price desc', 'limit' => 1]) . ' row');
+out('  SQL: ' . PgWidget::table()->last_sql);
+$left = PgWidget::all(['conditions' => $gadgets]);
+out('  gadgets left: ' . implode(', ', ActiveRecord\collect($left, 'name')));
+
+out('Postgres update_all(set in_stock 0, order price, limit 2): ' . PgWidget::update_all(['set' => ['in_stock' => 0], 'order' => 'price', 'limit' => 2]) . ' rows');
+out('  SQL: ' . PgWidget::table()->last_sql);
+$out_of_stock = PgWidget::all(['conditions' => ['in_stock = ?', 0], 'order' => 'price']);
+out('  out of stock: ' . implode(', ', ActiveRecord\collect($out_of_stock, 'name')));
+
+// pg_widget_logs has no primary key: its rows are picked by (tableoid, ctid).
+out('Postgres delete_all on a table without a primary key (order widget_id, limit 1): ' . PgWidgetLog::delete_all(['order' => 'widget_id', 'limit' => 1]) . ' row');
+out('  SQL: ' . PgWidgetLog::table()->last_sql);
+out('  log rows left: ' . PgWidgetLog::count());
+
+// find() by a pk value Postgres cannot compare with the INTEGER pk ('abc',
+// '1.5', 'name = 123123123') throws RecordNotFound without querying, so an open
+// transaction stays usable. (Before #92 the query failed with a DatabaseException,
+// SQLSTATE 22P02, and every later query in the transaction with 25P02.)
+PgWidget::transaction(function (): bool {
+    foreach (['abc', '1.5'] as $id) {
+        try {
+            PgWidget::find($id);
+        } catch (ActiveRecord\RecordNotFound $e) {
+            out("Postgres find('$id') in a transaction: " . $e->getMessage());
+        }
+    }
+
+    try {
+        PgWidget::find(1, 'abc');
+    } catch (ActiveRecord\RecordNotFound $e) {
+        out("Postgres find(1, 'abc'): " . $e->getMessage());
+        out('  SQL: ' . PgWidget::table()->last_sql);
+    }
+    out('  the transaction goes on: find(1) -> ' . PgWidget::find(1)->name);
+
+    return false;
+});
+
+$pg->query('DROP TABLE IF EXISTS pg_widgets, pg_widget_logs');

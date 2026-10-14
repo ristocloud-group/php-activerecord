@@ -75,6 +75,14 @@ class Table
     private array $relationships = [];
 
     /**
+     * The real name of each column whose attribute (inflected) name does not name it on
+     * this connection: inflected_name => name ('space_name' => 'space name'; 'some_date'
+     * => 'some_Date' only where column names are case-sensitive).
+     * @var array<string, string>
+     */
+    private array $real_column_names = [];
+
+    /**
      * @param string $model_class_name
      * @return self
      */
@@ -249,11 +257,9 @@ class Table
 
                 call_user_func_array([$sql,'where'], $options['conditions']);
             } else {
-                $hashes = [$options['conditions']];
-
-                if (!empty($options['mapped_names'])) {
-                    $hashes = $this->map_names($options['conditions'], $options['mapped_names']);
-                }
+                // aliases (when given) and attribute names become column names (#92)
+                $mapped_names = empty($options['mapped_names']) ? [] : $options['mapped_names'];
+                $hashes = $this->map_names($options['conditions'], $mapped_names);
 
                 if (1 === count($hashes)) {
                     $sql->where($hashes[0]);
@@ -399,6 +405,59 @@ class Table
     }
 
     /**
+     * The column an attribute name stands for: 'space_name' => 'space name' (#92), and on
+     * a connection whose column names are case-sensitive (Postgres) 'some_date' =>
+     * 'some_Date'; MySQL/SQLite match that one as is, so it is returned unchanged there.
+     * A column's own name, a qualified or quoted key, an expression or anything else that
+     * is not the attribute name of a differently named column is returned unchanged.
+     *
+     * @internal Serves the library's persistence and finder paths; not a supported API.
+     */
+    public function real_column_name(string $name): string
+    {
+        if (isset($this->columns[$name])) {
+            return $name;
+        }
+
+        return $this->real_column_names[$name] ?? $name;
+    }
+
+    /**
+     * A data hash (insert/SET values) with each key passed through real_column_name(),
+     * in order. Two keys naming one column leave one entry, holding the later value.
+     *
+     * @internal Serves the library's persistence paths; not a supported API.
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    public function real_column_keys(array $data): array
+    {
+        $keys = [];
+
+        foreach ($data as $name => $value) {
+            // (string): an integer key ("0") names no column and comes back unchanged
+            $keys[$this->real_column_name((string) $name)] = $value;
+        }
+
+        return $keys;
+    }
+
+    /**
+     * A conditions hash with its keys named as the columns (see real_column_name()),
+     * split where a column repeats so every condition is kept: hashes to AND in order.
+     *
+     * @internal Serves the library's hash conditions; not a supported API.
+     * @param array<string, mixed> $hash
+     * @return non-empty-list<array<string, mixed>>
+     */
+    public function condition_hashes(array $hash): array
+    {
+        $map = [];
+
+        return $this->map_names($hash, $map);
+    }
+
+    /**
      * @param bool $quote_name
      * @return string
      */
@@ -456,10 +515,13 @@ class Table
     {
         $data = $this->process_data($data);
 
+        // the statement names the columns; $data keeps its attribute names for the caller (#92).
+        // Anything but a hash (null, a list) goes to SQLBuilder as before, which rejects it.
+        $row = is_hash($data) ? $this->real_column_keys($data) : $data;
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-        $sql->insert($data, $pk, $sequence_name);
+        $sql->insert($row, null === $pk ? $pk : $this->real_column_name($pk), $sequence_name);
 
-        $values = array_values($data);
+        $values = array_values($row);
         return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
     }
 
@@ -479,6 +541,14 @@ class Table
         if (empty($values)) {
             return 0;
         }
+
+        // The statement names the columns (#92): row keys, $unique_by and $update are
+        // mapped from attribute names first, so everything below works on column names.
+        // (string): a name that is not a string renders as quote_name() always cast it.
+        $column_name = fn(mixed $name): string => $this->real_column_name((string) $name);
+        $values = array_map(fn(array $row): array => $this->real_column_keys($row), $values);
+        $unique_by = array_map($column_name, $unique_by);
+        $update = null === $update ? null : array_map($column_name, $update);
 
         // Every row must share the same set of keys.
         $first_keys = array_keys(reset($values));
@@ -591,8 +661,17 @@ class Table
             $where = $this->process_data($where);
         }
 
+        // the statement names the columns; $data keeps its attribute names for the caller (#92)
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-        $sql->update($data)->where($where);
+        // anything but a hash (null: nothing to write) goes to SQLBuilder as before, which rejects it
+        $sql->update(is_hash($data) ? $this->real_column_keys($data) : $data);
+
+        // two keys naming one column both stay conditions
+        if (is_array($where) && is_hash($where)) {
+            $sql->where_hashes($this->condition_hashes($where));
+        } else {
+            $sql->where($where);
+        }
 
         $values = $sql->bind_values();
         return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
@@ -607,7 +686,13 @@ class Table
         $data = $this->process_data($data);
 
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-        $sql->delete($data);
+
+        // the WHERE names the columns (#92); two keys naming one column both stay conditions
+        if (is_hash($data)) {
+            $sql->delete()->where_hashes($this->condition_hashes($data));
+        } else {
+            $sql->delete($data);
+        }
 
         $values = $sql->bind_values();
         return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
@@ -639,17 +724,31 @@ class Table
         $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () use ($conn, $table_name) {
             return $conn->columns($table_name);
         });
+
+        // A name differing only by case (some_Date) is mapped only where column names are
+        // case-sensitive (Postgres): MySQL/SQLite already match it, and their SQL stays as it
+        // was. Two columns with one inflected name: the first wins, as in
+        // get_column_by_inflected_name().
+        $case_sensitive = $conn->column_names_are_case_sensitive();
+
+        foreach ($this->columns as $name => $column) {
+            if ($column->inflected_name !== $name && ($case_sensitive || strtolower($name) !== $column->inflected_name)) {
+                $this->real_column_names[$column->inflected_name] ??= $name;
+            }
+        }
     }
 
     /**
-     * Replaces any aliases used in a hash based condition.
+     * Replaces any aliases used in a hash based condition, then names each attribute
+     * as its column (see real_column_name(), #92).
      *
-     * An alias and its column ('marquee' and 'name') would overwrite each other in one
-     * hash, so a repeated name starts a new hash: every condition is kept, in order, and
-     * the hashes are ANDed. Without a repeated name there is a single hash, as before.
+     * An alias and its column ('marquee' and 'name'), or an attribute and its column
+     * ('some_date' and 'some_Date'), would overwrite each other in one hash, so a
+     * repeated name starts a new hash: every condition is kept, in order, and the hashes
+     * are ANDed. Without a repeated name there is a single hash, as before.
      *
      * @param array<string, mixed> $hash A hash
-     * @param array<string, string> $map Hash of used_name => real_name
+     * @param array<string, mixed> $map Hash of used_name => real_name (a model's $alias_attribute, as configured)
      * @return non-empty-list<array<string, mixed>> Hashes with any aliases replaced with their real field name
      */
     private function map_names(array &$hash, array &$map): array
@@ -661,6 +760,9 @@ class Table
             if (array_key_exists($name, $map)) {
                 $name = $map[$name];
             }
+
+            // a misconfigured alias target that is not a string stays as it was
+            $name = is_string($name) ? $this->real_column_name($name) : $name;
 
             if (array_key_exists($name, $ret)) {
                 $hashes[] = $ret;
@@ -709,7 +811,10 @@ class Table
         foreach ($hash as $name => &$value) {
             // any DateTimeInterface: PDO cannot bind a \DateTimeImmutable either
             if ($value instanceof \DateTimeInterface) {
-                if (isset($this->columns[$name]) && $this->columns[$name]->type == Column::DATE) {
+                // a string key names a column or an attribute ('some_date' for some_Date, #92)
+                $column = is_string($name) ? ($this->columns[$this->real_column_name($name)] ?? null) : null;
+
+                if (null !== $column && $column->type == Column::DATE) {
                     $value = $this->connection()->date_to_string($value);
                 } else {
                     $value = $this->connection()->datetime_to_string($value);

@@ -30,6 +30,42 @@ class ActiveRecordFindTest extends DatabaseTest
         }
     }
 
+    public function test_find_by_pk_with_a_non_integer_string_is_not_found()
+    {
+        // Postgres would reject 'abc' for the INTEGER pk (22P02): it is not queried (#92)
+        $this->expect_exception(ActiveRecord\RecordNotFound::class);
+        $this->expect_exception_message("Couldn't find Author with ID=abc");
+        Author::find('abc');
+    }
+
+    public function test_find_by_pk_list_with_a_non_integer_string_is_not_found()
+    {
+        $this->expect_exception(ActiveRecord\RecordNotFound::class);
+        $this->expect_exception_message("Couldn't find all Author with IDs (1,abc) (found 1, but was looking for 2)");
+        Author::find(1, 'abc');
+    }
+
+    public function test_non_integer_pk_lookup_keeps_the_transaction_usable()
+    {
+        $created = null;
+        $ret = Author::transaction(function () use (&$created) {
+            try {
+                Author::find('abc');
+                $this->fail('RecordNotFound expected');
+            } catch (ActiveRecord\RecordNotFound) {
+            }
+
+            // on Postgres a failed query would have aborted the transaction (25P02)
+            $this->assert_equals('Tito', Author::find(1)->name);
+            $created = Author::create(['name' => 'tx']);
+
+            return true;
+        });
+
+        $this->assert_true($ret);
+        $this->assert_equals('TX', Author::find($created->author_id)->name);
+    }
+
     public function test_find_by_pk_with_options()
     {
         $author = Author::find(3, ['order' => 'name']);

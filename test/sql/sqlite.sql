@@ -171,3 +171,12 @@ CREATE TABLE composite_items (
   parent_ref INTEGER,
   title VARCHAR(20)
 );
+
+-- column names that differ from their attribute names (#92): camelcase (by case only, so mapped on Postgres only), space_name, dash_name, some_day
+CREATE TABLE odd_columns (
+  id INTEGER NOT NULL PRIMARY KEY,
+  `camelCase` VARCHAR(20),
+  `space name` VARCHAR(20),
+  `dash-name` VARCHAR(20),
+  `some day` DATE
+);

@@ -5,6 +5,9 @@ use ActiveRecord\DatabaseException;
 
 class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
 {
+    /** One fixed instant, so the formats are compared without the clock ticking in between. */
+    private const int INSTANT = 1_700_000_000;
+
     /** @var DateTime */
     private $date;
 
@@ -14,6 +17,7 @@ class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
     public function set_up()
     {
         $this->date = new DateTime();
+        $this->date->setTimestamp(self::INSTANT);
         $this->original_format = DateTime::$DEFAULT_FORMAT;
     }
 
@@ -112,43 +116,43 @@ class DateTimeTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     public function test_format_by_friendly_name()
     {
-        $d = date(DateTime::get_format('db'));
+        $d = date(DateTime::get_format('db'), self::INSTANT);
         $this->assert_equals($d, $this->date->format('db'));
     }
 
     public function test_format_by_custom_format()
     {
         $format = 'Y/m/d';
-        $this->assert_equals(date($format), $this->date->format($format));
+        $this->assert_equals(date($format, self::INSTANT), $this->date->format($format));
     }
 
     public function test_format_uses_default()
     {
-        $d = date(DateTime::$FORMATS[DateTime::$DEFAULT_FORMAT]);
+        $d = date(DateTime::$FORMATS[DateTime::$DEFAULT_FORMAT], self::INSTANT);
         $this->assert_equals($d, $this->date->format());
     }
 
     public function test_all_formats()
     {
         foreach (DateTime::$FORMATS as $name => $format) {
-            $this->assert_equals(date($format), $this->date->format($name));
+            $this->assert_equals(date($format, self::INSTANT), $this->date->format($name));
         }
     }
 
     public function test_change_default_format_to_format_string()
     {
         DateTime::$DEFAULT_FORMAT = 'H:i:s';
-        $this->assert_equals(date(DateTime::$DEFAULT_FORMAT), $this->date->format());
+        $this->assert_equals(date(DateTime::$DEFAULT_FORMAT, self::INSTANT), $this->date->format());
     }
 
     public function test_change_default_format_to_friently()
     {
         DateTime::$DEFAULT_FORMAT = 'short';
-        $this->assert_equals(date(DateTime::$FORMATS['short']), $this->date->format());
+        $this->assert_equals(date(DateTime::$FORMATS['short'], self::INSTANT), $this->date->format());
     }
 
     public function test_to_string()
     {
-        $this->assert_equals(date(DateTime::get_format()), "" . $this->date);
+        $this->assert_equals(date(DateTime::get_format(), self::INSTANT), "" . $this->date);
     }
 }

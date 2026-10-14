@@ -407,15 +407,23 @@ class ActiveRecordWriteTest extends DatabaseTest
         $this->assert_equals(4, $num_affected);
     }
 
+    /**
+     * @return array<int, mixed> author_id => $attribute of every author
+     */
+    private function authors_by_id(string $attribute): array
+    {
+        $authors = Author::all(['order' => 'author_id']);
+
+        return array_combine(ActiveRecord\collect($authors, 'author_id'), ActiveRecord\collect($authors, $attribute));
+    }
+
     public function test_delete_all_with_limit_and_order()
     {
-        if (!$this->conn->accepts_limit_and_order_for_update_and_delete()) {
-            $this->mark_test_skipped('Only MySQL & Sqlite accept limit/order with UPDATE clause');
-        }
-
         $num_affected = Author::delete_all(['conditions' => ['parent_author_id = ?', 2], 'limit' => 1, 'order' => 'name asc']);
         $this->assert_equals(1, $num_affected);
         $this->assert_true(strpos(Author::table()->last_sql, 'ORDER BY name asc LIMIT 1') !== false);
+        // of George W. Bush (2) and Uncle Bob (4), the first by name goes
+        $this->assert_equals([1, 3, 4], array_keys($this->authors_by_id('name')));
     }
 
     public function test_update_all_with_set_as_string()
@@ -464,13 +472,49 @@ class ActiveRecordWriteTest extends DatabaseTest
 
     public function test_update_all_with_limit_and_order()
     {
-        if (!$this->conn->accepts_limit_and_order_for_update_and_delete()) {
-            $this->mark_test_skipped('Only MySQL & Sqlite accept limit/order with UPDATE clause');
-        }
-
         $num_affected = Author::update_all(['set' => 'parent_author_id = 2', 'limit' => 1, 'order' => 'name asc']);
         $this->assert_equals(1, $num_affected);
         $this->assert_true(strpos(Author::table()->last_sql, 'ORDER BY name asc LIMIT 1') !== false);
+        // only Bill Clinton (3), the first by name, changes: 1 => 2
+        $this->assert_equals([1 => 3, 2 => 2, 3 => 2, 4 => 2], $this->authors_by_id('parent_author_id'));
+    }
+
+    public function test_update_all_with_set_hash_conditions_order_and_limit_hits_the_right_row()
+    {
+        // the SET value binds before the WHERE value, which moves into a subquery on Postgres (#92)
+        $num_affected = Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['parent_author_id = ?', 2], 'order' => 'name asc', 'limit' => 1]);
+        $this->assert_equals(1, $num_affected);
+        $this->assert_equals([1 => 'Tito', 2 => 'X', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->authors_by_id('name'));
+    }
+
+    public function test_delete_all_with_limit_on_a_table_without_primary_key()
+    {
+        PklessItem::create(['code' => 2, 'name' => 'second']);
+        PklessItem::create(['code' => 3, 'name' => 'third']);
+
+        $num_affected = PklessItem::delete_all(['conditions' => ['code > ?', 1], 'order' => 'code desc', 'limit' => 1]);
+        $this->assert_equals(1, $num_affected);
+        $items = PklessItem::all(['order' => 'code']);
+        $this->assert_equals([1, 2], ActiveRecord\collect($items, 'code'));
+    }
+
+    public function test_delete_all_with_limit_on_a_composite_primary_key()
+    {
+        // dated_counts: primary key (day, at); hits 1 and 2
+        $num_affected = DatedCount::delete_all(['conditions' => ['hits > ?', 0], 'order' => 'hits desc', 'limit' => 1]);
+        $this->assert_equals(1, $num_affected);
+
+        if ('pgsql' === $this->conn->protocol) {
+            // Postgres picks the rows by every pk column in a key subquery (#92)
+            $q = fn(string $name): string => $this->conn->quote_name($name);
+            $this->assert_string_contains_string(
+                "({$q('day')}, {$q('at')}) IN (SELECT {$q('day')}, {$q('at')} FROM {$q('dated_counts')}",
+                DatedCount::table()->last_sql
+            );
+        }
+
+        $counts = DatedCount::all(['order' => 'hits']);
+        $this->assert_equals([1], ActiveRecord\collect($counts, 'hits'));
     }
 
     public function test_reset_dirty()
