@@ -126,6 +126,28 @@ out('in-stock via find_by_sql: ' . count($raw));
 $cheap = Widget::cheap();
 out('cheap(): ' . implode(', ', ActiveRecord\collect($cheap, 'name')));
 
+// exists()/count() read their pk arguments as find() does: 0 is a pk value (no
+// widget has the id 0), and several pks are the array form; only null, '' and []
+// mean "no pk" (the whole table). (Up to 2.1.0 exists(0) and count(0) looked at
+// the whole table, and count(1, 2, 3) counted only the id 1.)
+out('exists(0): ' . var_export(Widget::exists(0), true) . ', count(0): ' . Widget::count(0));
+out('count(1, 2, 3): ' . Widget::count(1, 2, 3) . ' = count([1, 2, 3]): ' . Widget::count([1, 2, 3]));
+out('  SQL: ' . Widget::connection()->last_query);
+
+// A pk passed with conditions is found only if it matches them too, like Rails'
+// where(...).find($id): handy to scope a lookup to an owner. (Up to 2.1.0 find()
+// dropped the pk and returned the first widget matching the conditions, while
+// count()/exists() dropped the conditions.)
+out("find(1, category 'gadgets'): " . Widget::find(1, ['conditions' => ['category' => 'gadgets']])->name);
+out('  SQL: ' . Widget::table()->last_sql);
+try {
+    Widget::find(1, ['conditions' => ['category' => 'gizmos']]);
+} catch (ActiveRecord\RecordNotFound $e) {
+    out("find(1, category 'gizmos'): " . $e->getMessage());
+}
+out("count(1, 3, category 'gizmos'): " . Widget::count(1, 3, ['category' => 'gizmos'])
+    . ", exists(1, category 'gizmos'): " . var_export(Widget::exists(1, ['conditions' => ['category' => 'gizmos']]), true));
+
 // find() by a pk value that is not an integer finds nothing: RecordNotFound,
 // on every adapter (Postgres included, see the end of this example).
 foreach (['abc', 'name = 123123123'] as $id) {
