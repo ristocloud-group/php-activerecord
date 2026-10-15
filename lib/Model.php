@@ -1990,6 +1990,10 @@ class Model
      * options hash. This is the parsing count() has always done, factored out so
      * count() and exists() cannot diverge.
      *
+     * The primary-key values are read as find() reads them (#33): only null, '' and []
+     * stand for "no pk" (the whole table); 0, '0' or false is a pk value, and several
+     * positional values are the array form (count(1, 2) is count([1, 2])).
+     *
      * @param list<mixed> $args
      * @return array<string, mixed>
      */
@@ -1997,12 +2001,16 @@ class Model
     {
         $options = static::extract_and_validate_options($args); // by-ref: pops trailing options hash
 
-        if (!empty($args) && !is_null($args[0]) && !empty($args[0])) {
-            if (is_hash($args[0])) {
-                $options['conditions'] = $args[0];
-            } else {
-                $options['conditions'] = call_user_func_array([static::class, 'pk_conditions'], $args);
-            }
+        if ([] === $args || in_array($args[0], [null, '', []], true)) {
+            return $options;
+        }
+
+        if (is_hash($args[0])) {
+            $options['conditions'] = $args[0];
+        } else {
+            // a trailing bare conditions hash is left in $args: it is not a pk value
+            $values = is_hash($args[count($args) - 1]) ? array_slice($args, 0, -1) : $args;
+            $options['conditions'] = static::pk_conditions(1 === count($values) ? $values[0] : $values);
         }
 
         return $options;
