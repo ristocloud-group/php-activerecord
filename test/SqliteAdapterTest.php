@@ -93,6 +93,7 @@ class SqliteAdapterTest extends AdapterTest
         ];
 
         foreach ($forms as $ddl => [$pk, $expected]) {
+            $this->conn->query('DROP TABLE IF EXISTS rowid_alias_probe');
             $this->conn->query("CREATE TABLE rowid_alias_probe $ddl");
 
             try {
@@ -110,6 +111,7 @@ class SqliteAdapterTest extends AdapterTest
         // SQLite stores NULL in an omitted nullable INT PRIMARY KEY: the model took the
         // rowid as its id, and a later save() matched no row (GH #66). Now the id stays
         // null, as stored, and the writes are refused like on any record without a pk value (#41)
+        $this->conn->query('DROP TABLE IF EXISTS rowid_alias_probe');
         $this->conn->query('CREATE TABLE rowid_alias_probe (id INT PRIMARY KEY, n TEXT)');
 
         try {

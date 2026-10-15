@@ -319,9 +319,8 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
     public function test_inserted_record_updates_and_deletes_normally()
     {
         $author = Author::create(['name' => 'fresh']);
-        $id = (int) $author->author_id;
+        $id = $author->author_id;
 
-        $author->author_id = $id; // the generated key may come back as a string
         $author->name = 'updated';
         $this->assert_true($author->save());
         $this->assert_same('UPDATED', Author::find($id)->name);
