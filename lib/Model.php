@@ -2007,11 +2007,49 @@ class Model
 
         if (is_hash($args[0])) {
             $options['conditions'] = $args[0];
-        } else {
-            // a trailing bare conditions hash is left in $args: it is not a pk value
-            $values = is_hash($args[count($args) - 1]) ? array_slice($args, 0, -1) : $args;
-            $options['conditions'] = static::pk_conditions(1 === count($values) ? $values[0] : $values);
+
+            return $options;
         }
+
+        // a trailing bare conditions hash is left in $args: it is not a pk value
+        $values = is_hash($args[count($args) - 1]) ? array_slice($args, 0, -1) : $args;
+
+        return self::and_pk_conditions(static::pk_conditions(1 === count($values) ? $values[0] : $values), $options);
+    }
+
+    /**
+     * $options with the primary-key conditions $pk ANDed in front of their own conditions,
+     * "<pk> AND (<conditions>)", the latter parenthesized so that an OR of theirs cannot
+     * widen the pk (#149). Both are rendered as options_to_sql() renders them (a hash's
+     * names mapped to columns, $mapped_names only for the own conditions; keys qualified
+     * with the table when joining; list values expanded) and passed on as positional
+     * conditions. Without own conditions, or with ones rendering no WHERE, $pk become the
+     * conditions, as they always did.
+     *
+     * @param array<string, mixed> $pk
+     * @param array<string, mixed> $options
+     * @param array<string, string>|null $mapped_names
+     * @return array<string, mixed>
+     */
+    private static function and_pk_conditions(array $pk, array $options, ?array $mapped_names = null): array
+    {
+        $table = static::table();
+        $scope = array_intersect_key($options, ['from' => true, 'joins' => true]);
+        $own = isset($options['conditions'])
+            ? $table->options_to_sql(['conditions' => $options['conditions'], 'mapped_names' => $mapped_names] + $scope)
+            : null;
+        $options['conditions'] = $pk;
+
+        if (null === $own || in_array($own->get_where(), [null, ''], true)) {
+            return $options;
+        }
+
+        $key = $table->options_to_sql(['conditions' => $pk] + $scope);
+        $options['conditions'] = [
+            $key->get_where() . ' AND (' . $own->get_where() . ')',
+            ...$key->get_where_values(),
+            ...$own->get_where_values(),
+        ];
 
         return $options;
     }
@@ -2101,6 +2139,9 @@ class Model
      *
      * # finding by pk accepts an options array
      * YourModel::find(123,array('order' => 'name desc'));
+     *
+     * # with conditions the pk is found only if it matches them too (#149)
+     * YourModel::find(123, ['conditions' => ['owner_id' => 7]]);
      * </code>
      *
      * Finding by using a conditions array:
@@ -2190,8 +2231,17 @@ class Model
             $num_args--;
         }
         //find by pk
-        elseif (1 === count($args) && 1 == $num_args) {
-            $args = $args[0];
+        elseif ($num_args > 0) {
+            // a trailing bare conditions hash is left in $args: it is not a pk value, and
+            // find_by_pk() ANDs it with the pk like an options conditions (#149)
+            if (is_hash($args[$num_args - 1])) {
+                array_pop($args);
+                $num_args--;
+            }
+
+            if ($num_args > 0) {
+                return static::find_by_pk(1 === $num_args ? $args[0] : $args, $options);
+            }
         }
 
         // anything left in $args is a find by pk
@@ -2210,7 +2260,7 @@ class Model
      *
      * @see find
      * @param mixed $values An array containing values for the pk, or a single pk value
-     * @param array<string, mixed> $options An options array
+     * @param array<string, mixed> $options An options array; its conditions are ANDed with the pk (#149)
      * @return Model|list<Model> A single Model when $values is a scalar or a single-element
      *   array; a list<Model> when $values is a multi-element array of primary keys
      * @throws RecordNotFound if a record could not be found
@@ -2224,7 +2274,8 @@ class Model
         $list = [];
 
         if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
-            $options['conditions'] = static::pk_conditions($bound);
+            // ANDed with any conditions, whose alias names map as in find() (#149)
+            $options = self::and_pk_conditions(static::pk_conditions($bound), $options, static::$alias_attribute);
             $list = static::table()->find($options);
         }
         $results = count($list);
