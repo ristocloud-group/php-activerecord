@@ -105,6 +105,31 @@ class SqliteAdapter extends Connection
     }
 
     /**
+     * Like Connection::columns(), but auto_increment stays only on the rowid alias, the
+     * one pk SQLite fills itself: a single pk column declared exactly INTEGER with no
+     * index of its own. A composite pk, an inline `INTEGER PRIMARY KEY DESC` and a
+     * WITHOUT ROWID table are backed by an index of origin 'pk': their pk holds the
+     * value inserted, which the model keeps after create() (GH #66).
+     *
+     * @param string $table Name of a table
+     * @return array<string, Column> An array of {@link Column} objects, keyed by column name.
+     */
+    public function columns($table)
+    {
+        $columns = parent::columns($table);
+        $pk = array_filter($columns, fn(Column $c) => $c->pk);
+        $origins = array_column($this->query("pragma index_list($table)")->fetchAll(), 'origin');
+
+        if (count($pk) > 1 || in_array('pk', $origins, true)) {
+            foreach ($pk as $c) {
+                $c->auto_increment = false;
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
      * @param array{cid: int, name: string, type: string, notnull: int, dflt_value: string|null, pk: int} $column
      *   One row from `pragma table_info($table)`.
      * @return Column
@@ -116,10 +141,8 @@ class SqliteAdapter extends Connection
         $c->name            = $column['name'];
         $c->nullable        = $column['notnull'] ? false : true;
         $c->pk              = $column['pk'] ? true : false;
-        $c->auto_increment  = in_array(
-            strtoupper($column['type']),
-            ['INT', 'INTEGER']
-        ) && $c->pk;
+        // only a pk column declared exactly INTEGER can be the rowid alias; columns() rules out the rest
+        $c->auto_increment  = 'INTEGER' === strtoupper($column['type']) && $c->pk;
 
         $column['type'] = preg_replace('/ +/', ' ', $column['type']) ?? $column['type'];
         $column['type'] = str_replace(['(',')'], ' ', $column['type']);

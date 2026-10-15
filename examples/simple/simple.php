@@ -84,5 +84,14 @@ try {
 }
 echo 'books in the table: ' . Book::count() . "\n\n";
 
+// The primary key create() fills in has the type find() gives it: an int for an
+// integer column. (Up to 2.1.0 it was the string the database driver returned,
+// so it was not === to the found record's id and to_json() gave "id":"3".)
+$created = Book::create(['name' => 'Fresh', 'author' => 'Dee']);
+$found = Book::find($created->id);
+echo 'create() id: ' . var_export($created->id, true) . ', find() id: ' . var_export($found->id, true)
+    . ', identical: ' . var_export($created->id === $found->id, true) . "\n";
+echo 'to_json(): ' . $created->to_json(['only' => ['id', 'name']]) . "\n\n";
+
 // Fetch the first row and dump its attributes.
 print_r(Book::first()->attributes());

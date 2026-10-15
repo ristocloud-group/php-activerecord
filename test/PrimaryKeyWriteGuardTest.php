@@ -121,6 +121,14 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
         return array_map(fn(Author $a) => $a->author_id . '=' . $a->name, Author::all(['order' => 'author_id']));
     }
 
+    /**
+     * @return list<string> id=name of every host, in pk order
+     */
+    private function host_rows(): array
+    {
+        return array_map(fn(Host $h) => $h->id . '=' . $h->name, Host::all(['order' => 'id']));
+    }
+
     public function test_update_attribute_on_a_new_record_is_refused()
     {
         $author = new Author();
@@ -311,9 +319,8 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
     public function test_inserted_record_updates_and_deletes_normally()
     {
         $author = Author::create(['name' => 'fresh']);
-        $id = (int) $author->author_id;
+        $id = $author->author_id;
 
-        $author->author_id = $id; // the generated key may come back as a string
         $author->name = 'updated';
         $this->assert_true($author->save());
         $this->assert_same('UPDATED', Author::find($id)->name);
@@ -338,6 +345,34 @@ class PrimaryKeyWriteGuardTest extends DatabaseTest
             'Cannot update, primary key changed for: Author (author_id: 9999 => 1)',
             fn() => $author->save()
         );
+    }
+
+    public function test_explicit_pk_is_kept_after_create()
+    {
+        // GH #66: on SQLite hosts.id is INT PRIMARY KEY, not the rowid alias, yet the model
+        // took the rowid as its id, so a later save() or delete() hit another row or none
+        $before = $this->host_rows();
+        $host = Host::create(['id' => 42, 'name' => 'x']);
+        $this->assert_same(42, $host->id);
+
+        $host->name = 'y';
+        $this->assert_true($host->save());
+        $this->assert_same([...$before, '42=y'], $this->host_rows());
+
+        $this->assert_true($host->delete());
+        $this->assert_same($before, $this->host_rows());
+    }
+
+    public function test_composite_integer_pk_is_kept_after_create()
+    {
+        // GH #66: SQLite flagged both INTEGER columns of the composite pk as the rowid
+        // alias, so user_id was replaced by the rowid after create()
+        $receipt = PkGuardReadReceipt::create(['user_id' => 9, 'story_id' => 8]);
+        $this->assert_same(['user_id' => 9, 'story_id' => 8], $receipt->values_for_pk());
+
+        $this->assert_true($receipt->delete());
+        $this->assert_same(3, PkGuardReadReceipt::count());
+        $this->assert_false(PkGuardReadReceipt::exists(['conditions' => ['user_id' => 9, 'story_id' => 8]]));
     }
 
     public function test_reload_takes_the_reloaded_pk_as_persisted()
