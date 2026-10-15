@@ -394,8 +394,17 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_same(2, (int) Author::count(1, 2));
         $this->assert_same((int) Author::count([1, 2]), (int) Author::count(1, 2));
         $this->assert_same(3, (int) Author::count(1, 2, 3, ['readonly' => true]));
+        $this->assert_same(2, (int) Author::count(1, 2, []));
         $this->assert_true(Author::exists(9999999, 1));
         $this->assert_false(Author::exists(9999998, 9999999));
+    }
+
+    public function test_count_and_exists_take_a_trailing_empty_array_as_empty_options()
+    {
+        // count($id, $options) with $options = []: the [] is no second pk value
+        $this->assert_same(1, (int) Author::count(1, []));
+        $this->assert_true(Author::exists(1, []));
+        $this->assert_false(Author::exists(9999999, []));
     }
 
     public function test_count_and_exists_without_a_pk_value_check_the_whole_table()

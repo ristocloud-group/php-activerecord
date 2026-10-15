@@ -1992,7 +1992,8 @@ class Model
      *
      * The primary-key values are read as find() reads them (#33): only null, '' and []
      * stand for "no pk" (the whole table); 0, '0' or false is a pk value, and several
-     * positional values are the array form (count(1, 2) is count([1, 2])).
+     * positional values are the array form (count(1, 2) is count([1, 2])). A trailing []
+     * after them is an empty options array, as it always was.
      *
      * @param list<mixed> $args
      * @return array<string, mixed>
@@ -2000,6 +2001,11 @@ class Model
     private static function finder_conditions_from_args(array $args): array
     {
         $options = static::extract_and_validate_options($args); // by-ref: pops trailing options hash
+
+        // count($id, $options) with $options = []: an empty options array, not a second pk value
+        if (count($args) > 1 && [] === $args[count($args) - 1]) {
+            array_pop($args);
+        }
 
         if ([] === $args || in_array($args[0], [null, '', []], true)) {
             return $options;
