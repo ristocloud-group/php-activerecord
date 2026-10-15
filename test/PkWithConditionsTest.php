@@ -147,7 +147,58 @@ class PkWithConditionsTest extends DatabaseTest
     {
         $this->assert_equals(2, Author::find(2, ['conditions' => ''])->id);
         $this->assert_equals(2, Author::find(2, ['conditions' => []])->id);
+        $this->assert_equals(2, Author::find(2, ['conditions' => '0'])->id);
         $this->assert_same(1, (int) Author::count(2, ['conditions' => '']));
+    }
+
+    public function test_a_zero_string_condition_renders_no_where_and_leaves_the_pk()
+    {
+        // SQLBuilder renders no WHERE for a falsy '0' fragment (#150): the pk alone, as before
+        $this->assert_equals(1, Author::find(1, ['conditions' => '0'])->id);
+        $this->assert_equals(1, Author::find(1, ['conditions' => ['0']])->id);
+        $this->assert_same(1, (int) Author::count(1, ['conditions' => '0']));
+        $this->assert_true(Author::exists(1, ['conditions' => '0']));
+    }
+
+    public function test_an_empty_pk_with_conditions_finds_nothing()
+    {
+        // like find(null) / find('') / find([]) alone: the conditions do not widen an empty pk
+        $this->assert_not_found("Couldn't find Author with ID=", fn() => Author::find(null, ['conditions' => ['name' => 'Tito']]));
+        $this->assert_not_found("Couldn't find Author with ID=", fn() => Author::find('', ['conditions' => ['name' => 'Tito']]));
+        $this->assert_same([], Author::find([], ['conditions' => ['name' => 'Tito']]));
+    }
+
+    public function test_a_hash_before_an_options_hash_is_no_conditions_for_find()
+    {
+        // only a trailing hash of unknown keys is conditions; one before an options hash
+        // is still read as a pk value, as it always was
+        $this->assert_not_found(
+            "Couldn't find Author with ID=George W. Bush",
+            fn() => Author::find(['name' => 'George W. Bush'], ['order' => 'author_id']),
+        );
+
+        try {
+            // @: the RecordNotFound message joins the hash as the string 'Array'
+            @Author::find(1, ['name' => 'Tito'], ['order' => 'author_id']);
+            $this->fail('an exception expected');
+        } catch (RecordNotFound|ActiveRecord\DatabaseException $e) {
+            // RecordNotFound, or on Postgres the failed query
+            $this->assert_instance_of(ActiveRecord\ActiveRecordException::class, $e);
+        }
+    }
+
+    public function test_a_hash_before_an_options_hash_is_no_conditions_for_count_and_exists()
+    {
+        // as always, only the first argument is the pk then
+        $this->assert_same(1, (int) Author::count(1, ['name' => 'George W. Bush'], ['readonly' => true]));
+        $this->assert_true(Author::exists(1, ['name' => 'George W. Bush'], ['readonly' => true]));
+    }
+
+    public function test_count_and_exists_do_not_map_alias_keys()
+    {
+        // as for conditions-only count()/exists() (#144): an alias is no column there
+        $this->expect_exception(ActiveRecord\DatabaseException::class);
+        Venue::count(2, ['marquee' => 'Warner Theatre']);
     }
 
     public function test_the_callers_options_are_not_changed()

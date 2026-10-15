@@ -1986,9 +1986,8 @@ class Model
 
     /**
      * Build a validated finder options array from the variadic count()/exists()
-     * arguments: a bare primary-key value, a conditions hash, or a trailing
-     * options hash. This is the parsing count() has always done, factored out so
-     * count() and exists() cannot diverge.
+     * arguments: primary-key values, a conditions hash, or a trailing options hash,
+     * parsed in one place so count() and exists() cannot diverge.
      *
      * The primary-key values are read as find() reads them (#33): only null, '' and []
      * stand for "no pk" (the whole table); 0, '0' or false is a pk value, and several
@@ -2000,7 +1999,13 @@ class Model
      */
     private static function finder_conditions_from_args(array $args): array
     {
+        $num_args = count($args);
         $options = static::extract_and_validate_options($args); // by-ref: pops trailing options hash
+
+        // a trailing bare conditions hash is taken as the conditions but left in $args: it is no pk value
+        if ([] !== $options && count($args) === $num_args) {
+            array_pop($args);
+        }
 
         // count($id, $options) with $options = []: an empty options array, not a second pk value
         if (count($args) > 1 && [] === $args[count($args) - 1]) {
@@ -2017,10 +2022,15 @@ class Model
             return $options;
         }
 
-        // a trailing bare conditions hash is left in $args: it is not a pk value
-        $values = is_hash($args[count($args) - 1]) ? array_slice($args, 0, -1) : $args;
+        // a hash left before an options hash is no conditions: as it always was, the first
+        // argument alone is the pk then
+        if ([] !== array_filter($args, fn($arg) => is_hash($arg))) {
+            $options['conditions'] = static::pk_conditions($args[0]);
 
-        return self::and_pk_conditions(static::pk_conditions(1 === count($values) ? $values[0] : $values), $options);
+            return $options;
+        }
+
+        return self::and_pk_conditions(static::pk_conditions(1 === count($args) ? $args[0] : $args), $options);
     }
 
     /**
@@ -2046,7 +2056,8 @@ class Model
             : null;
         $options['conditions'] = $pk;
 
-        if (null === $own || in_array($own->get_where(), [null, ''], true)) {
+        // as SQLBuilder, which renders no WHERE for a falsy one ('0' included)
+        if (null === $own || !$own->get_where()) {
             return $options;
         }
 
@@ -2238,15 +2249,21 @@ class Model
         }
         //find by pk
         elseif ($num_args > 0) {
-            // a trailing bare conditions hash is left in $args: it is not a pk value, and
-            // find_by_pk() ANDs it with the pk like an options conditions (#149)
-            if (is_hash($args[$num_args - 1])) {
+            // a trailing bare conditions hash is taken as the conditions but left in $args:
+            // it is no pk value, and find_by_pk() ANDs it with the pk (#149)
+            if ([] !== $options && $num_args === func_num_args()) {
                 array_pop($args);
                 $num_args--;
             }
 
-            if ($num_args > 0) {
-                return static::find_by_pk(1 === $num_args ? $args[0] : $args, $options);
+            // a hash left before an options hash is no conditions: the pk values with it
+            // are read as they always were, below
+            if ([] === array_filter($args, fn($arg) => is_hash($arg))) {
+                if ($num_args > 0) {
+                    return static::find_by_pk(1 === $num_args ? $args[0] : $args, $options);
+                }
+            } elseif (1 === $num_args) {
+                $args = $args[0];
             }
         }
 
