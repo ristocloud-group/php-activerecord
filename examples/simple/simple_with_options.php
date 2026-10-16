@@ -37,4 +37,4 @@ ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) use ($db) {
 });
 
 // Fetch the first row (via the custom pk/table) and dump its attributes.
-print_r(Book::first()->attributes());
+print_r(Book::first()?->attributes());

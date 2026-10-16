@@ -112,7 +112,8 @@ foreach (['description desc', 'category asc, description'] as $order) {
 
 // first()/last() take the record at an 'offset' (last() counts it from the end of
 // its order), and a 'limit' of 0 finds nothing. (Up to 2.1.0 both were ignored:
-// first()/last() always rendered LIMIT 0,1, so 'offset' => 1 still gave the first.)
+// first()/last() always took one record at offset 0 - LIMIT 0,1 on SQLite and
+// MySQL/MariaDB, LIMIT 1 OFFSET 0 on Postgres - so 'offset' => 1 still gave the first.)
 /** @var Widget|null $second */
 $second = Widget::first(['order' => 'price', 'offset' => 1]);
 out('first(order price, offset 1): ' . ($second->name ?? '(none)'));

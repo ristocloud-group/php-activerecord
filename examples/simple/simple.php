@@ -94,4 +94,4 @@ echo 'create() id: ' . var_export($created->id, true) . ', find() id: ' . var_ex
 echo 'to_json(): ' . $created->to_json(['only' => ['id', 'name']]) . "\n\n";
 
 // Fetch the first row and dump its attributes.
-print_r(Book::first()->attributes());
+print_r(Book::first()?->attributes());

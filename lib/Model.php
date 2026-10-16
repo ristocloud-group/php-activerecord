@@ -2129,7 +2129,9 @@ class Model
      * RecordNotFound when there is none (#169).
      *
      * @see find
-     * @return Model The first matched record or null if not found
+     * @return Model|null The first matched record or null if not found
+     * @throws RecordNotFound if given pk values and none of them is found
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
      */
     public static function first(/* ... */)
     {
@@ -2144,7 +2146,9 @@ class Model
      * the last record found among them, RecordNotFound when there is none (#169).
      *
      * @see find
-     * @return Model The last matched record or null if not found
+     * @return Model|null The last matched record or null if not found
+     * @throws RecordNotFound if given pk values and none of them is found
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
      */
     public static function last(/* ... */)
     {
@@ -2290,7 +2294,7 @@ class Model
                 // one array of pks is the list itself; one value stays a list, queried as before
                 $values = 1 === $num_args && is_array($args[0]) ? $args[0] : $args;
 
-                return $single ? self::find_one_by_pk($values, $options) : static::find_by_pk($values, $options);
+                return $single ? self::find_one_by_pk(array_values($values), $options) : static::find_by_pk($values, $options);
             }
         }
         //find by pk
@@ -2363,10 +2367,11 @@ class Model
      * the pk values, looked up in one query as find_by_pk() looks them up. No pk value ([])
      * looks for nothing.
      *
+     * @param list<mixed> $values
      * @param array<string, mixed> $options
      * @throws RecordNotFound with find_by_pk()'s message for one record, if none is found
      */
-    private static function find_one_by_pk(mixed $values, array $options): ?Model
+    private static function find_one_by_pk(array $values, array $options): ?Model
     {
         if ([] === $values) {
             return null;
@@ -2375,7 +2380,7 @@ class Model
         $list = self::pk_finder_rows($values, $options);
 
         if ([] === $list) {
-            $values = array_map(self::describe_find_value(...), is_array($values) ? $values : [$values]);
+            $values = array_map(self::describe_find_value(...), $values);
 
             throw new RecordNotFound("Couldn't find " . get_called_class() . ' with ID=' . join(',', $values));
         }

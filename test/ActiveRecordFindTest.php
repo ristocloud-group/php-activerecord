@@ -499,6 +499,10 @@ class ActiveRecordFindTest extends DatabaseTest
             $this->assert_equals(1, $author->author_id);
         }
         $this->assert_equals(4, Author::last(['limit' => 3])->author_id);
+    }
+
+    public function test_find_first_with_another_limit_takes_the_record_at_the_offset()
+    {
         $this->assert_equals(2, Author::first(['order' => 'author_id', 'limit' => 3, 'offset' => 1])->author_id);
     }
 
