@@ -318,7 +318,33 @@ class ActiveRecordWriteTest extends DatabaseTest
     public function test_inserting_with_explicit_pk()
     {
         $author = Author::create(['author_id' => 9999, 'name' => 'blah']);
-        $this->assert_equals(9999, $author->author_id);
+        $this->assert_same(9999, $author->author_id);
+        $this->assert_same(Author::find(9999)->author_id, $author->author_id);
+    }
+
+    public function test_create_gives_the_pk_the_type_find_gives_it()
+    {
+        // GH #55: the driver returns the insert id as a string, so the model held '1'
+        // after create() but 1 after find() (on Postgres through the sequence)
+        $author = Author::create(['name' => 'Blah Blah']);
+        $this->assert_is_int($author->author_id);
+        $this->assert_same(Author::find($author->author_id)->author_id, $author->author_id);
+    }
+
+    public function test_save_gives_the_pk_the_type_find_gives_it()
+    {
+        $venue = new Venue(['name' => 'Bob']);
+        $venue->save();
+        $this->assert_is_int($venue->id);
+        $this->assert_same(Venue::find($venue->id)->id, $venue->id);
+    }
+
+    public function test_created_record_serializes_its_pk_like_the_found_one()
+    {
+        // GH #55: to_json() of a fresh record gave "author_id":"5", of the found one 5
+        $author = Author::create(['name' => 'Blah Blah']);
+        $options = ['only' => ['author_id', 'name']];
+        $this->assert_same(Author::find($author->author_id)->to_json($options), $author->to_json($options));
     }
 
     public function test_readonly()

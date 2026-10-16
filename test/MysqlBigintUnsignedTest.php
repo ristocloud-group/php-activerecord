@@ -6,6 +6,10 @@
  * the rows above PHP_INT_MAX are inserted here rather than in the shared
  * big_ids fixture, which every adapter loads.
  */
+
+// MySQL-only BIGINT UNSIGNED AUTO_INCREMENT table, created by the test that uses it
+class BigAutoId extends ActiveRecord\Model {}
+
 class MysqlBigintUnsignedTest extends DatabaseTest
 {
     public const U64_MAX = '18446744073709551615';
@@ -110,6 +114,24 @@ class MysqlBigintUnsignedTest extends DatabaseTest
 
         $this->assert_same(self::U64_MAX, $model->id);
         $this->assert_same('changed', $model->note);
+    }
+
+    public function test_create_reads_back_an_auto_increment_id_above_php_int_max_as_the_exact_string()
+    {
+        // GH #55: the id read back after insert is cast like find() casts it, which
+        // beyond PHP_INT_MAX keeps the exact string (#44) instead of clamping it
+        $id = '18446744073709551600';
+        $this->conn->query('DROP TABLE IF EXISTS big_auto_ids');
+        $this->conn->query("CREATE TABLE big_auto_ids (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, note VARCHAR(20)) AUTO_INCREMENT=$id");
+
+        try {
+            $model = BigAutoId::create(['note' => 'auto']);
+
+            $this->assert_same($id, $model->id);
+            $this->assert_same(BigAutoId::find($id)->id, $model->id);
+        } finally {
+            $this->conn->query('DROP TABLE big_auto_ids');
+        }
     }
 
     public function test_create_then_update_with_a_value_above_php_int_max()
