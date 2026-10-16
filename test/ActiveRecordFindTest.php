@@ -7,8 +7,25 @@ class FindPairKeyedAuthor extends ActiveRecord\Model
     public static $pk = ['parent_author_id', 'author_id'];
 }
 
+// dated_counts keyed by its DATE column: a pk value is bound as the column stores it
+class FindDatedDay extends ActiveRecord\Model
+{
+    public static $table_name = 'dated_counts';
+    public static $pk = 'day';
+}
+
 class ActiveRecordFindTest extends DatabaseTest
 {
+    private function assert_not_found(string $message, callable $find): void
+    {
+        try {
+            $find();
+            $this->fail('RecordNotFound expected');
+        } catch (ActiveRecord\RecordNotFound $e) {
+            $this->assert_same($message, $e->getMessage());
+        }
+    }
+
     public function test_find_with_no_params()
     {
         $this->expectException(ActiveRecord\RecordNotFound::class);
@@ -244,6 +261,110 @@ class ActiveRecordFindTest extends DatabaseTest
     {
         $author = Author::find('first', 3);
         $this->assert_equals(3, $author->author_id);
+    }
+
+    public function test_find_first_and_last_by_a_single_pk_as_before()
+    {
+        $this->assert_equals(3, Author::find('first', 3)->author_id);
+        $this->assert_equals(3, Author::find('last', [3])->author_id);
+        $this->assert_equals(3, Author::first(3)->author_id);
+        $this->assert_not_found("Couldn't find Author with ID=99999", fn() => Author::find('first', 99999));
+        $this->assert_not_found("Couldn't find Author with ID=99999", fn() => Author::last(99999));
+        $this->assert_not_found("Couldn't find Author with ID=", fn() => Author::find('first', null));
+        $this->assert_not_found("Couldn't find Author with ID=", fn() => Author::find('last', ''));
+    }
+
+    public function test_find_first_and_last_among_several_pks()
+    {
+        // the first/last record found among them, in one query (#169)
+        $this->assert_equals(2, Author::find('first', [2, 3])->author_id);
+        $this->assert_equals(3, Author::find('last', [2, 3])->author_id);
+        $this->assert_equals(2, Author::find('first', 2, 3)->author_id);
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors WHERE author_id IN(?,?)', 0, 1), Author::table()->last_sql);
+        $this->assert_equals(3, Author::find('last', 2, 3)->author_id);
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors WHERE author_id IN(?,?) ORDER BY author_id DESC', 0, 1), Author::table()->last_sql);
+        $this->assert_equals(2, Author::find('last', 2, 3, ['order' => 'author_id desc'])->author_id);
+        $this->assert_equals(2, Author::find('first', 2, 99999)->author_id);
+        $this->assert_equals(3, Author::first([2, 3], ['order' => 'author_id desc'])->author_id);
+        $this->assert_equals(4, Author::last(1, 4, 2)->author_id);
+    }
+
+    public function test_find_first_among_several_pks_honors_the_offset_and_limit()
+    {
+        $this->assert_equals(3, Author::find('first', 2, 3, ['offset' => 1, 'order' => 'author_id'])->author_id);
+        $this->assert_equals(2, Author::find('last', [2, 3], ['offset' => 1])->author_id);
+        $this->assert_not_found("Couldn't find Author with ID=2,3", fn() => Author::find('first', 2, 3, ['offset' => 2]));
+        $this->assert_not_found("Couldn't find Author with ID=2,3", fn() => Author::first([2, 3], ['limit' => 0]));
+    }
+
+    public function test_find_first_and_last_among_several_pks_none_found()
+    {
+        $this->assert_not_found("Couldn't find Author with ID=99998,99999", fn() => Author::find('first', 99998, 99999));
+        $this->assert_not_found("Couldn't find Author with ID=99998,99999", fn() => Author::find('last', [99998, 99999]));
+    }
+
+    public function test_find_first_and_last_with_no_pk_value_find_nothing()
+    {
+        // nothing to look for, as find([]) finds nothing (#169)
+        $this->assert_null(Author::find('first', []));
+        $this->assert_null(Author::find('last', []));
+        $this->assert_null(Author::first([], ['order' => 'author_id']));
+    }
+
+    public function test_find_all_by_pks_is_find_by_pks()
+    {
+        // 'all' with pk values finds them as find(<pk>...) does (#169)
+        $this->assert_equals([2, 3], array_map(fn($a) => $a->author_id, Author::find('all', [2, 3])));
+        $this->assert_equals([3, 2], array_map(fn($a) => $a->author_id, Author::all([2, 3], ['order' => 'author_id desc'])));
+        $this->assert_equals([2, 3], array_map(fn($a) => $a->author_id, Author::find('all', 2, 3)));
+        $this->assert_same([], Author::find('all', []));
+        $this->assert_not_found(
+            "Couldn't find all Author with IDs (2,99999) (found 1, but was looking for 2)",
+            fn() => Author::find('all', [2, 99999]),
+        );
+
+        // a single pk is a single Model, as it always was
+        $this->assert_instance_of(Author::class, Author::find('all', 3));
+        $this->assert_equals(3, Author::all(3)->author_id);
+        $this->assert_not_found("Couldn't find Author with ID=99999", fn() => Author::find('all', 99999));
+    }
+
+    public function test_find_first_and_last_by_a_date_pk()
+    {
+        // DATE pk values are bound as the column stores them, as by find($day) (#169)
+        $this->assert_equals(2, FindDatedDay::find('first', new DateTime('2026-01-02'))->hits);
+        $this->assert_equals(1, FindDatedDay::find('first', [new DateTime('2026-01-01'), new DateTimeImmutable('2026-01-02')])->hits);
+        $this->assert_equals(2, FindDatedDay::find('last', new DateTime('2026-01-01'), new DateTime('2026-01-02 10:00:00'))->hits);
+        $this->assert_not_found(
+            "Couldn't find FindDatedDay with ID=2030-01-01 00:00:00,2030-01-02 00:00:00",
+            fn() => FindDatedDay::find('first', new DateTime('2030-01-01'), new DateTimeImmutable('2030-01-02')),
+        );
+    }
+
+    public function test_find_first_and_last_by_a_non_integer_pk_keep_the_transaction_usable()
+    {
+        // on Postgres 'abc' is not queried against the INTEGER pk (#92): not found, or left out
+        $ret = Author::transaction(function () {
+            $this->assert_not_found("Couldn't find Author with ID=abc", fn() => Author::find('first', 'abc'));
+            $this->assert_not_found("Couldn't find Author with ID=abc,1.5", fn() => Author::last(['abc', '1.5']));
+            $this->assert_equals(1, Author::find('first', 'abc', 1)->author_id);
+            $this->assert_not_found(
+                "Couldn't find all Author with IDs (1,abc) (found 1, but was looking for 2)",
+                fn() => Author::find('all', 1, 'abc'),
+            );
+            $this->assert_equals('Tito', Author::find(1)->name);
+
+            return true;
+        });
+
+        $this->assert_true($ret);
+    }
+
+    public function test_find_first_with_conditions_only_as_before()
+    {
+        $this->assert_equals(2, Author::find('first', ['name' => 'George W. Bush'])->author_id);
+        $this->assert_equals(2, Author::find('last', ['conditions' => ['name' => 'George W. Bush']])->author_id);
+        $this->assert_equals([2], array_map(fn($a) => $a->author_id, Author::find('all', ['name' => 'George W. Bush'])));
     }
 
     public function test_find_first_with_conditions_as_string()

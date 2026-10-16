@@ -45,6 +45,66 @@ class PkWithConditionsTest extends DatabaseTest
         );
     }
 
+    public function test_find_first_and_last_with_a_pk_and_conditions()
+    {
+        // the pks are ANDed with the conditions, as by find($pk, ...): they were dropped (#169)
+        $this->assert_equals(3, Author::find('first', 3, ['conditions' => ['name' => 'Bill Clinton']])->id);
+        $this->assert_not_found("Couldn't find Author with ID=3", fn() => Author::find('first', 3, ['conditions' => ['name' => 'Tito']]));
+        $this->assert_equals(3, Author::last(3, ['name' => 'Bill Clinton'])->id);
+        $this->assert_not_found("Couldn't find Author with ID=3", fn() => Author::find('last', 3, ['name' => 'Tito']));
+        $this->assert_equals(3, Author::find('first', [2, 3], ['conditions' => ['name' => 'Bill Clinton']])->id);
+        $this->assert_equals(3, Author::first(2, 3, ['name' => 'Bill Clinton'])->id);
+        $this->assert_not_found("Couldn't find Author with ID=2,3", fn() => Author::find('first', 2, 3, ['conditions' => ['name' => 'Tito']]));
+
+        // an OR of theirs stays scoped to the pks; conditions rendering no WHERE leave the pk
+        $this->assert_equals(2, Author::find('first', [2, 3], ['conditions' => "name = 'Tito' OR name = 'George W. Bush'"])->id);
+        $this->assert_equals(2, Author::find('first', 2, ['conditions' => ''])->id);
+        $this->assert_equals(2, Author::find('last', 2, ['conditions' => null])->id);
+    }
+
+    public function test_find_all_with_pks_and_conditions()
+    {
+        // as find(<pk>..., $options) (#169)
+        $this->assert_equals(3, Author::find('all', 3, ['conditions' => ['name' => 'Bill Clinton']])->id);
+        $this->assert_not_found("Couldn't find Author with ID=3", fn() => Author::find('all', 3, ['conditions' => ['name' => 'Tito']]));
+        $this->assert_not_found(
+            "Couldn't find all Author with IDs (2,3) (found 1, but was looking for 2)",
+            fn() => Author::find('all', [2, 3], ['conditions' => ['name' => 'Bill Clinton']]),
+        );
+        $this->assert_not_found("Couldn't find Author with ID=3", fn() => Author::all(3, ['name' => 'Tito']));
+
+        $authors = Author::all(1, 2, ['conditions' => ['parent_author_id' => [2, 3]], 'order' => 'author_id']);
+        $this->assert_equals([1, 2], array_map(fn($a) => $a->id, $authors));
+        $this->assert_same([], Author::find('all', [], ['conditions' => ['name' => 'Tito']]));
+        $this->assert_equals(2, Author::find('all', 2, ['conditions' => ''])->id);
+    }
+
+    public function test_find_first_last_and_all_with_a_pk_map_an_alias_attribute_key()
+    {
+        $this->assert_equals(2, Venue::find('first', 2, ['conditions' => ['marquee' => 'Warner Theatre']])->id);
+        $this->assert_not_found("Couldn't find Venue with ID=1", fn() => Venue::find('last', 1, ['conditions' => ['marquee' => 'Warner Theatre']]));
+        $this->assert_equals(2, Venue::find('all', 2, ['marquee' => 'Warner Theatre'])->id);
+    }
+
+    public function test_a_hash_before_an_options_hash_is_no_conditions_for_find_first_and_all()
+    {
+        // as for find() alone, such a hash is still read as a pk value
+        foreach ([
+            fn() => Author::find('first', ['name' => 'George W. Bush'], ['order' => 'author_id']),
+            fn() => Author::find('last', 1, ['name' => 'Tito'], ['order' => 'author_id']),
+            fn() => Author::find('all', ['name' => 'George W. Bush'], ['order' => 'author_id']),
+        ] as $find) {
+            try {
+                // @: the RecordNotFound message joins the hash as the string 'Array'
+                @$find();
+                $this->fail('an exception expected');
+            } catch (RecordNotFound|ActiveRecord\DatabaseException $e) {
+                // RecordNotFound, or on Postgres the failed query
+                $this->assert_instance_of(ActiveRecord\ActiveRecordException::class, $e);
+            }
+        }
+    }
+
     public function test_find_by_pk_with_conditions()
     {
         $this->assert_equals(1, Author::find_by_pk(1, ['conditions' => ['name' => 'Tito']])->id);
@@ -207,6 +267,8 @@ class PkWithConditionsTest extends DatabaseTest
         $copy = $options;
 
         Author::find(1, $options);
+        Author::find('first', 1, $options);
+        Author::find('all', [1], $options);
         Author::find_by_pk([1], $options);
         Author::count(1, $options);
         Author::exists(1, $options);

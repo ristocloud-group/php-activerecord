@@ -2125,7 +2125,8 @@ class Model
      * Alias for self::find('first').
      *
      * An 'offset' skips that many records ('offset' => 1 is the second one), and a 'limit'
-     * of 0 finds nothing (#38).
+     * of 0 finds nothing (#38). Given pk values, it is the first record found among them,
+     * RecordNotFound when there is none (#169).
      *
      * @see find
      * @return Model The first matched record or null if not found
@@ -2139,7 +2140,8 @@ class Model
      * Alias for self::find('last')
      *
      * The order is reversed, so an 'offset' counts from the end ('offset' => 1 is the
-     * second-to-last record), and a 'limit' of 0 finds nothing (#38).
+     * second-to-last record), and a 'limit' of 0 finds nothing (#38). Given pk values, it is
+     * the last record found among them, RecordNotFound when there is none (#169).
      *
      * @see find
      * @return Model The last matched record or null if not found
@@ -2166,6 +2168,11 @@ class Model
      *
      * # with conditions the pk is found only if it matches them too (#149)
      * YourModel::find(123, ['conditions' => ['owner_id' => 7]]);
+     *
+     * # 'first'/'last' find the first/last of the records found by pk, 'all' finds them as
+     * # find() does (#169)
+     * YourModel::find('first', [1, 2, 3]);
+     * YourModel::find('last', 1, 2, 3, ['conditions' => ['owner_id' => 7]]);
      * </code>
      *
      * Finding by using a conditions array:
@@ -2223,6 +2230,9 @@ class Model
         $single = true;
 
         if ($num_args > 0 && ($args[0] === 'all' || $args[0] === 'first' || $args[0] === 'last')) {
+            // a trailing bare conditions hash, taken as the conditions but left in $args (#169)
+            $bare_conditions = [] !== $options && $num_args === func_num_args();
+
             switch ($args[0]) {
                 case 'all':
                     $single = false;
@@ -2260,6 +2270,22 @@ class Model
 
             $args = array_slice($args, 1);
             $num_args--;
+
+            // pk values after the type are read as find(<pk>...) reads them, a trailing bare
+            // conditions hash ANDed with them: 'all' finds them as find() does, 'first'/'last'
+            // the record of their window among them; a hash left before an options hash takes
+            // the path below, as it always did (#169)
+            if ($bare_conditions) {
+                array_pop($args);
+                $num_args--;
+            }
+
+            if ($num_args > 0 && [] === array_filter($args, fn($arg) => is_hash($arg))) {
+                // one array of pks is the list itself; one value stays a list, queried as before
+                $values = 1 === $num_args && is_array($args[0]) ? $args[0] : $args;
+
+                return $single ? self::find_one_by_pk($values, $options) : static::find_by_pk($values, $options);
+            }
         }
         //find by pk
         elseif ($num_args > 0) {
@@ -2304,17 +2330,7 @@ class Model
      */
     public static function find_by_pk($values, $options)
     {
-        $pk = static::table()->pk[0] ?? null;
-        $bound = null === $pk ? $values : (is_array($values)
-            ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
-            : self::date_pk_finder_value($pk, $values));
-        $list = [];
-
-        if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
-            // ANDed with any conditions, whose alias names map as in find() (#149)
-            $options = self::and_pk_conditions(static::pk_conditions($bound), $options, static::$alias_attribute);
-            $list = static::table()->find($options);
-        }
+        $list = self::pk_finder_rows($values, $options);
         $results = count($list);
 
         if ($results != ($expected = is_array($values) ? count($values) : 1)) {
@@ -2334,6 +2350,54 @@ class Model
             throw new RecordNotFound("Couldn't find all $class with IDs ($values) (found $results, but was looking for $expected)");
         }
         return $expected == 1 ? $list[0] : $list;
+    }
+
+    /**
+     * find('first'|'last', <pk>...) (#169): the record at the window find() set (#38) among
+     * the pk values, looked up in one query as find_by_pk() looks them up. No pk value ([])
+     * looks for nothing.
+     *
+     * @param array<string, mixed> $options
+     * @throws RecordNotFound with find_by_pk()'s message for one record, if none is found
+     */
+    private static function find_one_by_pk(mixed $values, array $options): ?Model
+    {
+        if ([] === $values) {
+            return null;
+        }
+
+        $list = self::pk_finder_rows($values, $options);
+
+        if ([] === $list) {
+            $values = array_map(self::describe_find_value(...), is_array($values) ? $values : [$values]);
+
+            throw new RecordNotFound("Couldn't find " . get_called_class() . ' with ID=' . join(',', $values));
+        }
+
+        return $list[0];
+    }
+
+    /**
+     * The records a find by pk finds for $values (a pk value, or a list of them) with $options.
+     *
+     * @param array<string, mixed> $options
+     * @return list<Model>
+     */
+    private static function pk_finder_rows(mixed $values, array $options): array
+    {
+        $pk = static::table()->pk[0] ?? null;
+        $bound = null === $pk ? $values : (is_array($values)
+            ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
+            : self::date_pk_finder_value($pk, $values));
+        $list = [];
+
+        if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
+            // ANDed with any conditions, whose alias names map as in find() (#149)
+            $options = self::and_pk_conditions(static::pk_conditions($bound), $options, static::$alias_attribute);
+            $list = static::table()->find($options);
+        }
+
+        return $list;
     }
 
     private static function describe_find_value(mixed $value): mixed
