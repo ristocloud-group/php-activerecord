@@ -6,6 +6,7 @@
  * @property-read array<int, Post> $posts
  * @property-read array<int, Post> $featured_posts
  * @property-read Profile          $profile
+ * @property-read Post|null        $second_post
  *
  * @method Profile create_profile(array<string, mixed> $attributes) has_one builder
  * @method Post    create_posts(array<string, mixed> $attributes)   has_many builder
@@ -25,5 +26,7 @@ class Author extends ActiveRecord\Model
 
     public static $has_one = [
         ['profile'],
+        // the child at a declared offset: the author's second post
+        ['second_post', 'class_name' => 'Post', 'order' => 'id asc', 'offset' => 1],
     ];
 }

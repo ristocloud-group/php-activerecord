@@ -110,6 +110,22 @@ foreach (['description desc', 'category asc, description'] as $order) {
     out('  SQL: ' . Widget::table()->last_sql);
 }
 
+// first()/last() take the record at an 'offset' (last() counts it from the end of
+// its order), and a 'limit' of 0 finds nothing. (Up to 2.1.0 both were ignored:
+// first()/last() always rendered LIMIT 0,1, so 'offset' => 1 still gave the first.)
+/** @var Widget|null $second */
+$second = Widget::first(['order' => 'price', 'offset' => 1]);
+out('first(order price, offset 1): ' . ($second->name ?? '(none)'));
+out('  SQL: ' . Widget::table()->last_sql);
+/** @var Widget|null $second_to_last */
+$second_to_last = Widget::last(['order' => 'price', 'offset' => 1]);
+out('last(order price, offset 1): ' . ($second_to_last->name ?? '(none)'));
+out('  SQL: ' . Widget::table()->last_sql);
+/** @var Widget|null $nothing */
+$nothing = Widget::first(['limit' => 0]);
+out('first(limit 0): ' . ($nothing->name ?? '(none)'));
+out('  SQL: ' . Widget::table()->last_sql);
+
 // group / having (aggregate).
 $rows = Widget::all([
     'select' => 'category, COUNT(*) AS n',
@@ -147,6 +163,22 @@ try {
 }
 out("count(1, 3, category 'gizmos'): " . Widget::count(1, 3, ['category' => 'gizmos'])
     . ", exists(1, category 'gizmos'): " . var_export(Widget::exists(1, ['conditions' => ['category' => 'gizmos']]), true));
+
+// find('first'|'last', <pk>...) is the first/last of the records those pks find
+// (one array of pks, or several values), ANDed with any conditions as find($id, ...)
+// is. (Up to 2.1.0 several pks threw RecordNotFound, an array of them a
+// DatabaseException, and with conditions the pks were dropped: it returned the
+// first widget matching the conditions.)
+out('find(first, [2, 3]): ' . Widget::find('first', [2, 3])->name);
+out('  SQL: ' . Widget::table()->last_sql);
+out('find(last, 2, 3): ' . Widget::find('last', 2, 3)->name);
+out('  SQL: ' . Widget::table()->last_sql);
+try {
+    Widget::find('first', 1, ['conditions' => ['category' => 'gizmos']]);
+} catch (ActiveRecord\RecordNotFound $e) {
+    out("find(first, 1, category 'gizmos'): " . $e->getMessage());
+    out('  SQL: ' . Widget::table()->last_sql);
+}
 
 // find() by a pk value that is not an integer finds nothing: RecordNotFound,
 // on every adapter (Postgres included, see the end of this example).
