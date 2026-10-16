@@ -311,6 +311,35 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_null(Author::first([], ['order' => 'author_id']));
     }
 
+    public function test_find_first_last_and_all_take_a_trailing_empty_array_as_empty_options()
+    {
+        // one trailing [] after the pk values is empty options, as count($id, []) (#33, #169)
+        $this->assert_equals(3, Author::first(3, [])->author_id);
+        $this->assert_equals(3, Author::last([2, 3], [])->author_id);
+        $this->assert_equals(2, Author::find('first', 2, 3, [])->author_id);
+        $this->assert_equals([2, 3], array_map(fn($a) => $a->author_id, Author::all([2, 3], [])));
+        $this->assert_instance_of(Author::class, Author::all(3, []));
+        $this->assert_equals(3, Author::all(3, [])->author_id);
+
+        // a [] of its own is still an empty pk list
+        $this->assert_null(Author::first([], []));
+        $this->assert_null(Author::last([], []));
+        $this->assert_same([], Author::all([], []));
+        $this->assert_null(Author::first([]));
+    }
+
+    public function test_find_by_pk_with_a_trailing_empty_array_as_before()
+    {
+        // without a type, find($id, []) is left as it was: no record, an exception
+        try {
+            // @: the RecordNotFound message may join the [] as the string 'Array'
+            @Author::find(3, []);
+            $this->fail('an exception expected');
+        } catch (ActiveRecord\ActiveRecordException $e) {
+            $this->assert_instance_of(ActiveRecord\ActiveRecordException::class, $e);
+        }
+    }
+
     public function test_find_all_by_pks_is_find_by_pks()
     {
         // 'all' with pk values finds them as find(<pk>...) does (#169)

@@ -2281,6 +2281,12 @@ class Model
             }
 
             if ($num_args > 0 && [] === array_filter($args, fn($arg) => is_hash($arg))) {
+                // one trailing [] after them is empty options, as in count()/exists() (#33)
+                if ($num_args > 1 && [] === $args[$num_args - 1]) {
+                    array_pop($args);
+                    $num_args--;
+                }
+
                 // one array of pks is the list itself; one value stays a list, queried as before
                 $values = 1 === $num_args && is_array($args[0]) ? $args[0] : $args;
 
