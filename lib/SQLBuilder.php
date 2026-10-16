@@ -141,6 +141,16 @@ class SQLBuilder
     }
 
     /**
+     * The WHERE fragment (without the keyword) whose bind values get_where_values() returns.
+     *
+     * @internal Serves Model's primary-key finders; not a supported API.
+     */
+    public function get_where(): ?string
+    {
+        return $this->where;
+    }
+
+    /**
      * @return $this
      */
     public function where(/* (conditions, values) || (hash) */)

@@ -1987,24 +1987,87 @@ class Model
 
     /**
      * Build a validated finder options array from the variadic count()/exists()
-     * arguments: a bare primary-key value, a conditions hash, or a trailing
-     * options hash. This is the parsing count() has always done, factored out so
-     * count() and exists() cannot diverge.
+     * arguments: primary-key values, a conditions hash, or a trailing options hash,
+     * parsed in one place so count() and exists() cannot diverge.
+     *
+     * The primary-key values are read as find() reads them (#33): only null, '' and []
+     * stand for "no pk" (the whole table); 0, '0' or false is a pk value, and several
+     * positional values are the array form (count(1, 2) is count([1, 2])). A trailing []
+     * after them is an empty options array, as it always was.
      *
      * @param list<mixed> $args
      * @return array<string, mixed>
      */
     private static function finder_conditions_from_args(array $args): array
     {
+        $num_args = count($args);
         $options = static::extract_and_validate_options($args); // by-ref: pops trailing options hash
 
-        if (!empty($args) && !is_null($args[0]) && !empty($args[0])) {
-            if (is_hash($args[0])) {
-                $options['conditions'] = $args[0];
-            } else {
-                $options['conditions'] = call_user_func_array([static::class, 'pk_conditions'], $args);
-            }
+        // a trailing bare conditions hash is taken as the conditions but left in $args: it is no pk value
+        if ([] !== $options && count($args) === $num_args) {
+            array_pop($args);
         }
+
+        // count($id, $options) with $options = []: an empty options array, not a second pk value
+        if (count($args) > 1 && [] === $args[count($args) - 1]) {
+            array_pop($args);
+        }
+
+        if ([] === $args || in_array($args[0], [null, '', []], true)) {
+            return $options;
+        }
+
+        if (is_hash($args[0])) {
+            $options['conditions'] = $args[0];
+
+            return $options;
+        }
+
+        // a hash left before an options hash is no conditions: as it always was, the first
+        // argument alone is the pk then
+        if ([] !== array_filter($args, fn($arg) => is_hash($arg))) {
+            $options['conditions'] = static::pk_conditions($args[0]);
+
+            return $options;
+        }
+
+        return self::and_pk_conditions(static::pk_conditions(1 === count($args) ? $args[0] : $args), $options);
+    }
+
+    /**
+     * $options with the primary-key conditions $pk ANDed in front of their own conditions,
+     * "<pk> AND (<conditions>)", the latter parenthesized so that an OR of theirs cannot
+     * widen the pk (#149). Both are rendered as options_to_sql() renders them (a hash's
+     * names mapped to columns, $mapped_names only for the own conditions; keys qualified
+     * with the table when joining; list values expanded) and passed on as positional
+     * conditions. Without own conditions, or with ones rendering no WHERE, $pk become the
+     * conditions, as they always did.
+     *
+     * @param array<string, mixed> $pk
+     * @param array<string, mixed> $options
+     * @param array<string, string>|null $mapped_names
+     * @return array<string, mixed>
+     */
+    private static function and_pk_conditions(array $pk, array $options, ?array $mapped_names = null): array
+    {
+        $table = static::table();
+        $scope = array_intersect_key($options, ['from' => true, 'joins' => true]);
+        $own = isset($options['conditions'])
+            ? $table->options_to_sql(['conditions' => $options['conditions'], 'mapped_names' => $mapped_names] + $scope)
+            : null;
+        $options['conditions'] = $pk;
+
+        // as SQLBuilder, which renders no WHERE for a falsy one ('0' included)
+        if (null === $own || !$own->get_where()) {
+            return $options;
+        }
+
+        $key = $table->options_to_sql(['conditions' => $pk] + $scope);
+        $options['conditions'] = [
+            $key->get_where() . ' AND (' . $own->get_where() . ')',
+            ...$key->get_where_values(),
+            ...$own->get_where_values(),
+        ];
 
         return $options;
     }
@@ -2094,6 +2157,9 @@ class Model
      *
      * # finding by pk accepts an options array
      * YourModel::find(123,array('order' => 'name desc'));
+     *
+     * # with conditions the pk is found only if it matches them too (#149)
+     * YourModel::find(123, ['conditions' => ['owner_id' => 7]]);
      * </code>
      *
      * Finding by using a conditions array:
@@ -2183,8 +2249,23 @@ class Model
             $num_args--;
         }
         //find by pk
-        elseif (1 === count($args) && 1 == $num_args) {
-            $args = $args[0];
+        elseif ($num_args > 0) {
+            // a trailing bare conditions hash is taken as the conditions but left in $args:
+            // it is no pk value, and find_by_pk() ANDs it with the pk (#149)
+            if ([] !== $options && $num_args === func_num_args()) {
+                array_pop($args);
+                $num_args--;
+            }
+
+            // a hash left before an options hash is no conditions: the pk values with it
+            // are read as they always were, below
+            if ([] === array_filter($args, fn($arg) => is_hash($arg))) {
+                if ($num_args > 0) {
+                    return static::find_by_pk(1 === $num_args ? $args[0] : $args, $options);
+                }
+            } elseif (1 === $num_args) {
+                $args = $args[0];
+            }
         }
 
         // anything left in $args is a find by pk
@@ -2203,7 +2284,7 @@ class Model
      *
      * @see find
      * @param mixed $values An array containing values for the pk, or a single pk value
-     * @param array<string, mixed> $options An options array
+     * @param array<string, mixed> $options An options array; its conditions are ANDed with the pk (#149)
      * @return Model|list<Model> A single Model when $values is a scalar or a single-element
      *   array; a list<Model> when $values is a multi-element array of primary keys
      * @throws RecordNotFound if a record could not be found
@@ -2217,7 +2298,8 @@ class Model
         $list = [];
 
         if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
-            $options['conditions'] = static::pk_conditions($bound);
+            // ANDed with any conditions, whose alias names map as in find() (#149)
+            $options = self::and_pk_conditions(static::pk_conditions($bound), $options, static::$alias_attribute);
             $list = static::table()->find($options);
         }
         $results = count($list);

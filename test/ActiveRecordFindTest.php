@@ -368,6 +368,57 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_sql_has('JOIN', $this->conn->last_query);
     }
 
+    public function test_exists_and_count_take_a_falsy_pk_like_find()
+    {
+        // no author has the pk 0: like find(0), these look the pk up instead of the whole table (#33)
+        $this->assert_false(Author::exists(0));
+        $this->assert_false(Author::exists('0'));
+        $this->assert_false(Author::exists(false));
+        $this->assert_false(Author::exists(0.0));
+        $this->assert_same(0, (int) Author::count(0));
+        $this->assert_same(0, (int) Author::count('0'));
+    }
+
+    public function test_exists_and_count_find_the_row_whose_pk_is_zero()
+    {
+        BigId::connection()->query("INSERT INTO big_ids (id, note) VALUES (0, 'zero')");
+
+        $this->assert_true(BigId::exists(0));
+        $this->assert_same(1, (int) BigId::count(0));
+        $this->assert_same(1, (int) BigId::count('0'));
+    }
+
+    public function test_count_and_exists_take_every_pk_argument_like_the_array_form()
+    {
+        // several positional pks are the array form, as in find(1, 2) (#33)
+        $this->assert_same(2, (int) Author::count(1, 2));
+        $this->assert_same((int) Author::count([1, 2]), (int) Author::count(1, 2));
+        $this->assert_same(3, (int) Author::count(1, 2, 3, ['readonly' => true]));
+        $this->assert_same(2, (int) Author::count(1, 2, []));
+        $this->assert_true(Author::exists(9999999, 1));
+        $this->assert_false(Author::exists(9999998, 9999999));
+    }
+
+    public function test_count_and_exists_take_a_trailing_empty_array_as_empty_options()
+    {
+        // count($id, $options) with $options = []: the [] is no second pk value
+        $this->assert_same(1, (int) Author::count(1, []));
+        $this->assert_true(Author::exists(1, []));
+        $this->assert_false(Author::exists(9999999, []));
+    }
+
+    public function test_count_and_exists_without_a_pk_value_check_the_whole_table()
+    {
+        $total = (int) Author::count();
+
+        foreach ([null, '', []] as $none) {
+            $this->assert_same($total, (int) Author::count($none));
+            $this->assert_true(Author::exists($none));
+            $this->assert_same(1, (int) Author::count($none, ['conditions' => 'author_id=1']));
+            $this->assert_false(Author::exists($none, ['conditions' => 'author_id=9999999']));
+        }
+    }
+
     public function test_find_by_call_static()
     {
         $this->assert_equals('Tito', Author::find_by_name('Tito')->name);
