@@ -2124,6 +2124,9 @@ class Model
     /**
      * Alias for self::find('first').
      *
+     * An 'offset' skips that many records ('offset' => 1 is the second one), and a 'limit'
+     * of 0 finds nothing (#38).
+     *
      * @see find
      * @return Model The first matched record or null if not found
      */
@@ -2134,6 +2137,9 @@ class Model
 
     /**
      * Alias for self::find('last')
+     *
+     * The order is reversed, so an 'offset' counts from the end ('offset' => 1 is the
+     * second-to-last record), and a 'limit' of 0 finds nothing (#38).
      *
      * @see find
      * @return Model The last matched record or null if not found
@@ -2187,8 +2193,11 @@ class Model
      * <li><b>include:</b> TODO not implemented yet</li>
      * <li><b>conditions:</b> A SQL fragment such as: 'id=1', array('id=1'), array('name=? and id=?','Tito',1), array('name IN(?)', array('Tito','Bob')),
      * array('name' => 'Tito', 'id' => 1)</li>
-     * <li><b>limit:</b> Number of records to limit the query to</li>
-     * <li><b>offset:</b> The row offset to return results from for the query</li>
+     * <li><b>limit:</b> Number of records to limit the query to. A first/last find takes one
+     * record, none with a limit of 0 (#38)</li>
+     * <li><b>offset:</b> The row offset to return results from for the query. A first/last find
+     * returns the record at that offset (a last find counts it from the end), a null or negative
+     * one is 0 (#38)</li>
      * <li><b>order:</b> A SQL fragment for order such as: 'name asc', 'name asc, id desc'</li>
      * <li><b>readonly:</b> Return all the models in readonly mode</li>
      * <li><b>group:</b> A SQL group by fragment</li>
@@ -2240,8 +2249,12 @@ class Model
 
                     // no break
                 case 'first':
-                    $options['limit'] = 1;
-                    $options['offset'] = 0;
+                    // one record at the caller's offset (from the end for 'last', its order
+                    // reversed above), none for a limit of 0: both read like SQLBuilder::limit()
+                    // / offset(), a null or negative offset as 0 (#38)
+                    $limit = $options['limit'] ?? null;
+                    $options['limit'] = (0 === $limit || '0' === $limit) ? 0 : 1;
+                    $options['offset'] = max(0, intval($options['offset'] ?? 0));
                     break;
             }
 
