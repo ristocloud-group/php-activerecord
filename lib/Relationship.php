@@ -399,8 +399,9 @@ abstract class AbstractRelationship implements InterfaceRelationship
     /**
      * GH #40: a declared limit/offset applies to each owner's children in the eager load, as
      * it does in load(): it is taken off the query here and returned as [rows to skip, rows to
-     * take] for the matching. A has_one ignores both, as load()'s find('first') does. A
-     * negative limit or offset stays on the query, as before.
+     * take] for the matching. A has_one takes the one child at its offset (a null or negative
+     * one is 0), none with a limit of 0, as load()'s find('first') does (#38). A negative limit
+     * or offset of a has_many stays on the query, as before.
      *
      * @param array<string, mixed> $options
      * @param-out array<string, mixed> $options
@@ -418,7 +419,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
         $skip = intval($options['offset'] ?? 0);
 
         if ($this instanceof HasOne) {
-            [$skip, $take] = [0, null];
+            // the window of Model::find('first'): one record at the offset, none for limit 0
+            [$skip, $take] = [max(0, $skip), 0 === $take ? 0 : 1];
         } elseif ($skip < 0 || $take < 0) {
             return [0, null];
         }

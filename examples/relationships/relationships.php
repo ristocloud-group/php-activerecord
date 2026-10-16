@@ -157,6 +157,17 @@ foreach ($latest as $post) {
 }
 out('  SQL: ' . PostBySameAuthor::table()->last_sql);
 
+// A has_one declared with an 'offset' is the child at that offset (Author::second_post:
+// the second post), in the lazy load and the eager include alike; with a 'limit' of 0 it
+// is none. (Up to 2.1.0 both ignored the offset: second_post was the first post.)
+out('Ada second post (has_one, offset 1): ' . ($ada->second_post->title ?? '(none)'));
+out('  SQL: ' . Post::table()->last_sql);
+/** @var array<int, Author> $with_second_post */
+$with_second_post = Author::all(['order' => 'id', 'include' => 'second_post']);
+foreach ($with_second_post as $author) {
+    out('  ' . $author->name . ' second post (eager): ' . ($author->second_post->title ?? '(none)'));
+}
+
 // Note: this fork's has_many :through only supports the join-table shape (see
 // tags/taggings below) -- not a plain one-to-many chain like "comments through
 // posts" -- so comments are aggregated across the author's posts directly.

@@ -1,7 +1,31 @@
 <?php
 
+// authors keyed by (parent_author_id, author_id): last() orders by both (#38)
+class FindPairKeyedAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $pk = ['parent_author_id', 'author_id'];
+}
+
+// dated_counts keyed by its DATE column: a pk value is bound as the column stores it
+class FindDatedDay extends ActiveRecord\Model
+{
+    public static $table_name = 'dated_counts';
+    public static $pk = 'day';
+}
+
 class ActiveRecordFindTest extends DatabaseTest
 {
+    private function assert_not_found(string $message, callable $find): void
+    {
+        try {
+            $find();
+            $this->fail('RecordNotFound expected');
+        } catch (ActiveRecord\RecordNotFound $e) {
+            $this->assert_same($message, $e->getMessage());
+        }
+    }
+
     public function test_find_with_no_params()
     {
         $this->expectException(ActiveRecord\RecordNotFound::class);
@@ -239,6 +263,139 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals(3, $author->author_id);
     }
 
+    public function test_find_first_and_last_by_a_single_pk_as_before()
+    {
+        $this->assert_equals(3, Author::find('first', 3)->author_id);
+        $this->assert_equals(3, Author::find('last', [3])->author_id);
+        $this->assert_equals(3, Author::first(3)->author_id);
+        $this->assert_not_found("Couldn't find Author with ID=99999", fn() => Author::find('first', 99999));
+        $this->assert_not_found("Couldn't find Author with ID=99999", fn() => Author::last(99999));
+        $this->assert_not_found("Couldn't find Author with ID=", fn() => Author::find('first', null));
+        $this->assert_not_found("Couldn't find Author with ID=", fn() => Author::find('last', ''));
+    }
+
+    public function test_find_first_and_last_among_several_pks()
+    {
+        // the first/last record found among them, in one query (#169)
+        $this->assert_equals(2, Author::find('first', [2, 3])->author_id);
+        $this->assert_equals(3, Author::find('last', [2, 3])->author_id);
+        $this->assert_equals(2, Author::find('first', 2, 3)->author_id);
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors WHERE author_id IN(?,?)', 0, 1), Author::table()->last_sql);
+        $this->assert_equals(3, Author::find('last', 2, 3)->author_id);
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors WHERE author_id IN(?,?) ORDER BY author_id DESC', 0, 1), Author::table()->last_sql);
+        $this->assert_equals(2, Author::find('last', 2, 3, ['order' => 'author_id desc'])->author_id);
+        $this->assert_equals(2, Author::find('first', 2, 99999)->author_id);
+        $this->assert_equals(3, Author::first([2, 3], ['order' => 'author_id desc'])->author_id);
+        $this->assert_equals(4, Author::last(1, 4, 2)->author_id);
+    }
+
+    public function test_find_first_among_several_pks_honors_the_offset_and_limit()
+    {
+        $this->assert_equals(3, Author::find('first', 2, 3, ['offset' => 1, 'order' => 'author_id'])->author_id);
+        $this->assert_equals(2, Author::find('last', [2, 3], ['offset' => 1])->author_id);
+        $this->assert_not_found("Couldn't find Author with ID=2,3", fn() => Author::find('first', 2, 3, ['offset' => 2]));
+        $this->assert_not_found("Couldn't find Author with ID=2,3", fn() => Author::first([2, 3], ['limit' => 0]));
+    }
+
+    public function test_find_first_and_last_among_several_pks_none_found()
+    {
+        $this->assert_not_found("Couldn't find Author with ID=99998,99999", fn() => Author::find('first', 99998, 99999));
+        $this->assert_not_found("Couldn't find Author with ID=99998,99999", fn() => Author::find('last', [99998, 99999]));
+    }
+
+    public function test_find_first_and_last_with_no_pk_value_find_nothing()
+    {
+        // nothing to look for, as find([]) finds nothing (#169)
+        $this->assert_null(Author::find('first', []));
+        $this->assert_null(Author::find('last', []));
+        $this->assert_null(Author::first([], ['order' => 'author_id']));
+    }
+
+    public function test_find_first_last_and_all_take_a_trailing_empty_array_as_empty_options()
+    {
+        // one trailing [] after the pk values is empty options, as count($id, []) (#33, #169)
+        $this->assert_equals(3, Author::first(3, [])->author_id);
+        $this->assert_equals(3, Author::last([2, 3], [])->author_id);
+        $this->assert_equals(2, Author::find('first', 2, 3, [])->author_id);
+        $this->assert_equals([2, 3], array_map(fn($a) => $a->author_id, Author::all([2, 3], [])));
+        $this->assert_instance_of(Author::class, Author::all(3, []));
+        $this->assert_equals(3, Author::all(3, [])->author_id);
+
+        // a [] of its own is still an empty pk list
+        $this->assert_null(Author::first([], []));
+        $this->assert_null(Author::last([], []));
+        $this->assert_same([], Author::all([], []));
+        $this->assert_null(Author::first([]));
+    }
+
+    public function test_find_by_pk_with_a_trailing_empty_array_as_before()
+    {
+        // without a type, find($id, []) is left as it was: no record, an exception
+        try {
+            // @: the RecordNotFound message may join the [] as the string 'Array'
+            @Author::find(3, []);
+            $this->fail('an exception expected');
+        } catch (ActiveRecord\ActiveRecordException $e) {
+            $this->assert_instance_of(ActiveRecord\ActiveRecordException::class, $e);
+        }
+    }
+
+    public function test_find_all_by_pks_is_find_by_pks()
+    {
+        // 'all' with pk values finds them as find(<pk>...) does (#169)
+        $this->assert_equals([2, 3], array_map(fn($a) => $a->author_id, Author::find('all', [2, 3])));
+        $this->assert_equals([3, 2], array_map(fn($a) => $a->author_id, Author::all([2, 3], ['order' => 'author_id desc'])));
+        $this->assert_equals([2, 3], array_map(fn($a) => $a->author_id, Author::find('all', 2, 3)));
+        $this->assert_same([], Author::find('all', []));
+        $this->assert_not_found(
+            "Couldn't find all Author with IDs (2,99999) (found 1, but was looking for 2)",
+            fn() => Author::find('all', [2, 99999]),
+        );
+
+        // a single pk is a single Model, as it always was
+        $this->assert_instance_of(Author::class, Author::find('all', 3));
+        $this->assert_equals(3, Author::all(3)->author_id);
+        $this->assert_not_found("Couldn't find Author with ID=99999", fn() => Author::find('all', 99999));
+    }
+
+    public function test_find_first_and_last_by_a_date_pk()
+    {
+        // DATE pk values are bound as the column stores them, as by find($day) (#169)
+        $this->assert_equals(2, FindDatedDay::find('first', new DateTime('2026-01-02'))->hits);
+        $this->assert_equals(1, FindDatedDay::find('first', [new DateTime('2026-01-01'), new DateTimeImmutable('2026-01-02')])->hits);
+        $this->assert_equals(2, FindDatedDay::find('last', new DateTime('2026-01-01'), new DateTime('2026-01-02 10:00:00'))->hits);
+        $this->assert_not_found(
+            "Couldn't find FindDatedDay with ID=2030-01-01 00:00:00,2030-01-02 00:00:00",
+            fn() => FindDatedDay::find('first', new DateTime('2030-01-01'), new DateTimeImmutable('2030-01-02')),
+        );
+    }
+
+    public function test_find_first_and_last_by_a_non_integer_pk_keep_the_transaction_usable()
+    {
+        // on Postgres 'abc' is not queried against the INTEGER pk (#92): not found, or left out
+        $ret = Author::transaction(function () {
+            $this->assert_not_found("Couldn't find Author with ID=abc", fn() => Author::find('first', 'abc'));
+            $this->assert_not_found("Couldn't find Author with ID=abc,1.5", fn() => Author::last(['abc', '1.5']));
+            $this->assert_equals(1, Author::find('first', 'abc', 1)->author_id);
+            $this->assert_not_found(
+                "Couldn't find all Author with IDs (1,abc) (found 1, but was looking for 2)",
+                fn() => Author::find('all', 1, 'abc'),
+            );
+            $this->assert_equals('Tito', Author::find(1)->name);
+
+            return true;
+        });
+
+        $this->assert_true($ret);
+    }
+
+    public function test_find_first_with_conditions_only_as_before()
+    {
+        $this->assert_equals(2, Author::find('first', ['name' => 'George W. Bush'])->author_id);
+        $this->assert_equals(2, Author::find('last', ['conditions' => ['name' => 'George W. Bush']])->author_id);
+        $this->assert_equals([2], array_map(fn($a) => $a->author_id, Author::find('all', ['name' => 'George W. Bush'])));
+    }
+
     public function test_find_first_with_conditions_as_string()
     {
         $author = Author::find('first', ['conditions' => 'author_id=3']);
@@ -293,6 +450,109 @@ class ActiveRecordFindTest extends DatabaseTest
 
         $this->assert_not_null($last);
         $this->assert_equals(end($all)->id, $last->id);
+    }
+
+    public function test_find_first_honors_an_offset()
+    {
+        // the (offset + 1)-th record in the order, none past the end (#38)
+        $this->assert_equals(2, Author::first(['order' => 'author_id', 'offset' => 1])->author_id);
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors ORDER BY author_id', 1, 1), Author::table()->last_sql);
+        $this->assert_equals(3, Author::find('first', ['order' => 'author_id', 'offset' => 2])->author_id);
+        $this->assert_equals(2, Author::first(['order' => 'author_id', 'offset' => '1'])->author_id);
+        $this->assert_null(Author::first(['order' => 'author_id', 'offset' => 4]));
+    }
+
+    public function test_find_last_counts_an_offset_from_the_end()
+    {
+        // offset 1 is the second-to-last record, in a given order or the pk's (#38)
+        $this->assert_equals(3, Author::last(['order' => 'author_id', 'offset' => 1])->author_id);
+        $this->assert_equals(3, Author::last(['offset' => 1])->author_id);
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors ORDER BY author_id DESC', 1, 1), Author::table()->last_sql);
+        $this->assert_equals(2, Author::find('last', ['conditions' => 'author_id IN(1,2,3)', 'offset' => 1])->author_id);
+        $this->assert_null(Author::last(['offset' => 4]));
+    }
+
+    public function test_find_last_counts_an_offset_from_the_end_of_a_composite_pk()
+    {
+        // by parent_author_id DESC, author_id DESC: 1 (3), 4 (2), 2 (2), 3 (1)
+        $this->assert_equals(1, FindPairKeyedAuthor::last()->author_id);
+        $this->assert_equals(4, FindPairKeyedAuthor::last(['offset' => 1])->author_id);
+        $this->assert_equals(2, FindPairKeyedAuthor::last(['offset' => 2])->author_id);
+        $this->assert_sql_has('ORDER BY parent_author_id DESC, author_id DESC', FindPairKeyedAuthor::table()->last_sql);
+    }
+
+    public function test_find_first_and_last_with_limit_zero_find_nothing()
+    {
+        // a limit of 0 is a LIMIT 0 (#34): first()/last() find nothing (#38)
+        $this->assert_null(Author::first(['limit' => 0]));
+        $this->assert_sql_has($this->conn->limit('SELECT * FROM authors', 0, 0), Author::table()->last_sql);
+        $this->assert_null(Author::first(['limit' => '0']));
+        $this->assert_null(Author::last(['limit' => 0]));
+        $this->assert_null(Author::find('first', ['order' => 'author_id', 'limit' => 0, 'offset' => 1]));
+    }
+
+    public function test_find_first_and_last_find_one_record_with_any_other_limit()
+    {
+        foreach ([3, '3', 1, null, -1, 'abc'] as $limit) {
+            $author = Author::first(['order' => 'author_id', 'limit' => $limit]);
+            $this->assert_instance_of(Author::class, $author);
+            $this->assert_equals(1, $author->author_id);
+        }
+        $this->assert_equals(4, Author::last(['limit' => 3])->author_id);
+    }
+
+    public function test_find_first_with_another_limit_takes_the_record_at_the_offset()
+    {
+        $this->assert_equals(2, Author::first(['order' => 'author_id', 'limit' => 3, 'offset' => 1])->author_id);
+    }
+
+    public function test_find_first_and_last_read_a_null_negative_or_non_numeric_offset_as_zero()
+    {
+        foreach ([null, 0, -1, '-1', 'abc'] as $offset) {
+            $this->assert_equals(1, Author::first(['order' => 'author_id', 'offset' => $offset])->author_id);
+            $this->assert_sql_has($this->conn->limit('SELECT * FROM authors ORDER BY author_id', 0, 1), Author::table()->last_sql);
+        }
+        $this->assert_equals(4, Author::last(['offset' => -1])->author_id);
+    }
+
+    public function test_find_first_and_last_without_a_window_keep_their_sql()
+    {
+        // offset 0 is still rendered: LIMIT 0,1 (MySQL, SQLite) / LIMIT 1 OFFSET 0 (Postgres)
+        Author::first();
+        $this->assert_same($this->conn->limit('SELECT * FROM authors', 0, 1), str_replace(['"', '`'], '', Author::table()->last_sql));
+        Author::last();
+        $this->assert_same($this->conn->limit('SELECT * FROM authors ORDER BY author_id DESC', 0, 1), str_replace(['"', '`'], '', Author::table()->last_sql));
+    }
+
+    public function test_find_first_and_last_leave_the_callers_options_unchanged()
+    {
+        $options = ['order' => 'author_id', 'limit' => 3, 'offset' => 1];
+        $copy = $options;
+
+        Author::first($options);
+        Author::last($options);
+        Author::find('first', $options);
+
+        $this->assert_same($copy, $options);
+    }
+
+    public function test_find_first_and_last_by_pk_honor_the_offset_and_limit_too()
+    {
+        // the window applies to the pk lookup as well: nothing there is RecordNotFound (#38)
+        $this->assert_equals(3, Author::find('first', 3, ['offset' => 0])->author_id);
+
+        foreach ([
+            fn() => Author::find('first', 3, ['offset' => 1]),
+            fn() => Author::first(3, ['limit' => 0]),
+            fn() => Author::last(3, ['offset' => 1]),
+        ] as $find) {
+            try {
+                $find();
+                $this->fail('RecordNotFound expected');
+            } catch (ActiveRecord\RecordNotFound $e) {
+                $this->assert_same("Couldn't find Author with ID=3", $e->getMessage());
+            }
+        }
     }
 
     public function test_limit_before_order()
@@ -608,6 +868,20 @@ class ActiveRecordFindTest extends DatabaseTest
         $author = Author::find_or_create_by_name_and_encrypted_password('New Guy', 'pencil');
         $this->assert_true($author->author_id > 0);
         $this->assert_equals('pencil', $author->encrypted_password);
+    }
+
+    public function test_dynamic_finders_honor_an_offset()
+    {
+        $author = Author::find_by_name(['Tito', 'Bill Clinton'], ['order' => 'author_id', 'offset' => 1]);
+        $this->assert_equals(3, $author->author_id);
+        $this->assert_null(Author::find_by_name('Tito', ['offset' => 1]));
+
+        // nothing at that offset: find_or_create_by_ creates the record (#38)
+        $count = Author::count();
+        $created = Author::find_or_create_by_name('Tito', ['offset' => 1]);
+        $this->assert_false($created->is_new_record());
+        $this->assert_not_equals(1, $created->author_id);
+        $this->assert_equals($count + 1, Author::count());
     }
 
     public function test_find_or_create_by_throws_exception_when_using_or()
