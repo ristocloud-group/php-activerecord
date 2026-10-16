@@ -84,6 +84,35 @@ class ParityVenue extends ActiveRecord\Model
         ['first_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc'],
         ['latest_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id desc'],
         ['offset_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 1, 'limit' => 0],
+        // (e) a has_one takes the child at its declared offset, none with limit 0 (#38)
+        ['second_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 1],
+        ['second_latest_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id desc', 'offset' => '1'],
+        ['far_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => 2, 'limit' => 5],
+        ['no_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'limit' => '0'],
+        ['negative_offset_event', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc', 'offset' => -1, 'limit' => -1],
+    ];
+}
+
+// (e) has_one `through` at a declared offset: the reverse-FK shape, and the join shape keyed by
+// a declared primary_key (owners of the same tier share their children)
+class ParityReviewingAuthor extends ActiveRecord\Model
+{
+    public static $pk = 'author_id';
+    public static $table_name = 'authors';
+    public static $has_many = [['books', 'class_name' => 'ParityReviewedBook', 'foreign_key' => 'author_id', 'order' => 'book_id asc']];
+    public static $has_one = [
+        ['book_review', 'class_name' => 'BookReview', 'through' => 'books', 'foreign_key' => 'author_id',
+            'order' => 'book_reviews.id asc', 'offset' => 1],
+    ];
+}
+
+class ParityTierHostVenue extends ActiveRecord\Model
+{
+    public static $table_name = 'venues';
+    public static $has_many = [['events', 'class_name' => 'Event', 'foreign_key' => 'venue_id', 'order' => 'id asc']];
+    public static $has_one = [
+        ['second_host_by_tier', 'class_name' => 'Host', 'through' => 'events', 'source' => 'host',
+            'foreign_key' => 'venue_id', 'primary_key' => 'tier', 'order' => 'hosts.id asc', 'offset' => 1],
     ];
 }
 
@@ -259,11 +288,66 @@ class RelationshipEagerLazyParityTest extends DatabaseTest
         $this->assert_parity([1 => [], 2 => [3], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'window_events');
     }
 
-    public function test_eager_has_one_ignores_a_declared_limit_and_offset_like_the_lazy_load()
+    public function test_eager_has_one_honors_a_declared_limit_and_offset_like_the_lazy_load()
     {
-        $sql = $this->assert_parity([1 => 1, 2 => 2, 6 => 5, 7 => null, 8 => null, 9 => 7], 'ParityVenue', 'offset_event');
+        // offset 1 with limit 0: find('first') finds nothing, so neither does the eager load,
+        // which queries no child at all (#38)
+        $none = [1 => null, 2 => null, 6 => null, 7 => null, 8 => null, 9 => null];
+        $this->assert_parity($none, 'ParityVenue', 'offset_event');
+        $this->assert_parity($none, 'ParityVenue', 'no_event');
+
+        Event::table()->last_sql = null;
+        $this->load('ParityVenue', 'no_event', true);
+        $this->assert_null(Event::table()->last_sql);
+    }
+
+    public function test_eager_has_one_takes_the_child_at_a_declared_offset_per_owner()
+    {
+        $event = Event::create(['venue_id' => 1, 'host_id' => 1, 'title' => 'second', 'type' => 'Music']);
+
+        // venue 1: [1, new], venue 2: [2, 3]; the window is applied per owner, not on the query
+        $sql = $this->assert_parity([1 => (int) $event->id, 2 => 3, 6 => null, 7 => null, 8 => null, 9 => null], 'ParityVenue', 'second_event');
         $this->assert_sql_doesnt_has('LIMIT', $sql);
         $this->assert_sql_doesnt_has('OFFSET', $sql);
+
+        $this->assert_parity([1 => 1, 2 => 2, 6 => null, 7 => null, 8 => null, 9 => null], 'ParityVenue', 'second_latest_event');
+    }
+
+    public function test_eager_has_one_past_its_children_gives_nothing()
+    {
+        $this->assert_parity([1 => null, 2 => null, 6 => null, 7 => null, 8 => null, 9 => null], 'ParityVenue', 'far_event');
+    }
+
+    public function test_eager_has_one_reads_a_negative_offset_as_zero_like_the_lazy_load()
+    {
+        $this->assert_parity([1 => 1, 2 => 2, 6 => 5, 7 => null, 8 => null, 9 => 7], 'ParityVenue', 'negative_offset_event');
+    }
+
+    public function test_eager_has_one_at_an_offset_keeps_a_nested_include()
+    {
+        $venues = ParityVenue::find('all', ['order' => 'id asc', 'include' => ['second_event' => ['host']]]);
+        $by_id = array_column(array_map(fn($venue) => [$venue->id, $venue], $venues), 1, 0);
+
+        $this->assert_equals(3, $by_id[2]->second_event->id);
+        $this->assert_equals(ParityVenue::find(2)->second_event->host->id, $by_id[2]->second_event->host->id);
+        $this->assert_null($by_id[1]->second_event);
+    }
+
+    public function test_eager_has_one_through_at_a_declared_offset_like_the_lazy_load()
+    {
+        // author 1 -> reviews 1, 2 (book 1); author 2 -> review 3 (book 2)
+        $this->assert_parity([1 => 2, 2 => null, 3 => null, 4 => null], 'ParityReviewingAuthor', 'book_review', 'author_id asc', 'author_id');
+    }
+
+    public function test_eager_has_one_through_at_an_offset_gives_owners_sharing_a_child_their_own_copy()
+    {
+        // venues 1 and 6 key off tier 2 -> events of venue 2 -> hosts 2, 3: both get host 3
+        $this->conn->query('UPDATE venues SET tier = 2 WHERE id IN (1, 6)');
+
+        $this->assert_parity([1 => 3, 2 => null, 6 => 3, 7 => null, 8 => null, 9 => null], 'ParityTierHostVenue', 'second_host_by_tier');
+
+        $venues = ParityTierHostVenue::find('all', ['conditions' => ['id' => [1, 6]], 'order' => 'id asc', 'include' => 'second_host_by_tier']);
+        $this->assert_not_same($venues[0]->second_host_by_tier, $venues[1]->second_host_by_tier);
     }
 
     // ---- (g) string keys compare like MySQL's case-insensitive collation ----
