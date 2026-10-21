@@ -15,6 +15,15 @@ class BookNumericality extends ActiveRecord\Model
     }
 }
 
+class BigIdNumericality extends ActiveRecord\Model
+{
+    public static $table_name = 'big_ids';
+
+    public static $validates_numericality_of = [
+        ['id', 'less_than' => PHP_INT_MAX],
+    ];
+}
+
 class ValidatesNumericalityOfTest extends DatabaseTest
 {
     public static $NULL = [null];
@@ -239,6 +248,139 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         $book = new BookNumericality(['special' => 3.5]);
         $this->assert_same(3.5, $book->special);
         $this->assert_true($book->is_valid());
+    }
+
+    /**
+     * Validates numeric_test = $value with the given options on a new record and
+     * returns null when it is valid, else the error message. is_valid() rather than
+     * save(): numeric_test is VARCHAR(10) and the values here are longer.
+     *
+     * @param array<string, mixed> $options
+     */
+    private function numericality_error(mixed $value, array $options): ?string
+    {
+        BookNumericality::$validates_numericality_of = [array_merge(['numeric_test'], $options)];
+        $book = new BookNumericality();
+        $book->numeric_test = $value;
+
+        if ($book->is_valid()) {
+            return null;
+        }
+
+        return $book->errors->on('numeric_test');
+    }
+
+    public function test_compares_integers_beyond_2_pow_53_exactly()
+    {
+        // (float) rounds both sides to the same double: 9223372036854775806 < PHP_INT_MAX
+        // was rejected, 9007199254740993 == 9007199254740992 accepted (#49)
+        $this->assert_null($this->numericality_error('9223372036854775806', ['less_than' => PHP_INT_MAX]));
+        $this->assert_same('must be less than 9223372036854775807', $this->numericality_error('9223372036854775807', ['less_than' => PHP_INT_MAX]));
+        $this->assert_same('must be equal to 9007199254740992', $this->numericality_error('9007199254740993', ['equal_to' => 9007199254740992]));
+        $this->assert_null($this->numericality_error('9007199254740993', ['greater_than' => '9007199254740992']));
+        $this->assert_same('must be greater than or equal to 9007199254740993', $this->numericality_error('9007199254740992', ['greater_than_or_equal_to' => '9007199254740993']));
+        $this->assert_null($this->numericality_error(9007199254740993, ['greater_than' => 9007199254740992]));
+        $this->assert_null($this->numericality_error(PHP_INT_MIN, ['less_than' => PHP_INT_MIN + 1]));
+        $this->assert_same('must be greater than -9223372036854775807', $this->numericality_error(PHP_INT_MIN, ['greater_than' => PHP_INT_MIN + 1]));
+    }
+
+    public function test_compares_unsigned_bigint_strings_beyond_php_int_max_exactly()
+    {
+        // a BIGINT UNSIGNED value above PHP_INT_MAX reaches the validator as a string (#44)
+        $this->assert_null($this->numericality_error('18446744073709551615', ['less_than' => '18446744073709551616']));
+        $this->assert_same('must be less than or equal to 18446744073709551614', $this->numericality_error('18446744073709551615', ['less_than_or_equal_to' => '18446744073709551614']));
+        $this->assert_null($this->numericality_error('18446744073709551615', ['equal_to' => '18446744073709551615', 'greater_than' => PHP_INT_MAX]));
+        $this->assert_same('must be less than 9223372036854775807', $this->numericality_error('18446744073709551615', ['less_than' => PHP_INT_MAX]));
+    }
+
+    public function test_compares_a_bigint_column_value_exactly()
+    {
+        $record = new BigIdNumericality(['id' => '9223372036854775806']);
+        $this->assert_same(9223372036854775806, $record->id);
+        $this->assert_true($record->is_valid());
+
+        $record->id = PHP_INT_MAX;
+        $this->assert_false($record->is_valid());
+        $this->assert_same('must be less than 9223372036854775807', $record->errors->on('id'));
+    }
+
+    public function test_only_integer_compares_big_bounds_exactly()
+    {
+        $this->assert_same('must be equal to 9007199254740992', $this->numericality_error('9007199254740993', ['only_integer' => true, 'equal_to' => '9007199254740992']));
+        $this->assert_null($this->numericality_error('9223372036854775806', ['only_integer' => true, 'less_than' => PHP_INT_MAX]));
+        $this->assert_null($this->numericality_error('-18446744073709551616', ['only_integer' => true, 'less_than' => '-18446744073709551615']));
+    }
+
+    public function test_odd_and_even_of_big_integers_are_exact()
+    {
+        foreach (['9007199254740993', '9223372036854775807', '18446744073709551615', '-9007199254740993', '9007199254740993.5', 9007199254740993] as $odd) {
+            $this->assert_null($this->numericality_error($odd, ['odd' => true]), var_export($odd, true));
+            $this->assert_same('must be even', $this->numericality_error($odd, ['even' => true]), var_export($odd, true));
+        }
+        foreach (['9007199254740992', '18446744073709551614', '-18446744073709551616'] as $even) {
+            $this->assert_null($this->numericality_error($even, ['even' => true]), $even);
+            $this->assert_same('must be odd', $this->numericality_error($even, ['odd' => true]), $even);
+        }
+        $this->assert_null($this->numericality_error('18446744073709551615', ['only_integer' => true, 'odd' => true]));
+        $this->assert_null($this->numericality_error('18446744073709551614', ['only_integer' => true, 'even' => true]));
+    }
+
+    public function test_exact_comparison_of_mixed_and_decimal_operands()
+    {
+        // int value vs integer-string bound and vice versa
+        $this->assert_null($this->numericality_error(10, ['equal_to' => '10']));
+        $this->assert_null($this->numericality_error('10', ['equal_to' => 10]));
+        // leading zeros, sign, surrounding whitespace
+        $this->assert_null($this->numericality_error('0090', ['equal_to' => 90]));
+        $this->assert_null($this->numericality_error('+10', ['equal_to' => '10']));
+        $this->assert_null($this->numericality_error(' 5', ['equal_to' => '5 ']));
+        $this->assert_null($this->numericality_error('-0', ['equal_to' => 0]));
+        $this->assert_null($this->numericality_error('-0.0', ['greater_than_or_equal_to' => '0', 'less_than_or_equal_to' => '-0']));
+        $this->assert_null($this->numericality_error('5.0', ['equal_to' => 5]));
+        $this->assert_null($this->numericality_error('5.10', ['greater_than' => '5.09']));
+        $this->assert_same('must be less than 5.09', $this->numericality_error('5.10', ['less_than' => '5.09']));
+        $this->assert_null($this->numericality_error('.5', ['equal_to' => '0.50']));
+        $this->assert_null($this->numericality_error('5.', ['equal_to' => '5']));
+        $this->assert_null($this->numericality_error('-5.5', ['less_than' => '-5.49', 'greater_than' => '-5.51']));
+        // a decimal string beyond the double's precision is compared digit by digit
+        $this->assert_null($this->numericality_error('12345678901234567890.15', ['less_than' => '12345678901234567890.16']));
+        $this->assert_same('must be greater than -0.1', $this->numericality_error('-0.10000000000000001', ['greater_than' => '-0.1']));
+    }
+
+    public function test_integer_bound_message_keeps_every_digit()
+    {
+        $this->assert_same('must be less than 100000000000000', $this->numericality_error('100000000000000', ['less_than' => 100000000000000]));
+        $this->assert_same('must be greater than 90', $this->numericality_error('5', ['greater_than' => '0090']));
+        $this->assert_same('must be greater than 10', $this->numericality_error('5', ['greater_than' => '+10']));
+        $this->assert_same('must be greater than 0', $this->numericality_error('-5', ['greater_than' => '-0']));
+        $this->assert_same('must be greater than -12', $this->numericality_error('-15', ['greater_than' => '-012']));
+    }
+
+    public function test_float_operands_keep_the_float_comparison()
+    {
+        // pins: a native float or an exponent string is compared as a float, as before
+        $this->assert_null($this->numericality_error('6', ['less_than' => '1e1']));
+        $this->assert_same('must be less than 10', $this->numericality_error('20', ['less_than' => '1e1']));
+        $this->assert_same('must be less than 5', $this->numericality_error('6', ['less_than' => 5.0]));
+        $this->assert_null($this->numericality_error(4.9, ['less_than' => '5']));
+        $this->assert_null($this->numericality_error('0.1', ['equal_to' => 0.1]));
+        $this->assert_null($this->numericality_error('9007199254740993', ['equal_to' => 9007199254740992.0]));
+        $this->assert_null($this->numericality_error('1e1', ['equal_to' => '10']));
+        $this->assert_null($this->numericality_error(9007199254740993.0, ['even' => true]));
+    }
+
+    public function test_non_integer_bound_message_is_unchanged()
+    {
+        $this->assert_same('must be less than 5.5', $this->numericality_error('6', ['less_than' => '5.50']));
+        $this->assert_same('must be less than 5', $this->numericality_error('6', ['less_than' => '5.0']));
+        $this->assert_same('must be less than 1.5E+20', $this->numericality_error('1.6e20', ['less_than' => 1.5e20]));
+    }
+
+    public function test_non_numeric_bound_still_throws()
+    {
+        $this->expect_exception(ActiveRecord\ValidationsArgumentError::class);
+        $this->expect_exception_message('less_than must be a number');
+        $this->numericality_error('5', ['less_than' => 'five']);
     }
 
     public function test_custom_message()
