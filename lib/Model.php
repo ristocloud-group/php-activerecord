@@ -970,8 +970,16 @@ class Model
         // pk-less table: '' is what a null pk offset always mapped to
         $pk = $this->get_primary_key(true) ?? '';
         $use_sequence = false;
+        $read_back = false;
+        $returned_pk = null;
 
-        if ($table->sequence && !isset($attributes[$pk])) {
+        if ($table->reads_back_pk() && !isset($attributes[$pk])) {
+            // the database fills the pk (a sequence, an IDENTITY): the INSERT omits it and
+            // returns the stored value (#47)
+            unset($attributes[$pk]);
+            $returned_pk = $table->insert_returning_pk($attributes, $pk);
+            $read_back = true;
+        } elseif ($table->sequence && !isset($attributes[$pk])) {
             // unset pk that was set to null
             if (array_key_exists($pk, $attributes)) {
                 unset($attributes[$pk]);
@@ -987,10 +995,13 @@ class Model
         // the database filled itself (a column default, a trigger) is not known here
         $stored = array_keys(array_filter($attributes, fn($value) => null !== $value));
 
-        // if we've got an autoincrementing/sequenced pk set it
-        // don't need this check until the day comes that we decide to support composite pks
-        // if (count($pk) == 1)
-        {
+        if ($read_back) {
+            $this->attributes[$pk] = $returned_pk;
+            $stored[] = $pk;
+        } else {
+            // if we've got an autoincrementing/sequenced pk set it
+            // don't need this check until the day comes that we decide to support composite pks
+            // if (count($pk) == 1)
             $column = $table->get_column_by_inflected_name($pk);
 
             if (null !== $column && ($column->auto_increment || $use_sequence)) {

@@ -26,6 +26,14 @@ class PgsqlAdapter extends Connection
     }
 
     /**
+     * @internal Serves Table's pk read-back; not a supported API.
+     */
+    public function supports_insert_returning(): bool
+    {
+        return true;
+    }
+
+    /**
      * A quoted identifier keeps its case: "some_Date" is not some_date (#92).
      *
      * @internal Serves Table's attribute-to-column mapping; not a supported API.
@@ -86,7 +94,8 @@ class PgsqlAdapter extends Connection
 
     public function next_sequence_value($sequence_name)
     {
-        return "nextval('" . str_replace("'", "\\'", $sequence_name) . "')";
+        // a standard string literal: a quote is doubled (standard_conforming_strings is on by default)
+        return "nextval('" . str_replace("'", "''", $sequence_name) . "')";
     }
 
     public function limit($sql, $offset, $limit)
@@ -123,7 +132,9 @@ class PgsqlAdapter extends Connection
                     FROM pg_attrdef
                     WHERE c.oid = pg_attrdef.adrelid
                     AND pg_attrdef.adnum=a.attnum
-                  ),'::[a-z_ ]+',''),'''$',''),'^''','') AS default
+                  ),'::[a-z_ ]+',''),'''$',''),'^''','') AS default,
+                  a.attidentity,
+                  CASE WHEN a.attidentity <> '' THEN pg_get_serial_sequence(c.oid::regclass::text, a.attname)::regclass::text END AS identity_sequence
             FROM pg_attribute a, pg_class c, pg_type t
             WHERE c.relname = ?
                   AND a.attnum > 0
@@ -184,6 +195,15 @@ class PgsqlAdapter extends Connection
                 $c->default = $c->cast($column['default'], $this);
             }
         }
+
+        // an IDENTITY has no default expression: its sequence comes from the catalog (#47).
+        // A row from an overriding query_column_info() may lack the keys.
+        if ('' !== ($column['attidentity'] ?? '')) {
+            $c->sequence = $column['identity_sequence'] ?? null;
+        }
+
+        // a sequence default or an IDENTITY: the database fills the column an INSERT omits
+        $c->filled_by_database = null !== $c->sequence;
         return $c;
     }
 

@@ -57,6 +57,9 @@ class SQLBuilder
     /** @var array{0: string, 1: string}|null */
     private ?array $sequence = null;
 
+    /** The column an INSERT returns (RETURNING), if any (#47). */
+    private ?string $returning = null;
+
     // for upsert
     /** @var list<string>|null */
     private ?array $upsert_columns = null;
@@ -281,6 +284,18 @@ class SQLBuilder
             $this->sequence = [$pk,$sequence_name];
         }
 
+        return $this;
+    }
+
+    /**
+     * End the INSERT with RETURNING $column, the column's real name (#47).
+     *
+     * @internal Serves Table::insert_returning_pk(); not a supported API.
+     * @return $this
+     */
+    public function returning(string $column): static
+    {
+        $this->returning = $column;
         return $this;
     }
 
@@ -687,6 +702,10 @@ class SQLBuilder
                 . ") VALUES(?," . $this->connection->next_sequence_value($this->sequence[1]) . ")";
         } else {
             $sql = "INSERT INTO $this->table($keys) VALUES(?)";
+        }
+
+        if (null !== $this->returning) {
+            $sql .= ' RETURNING ' . $this->connection->quote_name($this->returning);
         }
 
         $e = new Expressions($this->connection, $sql, array_values($this->data));

@@ -112,6 +112,14 @@ class Column
     public $sequence;
 
     /**
+     * True when the database fills this column itself if an INSERT omits it: a sequence's
+     * nextval() default or an IDENTITY. Set by PgsqlAdapter only (#47).
+     *
+     * @internal Serves Table's pk read-back; not a supported API.
+     */
+    public bool $filled_by_database = false;
+
+    /**
      * Casts a value to the column's type.
      *
      * @param mixed $value The value to cast
