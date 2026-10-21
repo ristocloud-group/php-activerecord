@@ -391,29 +391,18 @@ class Validations
                     // an integer bound shows all its digits, any other as before (#49)
                     $message = str_replace('%d', self::exact_integer_digits($exact_bound) ?? (string) $option_value, $message);
 
-                    if (null !== $exact_var && null !== $exact_bound) {
-                        // both exact: compared digit by digit, no float rounding (#49)
-                        $cmp = self::compare_exact_decimals($exact_var, $exact_bound);
-                        $passes = match ($option) {
-                            'greater_than' => $cmp > 0,
-                            'greater_than_or_equal_to' => $cmp >= 0,
-                            'equal_to' => 0 === $cmp,
-                            'less_than' => $cmp < 0,
-                            'less_than_or_equal_to' => $cmp <= 0,
-                        };
+                    // both exact: compared digit by digit, no float rounding; else as floats (#49)
+                    $cmp = null !== $exact_var && null !== $exact_bound ? self::compare_exact_decimals($exact_var, $exact_bound) : null;
 
-                        if (!$passes) {
-                            $this->record->add($attribute, $message);
-                        }
-                    } elseif ('greater_than' == $option && !($var > $option_value)) {
+                    if ('greater_than' == $option && !(null !== $cmp ? $cmp > 0 : $var > $option_value)) {
                         $this->record->add($attribute, $message);
-                    } elseif ('greater_than_or_equal_to' == $option && !($var >= $option_value)) {
+                    } elseif ('greater_than_or_equal_to' == $option && !(null !== $cmp ? $cmp >= 0 : $var >= $option_value)) {
                         $this->record->add($attribute, $message);
-                    } elseif ('equal_to' == $option && !($var == $option_value)) {
+                    } elseif ('equal_to' == $option && !(null !== $cmp ? 0 === $cmp : $var == $option_value)) {
                         $this->record->add($attribute, $message);
-                    } elseif ('less_than' == $option && !($var < $option_value)) {
+                    } elseif ('less_than' == $option && !(null !== $cmp ? $cmp < 0 : $var < $option_value)) {
                         $this->record->add($attribute, $message);
-                    } elseif ('less_than_or_equal_to' == $option && !($var <= $option_value)) {
+                    } elseif ('less_than_or_equal_to' == $option && !(null !== $cmp ? $cmp <= 0 : $var <= $option_value)) {
                         $this->record->add($attribute, $message);
                     }
                 } else {
