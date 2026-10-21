@@ -98,3 +98,14 @@ foreach ([['ADA', ''], ['ADA', 'member'], ['AD', 'a-very-long-role']] as [$name,
         $u->is_valid() ? 'valid' : implode('; ', $u->errors->full_messages()),
     ));
 }
+
+// Numericality compares integers and plain decimal strings exactly, even past 2^53:
+// 9223372036854775806 is less than PHP_INT_MAX, and the message shows every digit.
+// (Before #49 both sides were cast to float: the first number was rejected as
+// "must be less than 9.2233720368548E+18".)
+require_once __DIR__ . '/models/Shipment.php';
+foreach (['9223372036854775806', '9223372036854775807'] as $tracking) {
+    $shipment = new Shipment(['tracking_number' => $tracking]);
+    out('tracking ' . $tracking . ' valid? '
+        . ($shipment->is_valid() ? 'yes' : 'no (' . implode('; ', $shipment->errors->full_messages()) . ')'));
+}

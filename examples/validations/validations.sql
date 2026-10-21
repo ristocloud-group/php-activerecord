@@ -8,3 +8,4 @@ CREATE TABLE users (
 );
 CREATE TABLE parcels (id INTEGER PRIMARY KEY AUTOINCREMENT, weight_kg TEXT);
 INSERT INTO users (name, email, age, role) VALUES ('Existing', 'taken@example.com', 30, 'member');
+CREATE TABLE shipments (id INTEGER PRIMARY KEY AUTOINCREMENT, tracking_number TEXT);
