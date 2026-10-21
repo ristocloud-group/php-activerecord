@@ -1,8 +1,11 @@
 <?php
 
 /**
- * Non-convention case: the pk draws from a hand-created sequence whose name
- * the {table}_{pk}_seq convention cannot guess, so the model must declare it.
+ * Declared case: the pk draws from a hand-created sequence the model names
+ * with static $sequence. The declaration always wins: the INSERT pulls
+ * nextval('ticket_numbers') for the pk. (tickets.id's own default names that
+ * sequence too, so without the declaration the library would find it and read
+ * the pk back with RETURNING; declare it when the column has no default.)
  *
  * @property int         $id
  * @property string|null $title

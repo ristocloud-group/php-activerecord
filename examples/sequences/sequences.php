@@ -11,9 +11,10 @@
 //      the pk comes from the regular auto-increment;
 //   2. on SQLite, which primary keys get that auto-increment: only the rowid
 //      alias; any other pk keeps the value a record is created with;
-//   3. on Postgres, the {table}_{pk}_seq convention, an explicit
-//      static $sequence for a non-convention name, and how an insert pulls
-//      nextval() for the pk.
+//   3. on Postgres, a pk the database fills (serial under any sequence name,
+//      IDENTITY, a uuid default) read back with INSERT … RETURNING, the
+//      {table}_{pk}_seq convention for a table without a pk, and an explicit
+//      static $sequence, whose insert pulls nextval() for the pk.
 //
 // Part 3 needs a reachable Postgres and is skipped otherwise: set PHPAR_PGSQL
 // to a pgsql:// URL (this repo's Docker setup already does).
@@ -25,6 +26,9 @@ require_once __DIR__ . '/models/Room.php';
 require_once __DIR__ . '/models/Event.php';
 require_once __DIR__ . '/models/EventLog.php';
 require_once __DIR__ . '/models/Ticket.php';
+require_once __DIR__ . '/models/Seat.php';
+require_once __DIR__ . '/models/Wristband.php';
+require_once __DIR__ . '/models/Upload.php';
 
 $db = __DIR__ . '/sequences.db';
 @unlink($db);
@@ -110,17 +114,36 @@ foreach ($statements as $statement) {
 out('');
 out('supports_sequences():              ' . var_export($pg->supports_sequences(), true));
 
-// Convention: a serial pk owns {table}_{pk}_seq, and the library derives that
-// name from the table and pk — Event declares nothing sequence-related.
+// A serial pk: the library reads its sequence from the column's default
+// (events_id_seq, which is also the {table}_{pk}_seq convention name) — Event
+// declares nothing sequence-related.
 out("get_sequence_name('events', 'id'): " . $pg->get_sequence_name('events', 'id'));
 out('Event::table()->sequence:          ' . (Event::table()->sequence ?? '(null)'));
 out("next_sequence_value(...):          " . ($pg->next_sequence_value('events_id_seq') ?? '(null)'));
 
-// The INSERT itself pulls nextval('events_id_seq') for the pk, and the model
-// reads the assigned value back through the sequence.
+// The database fills the pk, so the INSERT leaves it out and returns the
+// stored value (RETURNING), which the model takes as its id.
 $event = Event::create(['title' => 'PHP Meetup']);
 out('created event id:                  ' . $event->id);
 out('  SQL: ' . Event::table()->last_sql);
+
+// The same holds whatever the database fills the pk with. A renamed table
+// keeps its old sequence (seats_old_id_seq, not seats_id_seq)...
+$seat = Seat::create(['label' => 'A1']);
+out('Seat::table()->sequence:           ' . (Seat::table()->sequence ?? '(null)'));
+out('created seat id:                   ' . $seat->id);
+
+// ...an IDENTITY has its own sequence (GENERATED ALWAYS: the database alone
+// numbers it, an explicit id is rejected by Postgres)...
+$wristband = Wristband::create(['holder' => 'Ada']);
+out('Wristband::table()->sequence:      ' . (Wristband::table()->sequence ?? '(null)'));
+out('created wristband id:              ' . $wristband->id);
+
+// ...and a uuid default has no sequence at all.
+/** @var Upload $upload */
+$upload = Upload::create(['filename' => 'slides.pdf']);
+out('Upload::table()->sequence:         ' . (Upload::table()->sequence ?? '(null)'));
+out('created upload id:                 ' . $upload->id . ' (Upload::find() agrees: ' . var_export(Upload::find($upload->id)->filename, true) . ')');
 
 // No primary key, no convention sequence: event_logs has no pk column to name
 // a sequence after, so the model loads cleanly and Table::$sequence stays
@@ -132,11 +155,13 @@ out('EventLog::table()->pk:             [' . implode(', ', EventLog::table()->pk
 out('EventLog::table()->sequence:       ' . (EventLog::table()->sequence ?? '(null)'));
 out('EventLog::first()->message:        ' . $log->message);
 
-// Non-convention name: Ticket declares static $sequence = 'ticket_numbers'
-// (created with START 1000), so ids begin at 1000.
+// A declared sequence: Ticket declares static $sequence = 'ticket_numbers'
+// (created with START 1000), so ids begin at 1000. A declaration always wins:
+// the INSERT pulls nextval() for the pk instead of using RETURNING.
 $ticket = Ticket::create(['title' => 'Front row']);
 out('Ticket::table()->sequence:         ' . (Ticket::table()->sequence ?? '(null)'));
 out('created ticket id:                 ' . $ticket->id . " (from nextval('ticket_numbers'))");
+out('  SQL: ' . Ticket::table()->last_sql);
 
 // Assigning the pk yourself bypasses the sequence entirely — and does NOT
 // advance it: the next sequence-driven insert continues where it left off.
