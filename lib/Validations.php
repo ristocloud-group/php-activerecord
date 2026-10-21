@@ -332,6 +332,10 @@ class Validations
      * <li><b>allow_null:</b> allow null strings</li>
      * </ul>
      *
+     * The value and the bounds are compared exactly when both are integers or numeric
+     * strings in plain decimal notation (e.g. a BIGINT beyond 2^53, '18446744073709551615',
+     * '10.50'); a float or a string with an exponent ('1e1') is compared as a float.
+     *
      * @param list<array<int|string, mixed>> $attrs Validation definition
      * @return void
      */
