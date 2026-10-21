@@ -539,7 +539,8 @@ class Table
 
     /**
      * INSERT $data (which omits the pk) ending with RETURNING the pk, and return the pk
-     * the database stored, cast by its column like find() reads it (#47).
+     * the database stored, cast by its column like find() reads it (#47); null when no
+     * row was stored (a BEFORE INSERT trigger returned NULL).
      *
      * @internal Serves Model::insert(); not a supported API.
      * @param array<string, mixed> $data
@@ -549,7 +550,12 @@ class Table
         $value = $this->run_insert($data, null, null, $pk)->fetchColumn();
         $column = $this->get_column_by_inflected_name($pk);
 
-        return null === $column ? $value : $column->cast($value, $this->connection());
+        // no row came back (a BEFORE INSERT trigger skipped it): the pk stays null
+        if (false === $value || null === $column) {
+            return false === $value ? null : $value;
+        }
+
+        return $column->cast($value, $this->connection());
     }
 
     /**

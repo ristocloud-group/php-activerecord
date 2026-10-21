@@ -997,7 +997,10 @@ class Model
 
         if ($read_back) {
             $this->attributes[$pk] = $returned_pk;
-            $stored[] = $pk;
+
+            if (null !== $returned_pk) {
+                $stored[] = $pk;
+            }
         } else {
             // if we've got an autoincrementing/sequenced pk set it
             // don't need this check until the day comes that we decide to support composite pks

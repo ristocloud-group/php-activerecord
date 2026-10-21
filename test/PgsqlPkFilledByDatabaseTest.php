@@ -11,7 +11,7 @@ use ActiveRecord\Table;
  */
 class PgsqlPkFilledByDatabaseTest extends DatabaseTest
 {
-    private const TABLES = 't47_renamed, t47_orig, t47_always_identities, t47_default_identities, t47_no_defaults, t153_uuids';
+    private const TABLES = 't47_renamed, t47_orig, t47_always_identities, t47_default_identities, t47_no_defaults, t153_uuids, t47_constant_defaults, t47_string_defaults, t47_default_kinds, t47_generated, t47_skipped';
 
     public function set_up($connection_name = null)
     {
@@ -25,6 +25,20 @@ class PgsqlPkFilledByDatabaseTest extends DatabaseTest
         $this->conn->query('CREATE TABLE t47_no_defaults (id int PRIMARY KEY, name varchar(20))');
         $this->conn->query('CREATE SEQUENCE t47_declared_seq START 500');
         $this->conn->query('CREATE TABLE t153_uuids (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(20))');
+        // a constant default is not filled by the database: the convention sequence is used as before
+        $this->conn->query('CREATE SEQUENCE t47_constant_defaults_id_seq START 100');
+        $this->conn->query('CREATE TABLE t47_constant_defaults (id int PRIMARY KEY DEFAULT 0, name varchar(20))');
+        $this->conn->query('CREATE SEQUENCE t47_string_defaults_id_seq START 7');
+        $this->conn->query("CREATE TABLE t47_string_defaults (id varchar(10) PRIMARY KEY DEFAULT 'abc', name varchar(20))");
+        $this->conn->query("CREATE TABLE t47_default_kinds (
+            id serial PRIMARY KEY, int_zero int DEFAULT 0, big_zero bigint DEFAULT 0, cast_zero int DEFAULT '0'::integer,
+            negative int DEFAULT (-1), decimal numeric(5,2) DEFAULT 1.5, string varchar(10) DEFAULT 'abc',
+            cast_string varchar(10) DEFAULT 'abc'::character varying, text_null text DEFAULT NULL, flag boolean DEFAULT true,
+            stamp timestamp DEFAULT now(), uuid uuid DEFAULT gen_random_uuid(), sum int DEFAULT 1 + 1, plain int)");
+        $this->conn->query('CREATE TABLE t47_generated (a int NOT NULL, id int GENERATED ALWAYS AS (a * 10) STORED PRIMARY KEY)');
+        $this->conn->query('CREATE TABLE t47_skipped (id serial PRIMARY KEY, name varchar(20))');
+        $this->conn->query('CREATE FUNCTION t47_skip_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$');
+        $this->conn->query('CREATE TRIGGER t47_skip BEFORE INSERT ON t47_skipped FOR EACH ROW EXECUTE FUNCTION t47_skip_row()');
         Table::clear_cache();
     }
 
@@ -38,7 +52,8 @@ class PgsqlPkFilledByDatabaseTest extends DatabaseTest
     private function drop_tables(): void
     {
         $this->conn->query('DROP TABLE IF EXISTS ' . self::TABLES);
-        $this->conn->query('DROP SEQUENCE IF EXISTS t47_declared_seq');
+        $this->conn->query('DROP SEQUENCE IF EXISTS t47_declared_seq, t47_constant_defaults_id_seq, t47_string_defaults_id_seq');
+        $this->conn->query('DROP FUNCTION IF EXISTS t47_skip_row()');
     }
 
     /**
@@ -191,6 +206,72 @@ class PgsqlPkFilledByDatabaseTest extends DatabaseTest
     {
         $this->assert_null(T153Uuid::table()->sequence);
         $this->assert_null(T153Uuid::table()->columns['id']->sequence);
+    }
+
+    public function test_constant_default_pk_keeps_the_convention_sequence()
+    {
+        $this->assert_false(T47ConstantDefault::table()->columns['id']->filled_by_database);
+        $this->assert_equals('t47_constant_defaults_id_seq', T47ConstantDefault::table()->sequence);
+
+        $first = T47ConstantDefault::create(['name' => 'first']);
+        $this->assert_string_contains_string("nextval('t47_constant_defaults_id_seq')", T47ConstantDefault::table()->last_sql);
+        $this->assert_string_not_contains_string('RETURNING', T47ConstantDefault::table()->last_sql);
+        $this->assert_same(100, $first->id);
+        $this->assert_same(101, T47ConstantDefault::create(['name' => 'second'])->id);
+        $this->assert_equals('first', T47ConstantDefault::find(100)->name);
+    }
+
+    public function test_quoted_literal_default_pk_keeps_the_convention_sequence()
+    {
+        $this->assert_false(T47StringDefault::table()->columns['id']->filled_by_database);
+        $this->assert_equals('t47_string_defaults_id_seq', T47StringDefault::table()->sequence);
+
+        $record = T47StringDefault::create(['name' => 'x']);
+        $this->assert_string_contains_string("nextval('t47_string_defaults_id_seq')", T47StringDefault::table()->last_sql);
+        $this->assert_same('7', $record->id);
+        $this->assert_equals('x', T47StringDefault::find('7')->name);
+    }
+
+    public function test_only_non_constant_defaults_are_filled_by_the_database()
+    {
+        $filled = array_map(fn($column) => $column->filled_by_database, $this->conn->columns('t47_default_kinds'));
+
+        $this->assert_same([
+            'id' => true, 'int_zero' => false, 'big_zero' => false, 'cast_zero' => false, 'negative' => false,
+            'decimal' => false, 'string' => false, 'cast_string' => false, 'text_null' => false, 'flag' => false,
+            'stamp' => true, 'uuid' => true, 'sum' => true, 'plain' => false,
+        ], $filled);
+    }
+
+    public function test_stored_generated_pk_is_read_back()
+    {
+        $this->assert_true(T47Generated::table()->columns['id']->filled_by_database);
+
+        $record = T47Generated::create(['a' => 4]);
+        $this->assert_string_ends_with(' RETURNING "id"', T47Generated::table()->last_sql);
+        $this->assert_same(40, $record->id);
+        $this->assert_same(4, T47Generated::find(40)->a);
+    }
+
+    public function test_a_row_skipped_by_a_trigger_leaves_the_pk_null()
+    {
+        // a BEFORE INSERT trigger returning NULL: the INSERT stores and returns no row
+        $record = T47Skipped::create(['name' => 'x']);
+        $this->assert_string_ends_with(' RETURNING "id"', T47Skipped::table()->last_sql);
+        $this->assert_null($record->id);
+        $this->assert_same(0, T47Skipped::count());
+    }
+
+    public function test_column_info_without_the_new_keys_keeps_the_master_classification()
+    {
+        // a row shaped like an overriding query_column_info() that does not select the new keys
+        $row = ['field' => 'id', 'attlen' => 16, 'type' => 'uuid', 'not_nullable' => true, 'pk' => true, 'default' => 'gen_random_uuid()'];
+        $this->assert_false($this->conn->create_column($row)->filled_by_database);
+
+        $row['default'] = "nextval('t_id_seq')";
+        $column = $this->conn->create_column($row);
+        $this->assert_true($column->filled_by_database);
+        $this->assert_equals('t_id_seq', $column->sequence);
     }
 
     public function test_next_sequence_value_doubles_a_quote()

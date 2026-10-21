@@ -114,6 +114,13 @@ class PgsqlAdapter extends Connection
         return "SELECT EXISTS($inner)::int";
     }
 
+    /**
+     * Reads pg_attribute.attidentity, so it needs PostgreSQL 10 or later. A default is
+     * classed as an expression (default_is_expression) from its parsed tree: anything
+     * but constants and casts of them (#47).
+     *
+     * @param string $table
+     */
     public function query_column_info($table)
     {
         $sql = <<<SQL
@@ -134,7 +141,14 @@ class PgsqlAdapter extends Connection
                     AND pg_attrdef.adnum=a.attnum
                   ),'::[a-z_ ]+',''),'''$',''),'^''','') AS default,
                   a.attidentity,
-                  CASE WHEN a.attidentity <> '' THEN pg_get_serial_sequence(c.oid::regclass::text, a.attname)::regclass::text END AS identity_sequence
+                  CASE WHEN a.attidentity <> '' THEN pg_get_serial_sequence(c.oid::regclass::text, a.attname)::regclass::text END AS identity_sequence,
+                  (SELECT pg_attrdef.adbin::text ~ ':funcformat [03]' OR EXISTS (
+                      SELECT 1 FROM regexp_matches(pg_attrdef.adbin::text, '\{([A-Z_]+)', 'g') AS node(name)
+                      WHERE node.name[1] NOT IN ('CONST', 'RELABELTYPE', 'COERCEVIAIO', 'COERCETODOMAIN', 'FUNCEXPR'))
+                    FROM pg_attrdef
+                    WHERE c.oid = pg_attrdef.adrelid
+                    AND pg_attrdef.adnum=a.attnum
+                  ) AS default_is_expression
             FROM pg_attribute a, pg_class c, pg_type t
             WHERE c.relname = ?
                   AND a.attnum > 0
@@ -202,9 +216,11 @@ class PgsqlAdapter extends Connection
             $c->sequence = $column['identity_sequence'] ?? null;
         }
 
-        // any default expression (nextval(), gen_random_uuid(), …) or an IDENTITY: the
-        // database fills the column an INSERT omits (#47, #153)
-        $c->filled_by_database = null !== ($column['default'] ?? null) || null !== $c->sequence;
+        // a sequence, an IDENTITY or a default that is not a constant (gen_random_uuid(),
+        // now(), a stored generated column…): the database fills the column an INSERT
+        // omits (#47, #153). A constant (0, 'abc'::character varying, NULL) does not count.
+        $is_expression = $column['default_is_expression'] ?? false;
+        $c->filled_by_database = null !== $c->sequence || true === $is_expression || 't' === $is_expression;
         return $c;
     }
 
