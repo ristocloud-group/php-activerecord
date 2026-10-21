@@ -399,7 +399,7 @@ class Validations
                             'greater_than_or_equal_to' => $cmp >= 0,
                             'equal_to' => 0 === $cmp,
                             'less_than' => $cmp < 0,
-                            default => $cmp <= 0,
+                            'less_than_or_equal_to' => $cmp <= 0,
                         };
 
                         if (!$passes) {
