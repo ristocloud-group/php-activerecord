@@ -112,8 +112,9 @@ class Column
     public $sequence;
 
     /**
-     * True when the database fills this column itself if an INSERT omits it: a sequence's
-     * nextval() default or an IDENTITY. Set by PgsqlAdapter only (#47).
+     * True when the database fills this column itself if an INSERT omits it: a default
+     * expression (a sequence's nextval(), gen_random_uuid(), …) or an IDENTITY. Set by
+     * PgsqlAdapter only (#47, #153).
      *
      * @internal Serves Table's pk read-back; not a supported API.
      */

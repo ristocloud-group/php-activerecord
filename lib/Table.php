@@ -53,8 +53,9 @@ class Table
 
     /**
      * Name of the sequence for this table (optional): the model's static $sequence, else
-     * the sequence of the pk column (its nextval() default or its IDENTITY), else the
-     * adapter's {table}_{pk}_seq convention.
+     * the sequence of the pk column (its nextval() default or its IDENTITY), else null
+     * when the pk has another default (gen_random_uuid(), …), else the adapter's
+     * {table}_{pk}_seq convention.
      * Only set on adapters with sequences (Postgres).
      * @var string|null
      */
@@ -924,8 +925,8 @@ class Table
             $column = $this->get_column_by_inflected_name($this->pk[0]);
 
             if (null !== $column && $column->filled_by_database) {
-                // the database fills the pk (any sequence name, an IDENTITY): name its real
-                // sequence and read the pk back on insert (#47)
+                // the database fills the pk (any sequence name, an IDENTITY, a uuid default…):
+                // name its real sequence, if any, and read the pk back on insert (#47, #153)
                 $this->sequence = $column->sequence;
                 $this->pk_read_back = $this->connection()->supports_insert_returning();
             } else {

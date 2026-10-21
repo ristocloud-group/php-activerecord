@@ -974,8 +974,8 @@ class Model
         $returned_pk = null;
 
         if ($table->reads_back_pk() && !isset($attributes[$pk])) {
-            // the database fills the pk (a sequence, an IDENTITY): the INSERT omits it and
-            // returns the stored value (#47)
+            // the database fills the pk (a sequence, an IDENTITY, a uuid default…): the
+            // INSERT omits it and returns the stored value (#47, #153)
             unset($attributes[$pk]);
             $returned_pk = $table->insert_returning_pk($attributes, $pk);
             $read_back = true;

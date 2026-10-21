@@ -202,8 +202,9 @@ class PgsqlAdapter extends Connection
             $c->sequence = $column['identity_sequence'] ?? null;
         }
 
-        // a sequence default or an IDENTITY: the database fills the column an INSERT omits
-        $c->filled_by_database = null !== $c->sequence;
+        // any default expression (nextval(), gen_random_uuid(), …) or an IDENTITY: the
+        // database fills the column an INSERT omits (#47, #153)
+        $c->filled_by_database = null !== ($column['default'] ?? null) || null !== $c->sequence;
         return $c;
     }
 
