@@ -13,8 +13,9 @@
 //      alias; any other pk keeps the value a record is created with;
 //   3. on Postgres, a pk the database fills (serial under any sequence name,
 //      IDENTITY, a uuid default) read back with INSERT … RETURNING, the
-//      {table}_{pk}_seq convention for a table without a pk, and an explicit
-//      static $sequence, whose insert pulls nextval() for the pk.
+//      {table}_{pk}_seq convention for a pk without a default, no sequence
+//      (null) for a table without a pk, and an explicit static $sequence;
+//      the last two pull nextval() for the pk in the INSERT.
 //
 // Part 3 needs a reachable Postgres and is skipped otherwise: set PHPAR_PGSQL
 // to a pgsql:// URL (this repo's Docker setup already does).
@@ -29,6 +30,7 @@ require_once __DIR__ . '/models/Ticket.php';
 require_once __DIR__ . '/models/Seat.php';
 require_once __DIR__ . '/models/Wristband.php';
 require_once __DIR__ . '/models/Upload.php';
+require_once __DIR__ . '/models/Gate.php';
 
 $db = __DIR__ . '/sequences.db';
 @unlink($db);
@@ -144,6 +146,14 @@ out('created wristband id:              ' . $wristband->id);
 $upload = Upload::create(['filename' => 'slides.pdf']);
 out('Upload::table()->sequence:         ' . (Upload::table()->sequence ?? '(null)'));
 out('created upload id:                 ' . $upload->id . ' (Upload::find() agrees: ' . var_export(Upload::find($upload->id)->filename, true) . ')');
+
+// A pk without a default: nothing names its sequence, so the library falls
+// back to the {table}_{pk}_seq convention (gates_id_seq, created with START 10)
+// and the INSERT pulls nextval() from it.
+$gate = Gate::create(['name' => 'North']);
+out('Gate::table()->sequence:           ' . (Gate::table()->sequence ?? '(null)'));
+out('created gate id:                   ' . $gate->id);
+out('  SQL: ' . Gate::table()->last_sql);
 
 // No primary key, no convention sequence: event_logs has no pk column to name
 // a sequence after, so the model loads cleanly and Table::$sequence stays
