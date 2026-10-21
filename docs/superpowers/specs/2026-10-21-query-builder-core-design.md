@@ -510,9 +510,14 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 
 ## 9. Sequencing and delivery
 
-1. **#145 first, in its own small PR.** It fixes the destructive bare-hash `delete_all` / `update_all`. Its rules
-   are still open: the discarded PR #160, a reviewed design, is stricter than the rule posted on #145 on
-   2026-10-21. The maintainer picks one before that PR starts. That PR also needs its own short design approval.
+1. **#145 first, in its own small PR.** It fixes the destructive bare-hash `delete_all` / `update_all`. Decided on
+   2026-10-21: it **re-lands the reviewed design of PR #160**, which was discarded with the bridge branch.
+   - `delete_all()` reads a hash without option keys as conditions, as `count()` / `exists()` do.
+   - Every ambiguous shape throws an `ActiveRecordException` before any SQL runs: option keys mixed with other
+     keys, `set` plus a non-option key, positional lists, int/float/bool.
+   - The unchanged forms keep byte-identical SQL.
+
+   #160 has the full table and its 37 tests.
 2. **This spec → the implementation plan** (`writing-plans`). It is delivered in several PRs, each green and gated
    by the golden tests. The proposed slices, to be finalized in the plan:
    - (a) the golden harness and corpus;
