@@ -52,10 +52,20 @@ class Table
     public $db_name;
 
     /**
-     * Name of the sequence for this table (optional). Defaults to {$table}_seq
+     * Name of the sequence for this table (optional): the model's static $sequence, else
+     * the sequence of the pk column (its nextval() default or its IDENTITY), else null
+     * when the pk has another default (gen_random_uuid(), …), else the adapter's
+     * {table}_{pk}_seq convention.
+     * Only set on adapters with sequences (Postgres).
      * @var string|null
      */
     public $sequence;
+
+    /**
+     * True when an INSERT that omits the pk reads it back with RETURNING: the pk column
+     * is filled by the database and the model declares no static $sequence (#47).
+     */
+    private bool $pk_read_back = false;
 
     /**
      * A instance of CallBack for this model/table.
@@ -513,6 +523,48 @@ class Table
      */
     public function insert(&$data, $pk = null, $sequence_name = null)
     {
+        return $this->run_insert($data, $pk, $sequence_name, null);
+    }
+
+    /**
+     * True when Model::insert() leaves an unset pk to the database and reads it back
+     * with insert_returning_pk() (#47).
+     *
+     * @internal Serves Model::insert(); not a supported API.
+     */
+    public function reads_back_pk(): bool
+    {
+        return $this->pk_read_back;
+    }
+
+    /**
+     * INSERT $data (which omits the pk) ending with RETURNING the pk, and return the pk
+     * the database stored, cast by its column like find() reads it (#47); null when no
+     * row was stored (a BEFORE INSERT trigger returned NULL).
+     *
+     * @internal Serves Model::insert(); not a supported API.
+     * @param array<string, mixed> $data
+     */
+    public function insert_returning_pk(array &$data, string $pk): mixed
+    {
+        $value = $this->run_insert($data, null, null, $pk)->fetchColumn();
+        $column = $this->get_column_by_inflected_name($pk);
+
+        // no row came back (a BEFORE INSERT trigger skipped it): the pk stays null
+        if (false === $value || null === $column) {
+            return false === $value ? null : $value;
+        }
+
+        return $column->cast($value, $this->connection());
+    }
+
+    /**
+     * The body of insert(), whose $data keeps its untyped contract (#47).
+     *
+     * @param array<string, mixed> $data
+     */
+    private function run_insert(&$data, ?string $pk, ?string $sequence_name, ?string $returning): mixed
+    {
         $data = $this->process_data($data);
 
         // the statement names the columns; $data keeps its attribute names for the caller (#92).
@@ -520,6 +572,10 @@ class Table
         $row = is_hash($data) ? $this->real_column_keys($data) : $data;
         $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
         $sql->insert($row, null === $pk ? $pk : $this->real_column_name($pk), $sequence_name);
+
+        if (null !== $returning) {
+            $sql->returning($this->real_column_name($returning));
+        }
 
         $values = array_values($row);
         return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
@@ -867,9 +923,21 @@ class Table
 
         if (!($this->sequence = $this->class->getStaticPropertyValue('sequence'))) {
             // a table without a primary key has no pk column to name a sequence after
-            $this->sequence = isset($this->pk[0])
-                ? $this->connection()->get_sequence_name($this->table, $this->pk[0])
-                : null;
+            if (!isset($this->pk[0])) {
+                $this->sequence = null;
+                return;
+            }
+
+            $column = $this->get_column_by_inflected_name($this->pk[0]);
+
+            if (null !== $column && $column->filled_by_database) {
+                // the database fills the pk (any sequence name, an IDENTITY, a uuid default…):
+                // name its real sequence, if any, and read the pk back on insert (#47, #153)
+                $this->sequence = $column->sequence;
+                $this->pk_read_back = $this->connection()->supports_insert_returning();
+            } else {
+                $this->sequence = $this->connection()->get_sequence_name($this->table, $this->pk[0]);
+            }
         }
     }
 

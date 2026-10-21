@@ -546,6 +546,17 @@ abstract class Connection
     }
 
     /**
+     * True when an INSERT can end with RETURNING <column>, which the model uses to read
+     * back a pk the database filled itself (#47). Only Postgres takes this path.
+     *
+     * @internal Serves Table's pk read-back; not a supported API.
+     */
+    public function supports_insert_returning(): bool
+    {
+        return false;
+    }
+
+    /**
      * Return a default sequence name for the specified table.
      *
      * @param string $table Name of a table
