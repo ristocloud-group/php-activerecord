@@ -24,6 +24,22 @@ class BigIdNumericality extends ActiveRecord\Model
     ];
 }
 
+// A non-column attribute handing the validator a raw PHP value: a column would
+// cast it (numeric_test is VARCHAR, so an int or a float would arrive as a string).
+class RawNumericality extends ActiveRecord\Model
+{
+    public static $table_name = 'books';
+
+    public static mixed $raw = null;
+
+    public static $validates_numericality_of = [];
+
+    public function get_raw_value()
+    {
+        return static::$raw;
+    }
+}
+
 class ValidatesNumericalityOfTest extends DatabaseTest
 {
     public static $NULL = [null];
@@ -270,6 +286,24 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         return $book->errors->on('numeric_test');
     }
 
+    /**
+     * As numericality_error(), with $value reaching the validator as is (a native int or float).
+     *
+     * @param array<string, mixed> $options
+     */
+    private function raw_numericality_error(int|float $value, array $options): ?string
+    {
+        RawNumericality::$raw = $value;
+        RawNumericality::$validates_numericality_of = [array_merge(['raw_value'], $options)];
+        $model = new RawNumericality();
+
+        if ($model->is_valid()) {
+            return null;
+        }
+
+        return $model->errors->on('raw_value');
+    }
+
     public function test_compares_integers_beyond_2_pow_53_exactly()
     {
         // (float) rounds both sides to the same double: 9223372036854775806 < PHP_INT_MAX
@@ -279,9 +313,21 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         $this->assert_same('must be equal to 9007199254740992', $this->numericality_error('9007199254740993', ['equal_to' => 9007199254740992]));
         $this->assert_null($this->numericality_error('9007199254740993', ['greater_than' => '9007199254740992']));
         $this->assert_same('must be greater than or equal to 9007199254740993', $this->numericality_error('9007199254740992', ['greater_than_or_equal_to' => '9007199254740993']));
-        $this->assert_null($this->numericality_error(9007199254740993, ['greater_than' => 9007199254740992]));
-        $this->assert_null($this->numericality_error(PHP_INT_MIN, ['less_than' => PHP_INT_MIN + 1]));
-        $this->assert_same('must be greater than -9223372036854775807', $this->numericality_error(PHP_INT_MIN, ['greater_than' => PHP_INT_MIN + 1]));
+    }
+
+    public function test_compares_native_int_values_beyond_2_pow_53_exactly()
+    {
+        $this->assert_null($this->raw_numericality_error(9007199254740993, ['greater_than' => 9007199254740992]));
+        $this->assert_same('must be equal to 9007199254740992', $this->raw_numericality_error(9007199254740993, ['equal_to' => '9007199254740992']));
+        $this->assert_null($this->raw_numericality_error(9223372036854775806, ['less_than' => PHP_INT_MAX]));
+        $this->assert_null($this->raw_numericality_error(PHP_INT_MIN, ['less_than' => PHP_INT_MIN + 1]));
+        $this->assert_same('must be greater than -9223372036854775807', $this->raw_numericality_error(PHP_INT_MIN, ['greater_than' => PHP_INT_MIN + 1]));
+        $this->assert_null($this->raw_numericality_error(9007199254740993, ['only_integer' => true, 'greater_than' => '9007199254740992']));
+        $this->assert_null($this->raw_numericality_error(9007199254740993, ['odd' => true]));
+        $this->assert_same('must be even', $this->raw_numericality_error(9007199254740993, ['even' => true]));
+        $this->assert_null($this->raw_numericality_error(PHP_INT_MAX, ['odd' => true]));
+        // int value vs integer-string bound
+        $this->assert_null($this->raw_numericality_error(10, ['equal_to' => '10']));
     }
 
     public function test_compares_unsigned_bigint_strings_beyond_php_int_max_exactly()
@@ -313,7 +359,7 @@ class ValidatesNumericalityOfTest extends DatabaseTest
 
     public function test_odd_and_even_of_big_integers_are_exact()
     {
-        foreach (['9007199254740993', '9223372036854775807', '18446744073709551615', '-9007199254740993', '9007199254740993.5', 9007199254740993] as $odd) {
+        foreach (['9007199254740993', '9223372036854775807', '18446744073709551615', '-9007199254740993', '9007199254740993.5'] as $odd) {
             $this->assert_null($this->numericality_error($odd, ['odd' => true]), var_export($odd, true));
             $this->assert_same('must be even', $this->numericality_error($odd, ['even' => true]), var_export($odd, true));
         }
@@ -327,8 +373,7 @@ class ValidatesNumericalityOfTest extends DatabaseTest
 
     public function test_exact_comparison_of_mixed_and_decimal_operands()
     {
-        // int value vs integer-string bound and vice versa
-        $this->assert_null($this->numericality_error(10, ['equal_to' => '10']));
+        // integer-string value vs int bound
         $this->assert_null($this->numericality_error('10', ['equal_to' => 10]));
         // leading zeros, sign, surrounding whitespace
         $this->assert_null($this->numericality_error('0090', ['equal_to' => 90]));
@@ -354,6 +399,8 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         $this->assert_same('must be greater than 10', $this->numericality_error('5', ['greater_than' => '+10']));
         $this->assert_same('must be greater than 0', $this->numericality_error('-5', ['greater_than' => '-0']));
         $this->assert_same('must be greater than -12', $this->numericality_error('-15', ['greater_than' => '-012']));
+        $this->assert_same('must be greater than 0', $this->numericality_error('-5', ['greater_than' => '-0.0']));
+        $this->assert_same('must be less than 123456789012345', $this->numericality_error('123456789012346', ['less_than' => '123456789012345.0']));
     }
 
     public function test_float_operands_keep_the_float_comparison()
@@ -362,11 +409,30 @@ class ValidatesNumericalityOfTest extends DatabaseTest
         $this->assert_null($this->numericality_error('6', ['less_than' => '1e1']));
         $this->assert_same('must be less than 10', $this->numericality_error('20', ['less_than' => '1e1']));
         $this->assert_same('must be less than 5', $this->numericality_error('6', ['less_than' => 5.0]));
-        $this->assert_null($this->numericality_error(4.9, ['less_than' => '5']));
         $this->assert_null($this->numericality_error('0.1', ['equal_to' => 0.1]));
         $this->assert_null($this->numericality_error('9007199254740993', ['equal_to' => 9007199254740992.0]));
         $this->assert_null($this->numericality_error('1e1', ['equal_to' => '10']));
-        $this->assert_null($this->numericality_error(9007199254740993.0, ['even' => true]));
+    }
+
+    public function test_native_float_values_keep_the_float_comparison()
+    {
+        // pins: a native float value is compared (and its parity taken) as a float, as before
+        $this->assert_null($this->raw_numericality_error(4.9, ['less_than' => '5']));
+        $this->assert_same('must be greater than or equal to 5', $this->raw_numericality_error(4.9, ['greater_than_or_equal_to' => 5]));
+        $this->assert_null($this->raw_numericality_error(0.1, ['equal_to' => '0.1']));
+        $this->assert_null($this->raw_numericality_error(9007199254740993.0, ['equal_to' => '9007199254740993']));
+        $this->assert_null($this->raw_numericality_error(9007199254740993.0, ['even' => true]));
+        $this->assert_same('must be odd', $this->raw_numericality_error(9007199254740993.0, ['odd' => true]));
+        $this->assert_null($this->raw_numericality_error(3.5, ['odd' => true]));
+    }
+
+    public function test_long_decimal_strings_are_compared_exactly()
+    {
+        // declared consequences of D1: a decimal string is compared digit by digit even
+        // within 2^53, where (float) used to round both sides to the same double
+        // (a non-integer bound is still rendered as (string) (float), as before: D2)
+        $this->assert_same('must be equal to 9', $this->numericality_error('9.000000000000001', ['equal_to' => '9.000000000000002']));
+        $this->assert_null($this->numericality_error('0.' . str_repeat('0', 330) . '1', ['greater_than' => 0]));
     }
 
     public function test_non_integer_bound_message_is_unchanged()
