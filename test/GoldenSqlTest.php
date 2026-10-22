@@ -180,7 +180,8 @@ class GoldenSqlTest extends DatabaseTest
             // joins
             'joins_assoc' => [fn() => Book::all(['joins' => ['author'], 'conditions' => ['authors.name' => 'Tito']]), null],
             'joins_assoc_model_key' => [fn() => Book::all(['joins' => ['author'], 'conditions' => ['name' => 'Ancient Art of Main Tanking']]), null],
-            // fails on master: a key that is not a model column is qualified with the model's table (changes in Task 5)
+            // a key that is no column of the model (parent_author_id is the joined authors') stays unqualified; on master
+            // it was qualified with the model's table, and the call failed
             'joins_assoc_non_model_key' => [fn() => Book::all(['joins' => ['author'], 'conditions' => ['parent_author_id' => 3]]), null],
             'joins_raw' => [fn() => Book::all(['joins' => 'INNER JOIN authors a ON a.author_id = books.Author_Id']), null],
 

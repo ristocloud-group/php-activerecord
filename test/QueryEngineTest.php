@@ -188,4 +188,55 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(1, (int) AliasedPkAuthor::count(['author_id' => 'Tito']));
         $this->assert_same('Tito', AliasedPkAuthor::find(1, ['conditions' => ['author_id' => 'Tito']])->name);
     }
+
+    // Spec §6.2.4: with joins, a hash key is qualified with the model's table only when it names
+    // one of the model's columns. parent_author_id is a column of the joined authors table.
+    public function test_joins_qualify_only_model_columns(): void
+    {
+        $books = Book::all(['joins' => ['author'], 'conditions' => ['name' => 'Ancient Art of Main Tanking', 'authors.name' => 'Tito', 'parent_author_id' => 3]]);
+        $this->assert_same([1], array_map(fn($b) => $b->book_id, $books));
+        $this->assert_sql_has('books.name', Book::table()->last_sql);
+        $this->assert_sql_doesnt_has('books.parent_author_id', Book::table()->last_sql);
+    }
+
+    // The model's own columns keep its table whatever the spelling of the key, so that a call that
+    // works today sends the same SQL: authors has an author_id column too, and a key left
+    // unqualified would be ambiguous. MySQL, MariaDB and SQLite name Book's column Author_Id and
+    // match names regardless of case; a key may also come pre-quoted.
+    public function test_joins_qualify_a_model_column_spelled_another_way(): void
+    {
+        $keys = ['author_id', $this->conn->quote_name('author_id')];
+
+        if (!$this->conn->column_names_are_case_sensitive()) {
+            $keys[] = 'AUTHOR_ID';
+        }
+
+        foreach ($keys as $key) {
+            $books = Book::all(['joins' => ['author'], 'conditions' => [$key => 1]]);
+
+            $this->assert_same([1], array_map(fn($b) => $b->book_id, $books), $key);
+            $this->assert_sql_has("WHERE books.$key=?", Book::table()->last_sql);
+        }
+    }
+
+    // An alias_attribute key is read as the column it names before its key is qualified
+    public function test_joins_qualify_the_column_of_an_alias(): void
+    {
+        Venue::all(['joins' => ['events'], 'conditions' => ['marquee' => 'Warner Theatre']]);
+
+        $this->assert_sql_has('WHERE venues.name=?', Venue::table()->last_sql);
+    }
+
+    // A 'from' names another table than the model's, whose columns the model does not know: every
+    // key keeps naming it, as it always did
+    public function test_joins_with_a_from_qualify_every_key_with_it(): void
+    {
+        $sql = Book::table()->options_to_sql([
+            'from' => 'authors',
+            'joins' => 'INNER JOIN books ON(books.author_id = authors.author_id)',
+            'conditions' => ['parent_author_id' => 3, 'name' => 'Tito'],
+        ]);
+
+        $this->assert_sql_has('WHERE authors.parent_author_id=? AND authors.name=?', $sql->to_s());
+    }
 }

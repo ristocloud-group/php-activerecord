@@ -482,6 +482,42 @@ class SQLBuilderTest extends DatabaseTest
         $this->assert_sql_has("SELECT * FROM authors $joins WHERE authors.id=? AND authors.name=?", (string) $this->sql);
     }
 
+    public function test_qualify_hash_keys_prepends_the_table_only_to_keys_naming_the_given_columns()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        $joins = 'INNER JOIN books ON(books.author_id = authors.author_id)';
+
+        $sql = new SQLBuilder($this->conn, "{$q}authors{$q}");
+        // like joins(), the columns are given prior to where
+        $sql->joins($joins)->qualify_hash_keys(['author_id', 'name']);
+        // a column of the table, one of the joined table, a qualified key, and each of them pre-quoted
+        $sql->where(['author_id' => 1, 'book_id' => 2, 'books.name' => 3, "{$q}name{$q}" => 4, "{$q}numeric_test{$q}" => 5]);
+
+        $this->assert_equals(
+            "SELECT * FROM {$q}authors{$q} $joins WHERE {$q}authors{$q}.{$q}author_id{$q}=? AND {$q}book_id{$q}=? AND {$q}books{$q}.{$q}name{$q}=?"
+            . " AND {$q}authors{$q}.{$q}name{$q}=? AND {$q}numeric_test{$q}=?",
+            $sql->to_s()
+        );
+        $this->assert_equals([1, 2, 3, 4, 5], $sql->bind_values());
+    }
+
+    public function test_qualify_hash_keys_matches_column_names_as_the_database_does()
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $sql = new SQLBuilder($this->conn, "{$q}authors{$q}");
+        $sql->joins('INNER JOIN books ON(books.author_id = authors.author_id)')->qualify_hash_keys(['Name', "a{$q}b"]);
+        $sql->where(['Name' => 1, 'name' => 2, "{$q}NAME{$q}" => 3, "{$q}a{$q}{$q}b{$q}" => 4, "a{$q}b" => 5]);
+
+        // MySQL, MariaDB and SQLite match 'name' to the column Name, Postgres does not
+        $prefix = $this->conn->column_names_are_case_sensitive() ? '' : "{$q}authors{$q}.";
+        $this->assert_equals(
+            "SELECT * FROM {$q}authors{$q} INNER JOIN books ON(books.author_id = authors.author_id) WHERE {$q}authors{$q}.{$q}Name{$q}=?"
+            . " AND $prefix{$q}name{$q}=? AND $prefix{$q}NAME{$q}=? AND {$q}authors{$q}.{$q}a{$q}{$q}b{$q}=? AND {$q}authors{$q}.{$q}a{$q}{$q}b{$q}=?",
+            $sql->to_s()
+        );
+    }
+
     public function test_build_upsert_multi_row_with_conflict_clause()
     {
         $sql = new SQLBuilder($this->conn, 'venues');

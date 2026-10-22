@@ -28,7 +28,8 @@ final class QueryCompiler
      * The SELECT a legacy options array describes: the body Table::options_to_sql() had before
      * the engine took it over, moved as it was (its calls into Table go through $this->table), so
      * that every legacy entry sends the same SQL and the same bind values. Joins come before
-     * conditions, so a hash's keys get qualified (#35). A hash's names are read through the
+     * conditions, so the keys of a hash that name the model's columns get its table (#35); any
+     * other key, a joined table's, stays as written. A hash's names are read through the
      * model's aliases (#144), unless the options give the names to map as 'mapped_names'.
      *
      * @param array<string, mixed> $options
@@ -40,6 +41,12 @@ final class QueryCompiler
 
         if (array_key_exists('joins', $options)) {
             $sql->joins($this->table->create_joins($options['joins']));
+
+            // a 'from' replaces the model's table by another, whose columns are not known here:
+            // every key keeps naming it, as it always did
+            if (!array_key_exists('from', $options)) {
+                $sql->qualify_hash_keys(array_keys($this->table->columns));
+            }
 
             // by default, an inner join will not fetch the fields from the joined table
             if (!array_key_exists('select', $options)) {

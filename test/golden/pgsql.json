@@ -348,14 +348,10 @@
     ],
     "joins_assoc_non_model_key": [
         {
-            "sql": "SELECT \"books\".* FROM \"books\" INNER JOIN \"authors\" ON(\"books\".author_id = \"authors\".author_id) WHERE \"books\".\"parent_author_id\"=?",
+            "sql": "SELECT \"books\".* FROM \"books\" INNER JOIN \"authors\" ON(\"books\".author_id = \"authors\".author_id) WHERE \"parent_author_id\"=?",
             "values": [
                 3
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42703]: Undefined column: 7 ERROR:  column books.parent_author_id does not exist"
         }
     ],
     "joins_raw": [

@@ -673,10 +673,11 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_hash_condition_fails(Author::class, ['conditions' => [$key => 999]]);
         $this->assert_sql_has_exact("WHERE {$q}author_id{$q}{$q} IS NOT NULL OR {$q}{$q}author_id{$q}=?", Author::table()->last_sql);
 
-        // the joins path prefixes the base table to the key
+        // the joins path: the key names no column of the model, so it is not prefixed with the
+        // base table, and stays the one (unknown) identifier it is
         $key = "parent_author_id{$q} IS NOT NULL OR {$q}parent_author_id";
         $this->assert_hash_condition_fails(Author::class, ['joins' => ['books'], 'conditions' => [$key => 999]]);
-        $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}parent_author_id{$q}{$q} IS NOT NULL OR {$q}{$q}parent_author_id{$q}=?", Author::table()->last_sql);
+        $this->assert_sql_has_exact("WHERE {$q}parent_author_id{$q}{$q} IS NOT NULL OR {$q}{$q}parent_author_id{$q}=?", Author::table()->last_sql);
     }
 
     public function test_hash_condition_expression_key_is_a_single_identifier()

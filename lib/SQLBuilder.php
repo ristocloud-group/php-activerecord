@@ -50,6 +50,16 @@ class SQLBuilder
     /** @var list<mixed> */
     private array $where_values = [];
 
+    /**
+     * With joins, the only hash keys that get the table: the model's columns, by name (in lower
+     * case where the database matches column names regardless of case). Null: every unqualified
+     * key gets it. See qualify_hash_keys().
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $model_columns = null;
+    private bool $fold_column_names = false;
+
     // for insert/update
     /** @var array<string, mixed>|null */
     private ?array $data = null;
@@ -262,6 +272,28 @@ class SQLBuilder
     public function joins($joins)
     {
         $this->joins = $joins;
+        return $this;
+    }
+
+    /**
+     * With joins, prefix a hash of conditions with the table only where its key names one of
+     * $columns, the model's own: any other key is a column of a joined table, and stays as
+     * written. Without this call every unqualified key is prefixed (#35).
+     *
+     * A key names a column the way the database matches it: regardless of case where
+     * Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB and SQLite match
+     * 'author_id' to Author_Id), and a single pre-quoted identifier by its text. Like joins(),
+     * this is read when where() applies a hash, so it comes first.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param list<string> $columns the real names of the model's columns
+     */
+    public function qualify_hash_keys(array $columns): static
+    {
+        $set = array_fill_keys($columns, true);
+        $this->fold_column_names = !$this->connection->column_names_are_case_sensitive();
+        $this->model_columns = $this->fold_column_names ? array_change_key_case($set) : $set;
+
         return $this;
     }
 
@@ -560,7 +592,8 @@ class SQLBuilder
 
     /**
      * prepends table name to hash of field names to get around ambiguous fields when SQL builder
-     * has joins. A key that is already table-qualified is kept as is (#35).
+     * has joins. A key that is already table-qualified is kept as is (#35), and so is one that
+     * names no column of the model, once qualify_hash_keys() gave them: a joined table's.
      *
      * Keys that end up naming the same column ('id' and `id` both become `t`.`id`) would
      * overwrite each other in one hash, so a repeated key starts a new hash: every
@@ -577,7 +610,7 @@ class SQLBuilder
         $table = $this->connection->quote_name($this->table ?? '');
 
         foreach ($hash as $key => $value) {
-            $k = $this->is_qualified_key((string) $key) ? (string) $key : $table . '.' . $this->connection->quote_name($key);
+            $k = $this->is_qualified_key((string) $key) || !$this->names_model_column((string) $key) ? (string) $key : $table . '.' . $this->connection->quote_name($key);
 
             if (array_key_exists($k, $new)) {
                 $hashes[] = $new;
@@ -608,6 +641,28 @@ class SQLBuilder
         }
 
         return count(Connection::split_name_parts($key, $q) ?? []) > 1;
+    }
+
+    /**
+     * Whether an unqualified hash-condition key names a column of the model (see
+     * qualify_hash_keys()). A single pre-quoted identifier is read by its text. Every key
+     * does until the model's columns are given.
+     */
+    private function names_model_column(string $key): bool
+    {
+        if (null === $this->model_columns) {
+            return true;
+        }
+
+        $q = $this->connection::$QUOTE_CHARACTER;
+        $parts = str_contains($key, $q) ? Connection::split_name_parts($key, $q) : null;
+
+        // `a``b` is the identifier a`b
+        if (null !== $parts && 1 === count($parts) && $parts[0][1]) {
+            $key = str_replace($q . $q, $q, substr($parts[0][0], 1, -1));
+        }
+
+        return isset($this->model_columns[$this->fold_column_names ? strtolower($key) : $key]);
     }
 
     /**

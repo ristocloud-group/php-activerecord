@@ -238,7 +238,8 @@ across clock-skewed hosts can expire entries early or late.
 In a conditions hash (`['conditions' => ['name' => 'Tito']]`, also for `update_all` / `delete_all`) every key is a
 column name, always quoted as identifiers and never spliced in as SQL. A key may name its table (`'books.name'`, e.g.
 with `joins`), and a partly quoted name is quoted part by part (`` '`books`.name' `` → `` `books`.`name` ``); with
-`joins` an unqualified key gets the model's table. Keys that name the same column (`'id'`, `` '`id`' ``, `'books.id'`,
+`joins` an unqualified key that names a column of the model gets the model's table, and any other one (a column of a
+joined table) stays as written. Keys that name the same column (`'id'`, `` '`id`' ``, `'books.id'`,
 and in `find` / `all` / `first` / `last` an `$alias_attribute` name and its column) are all kept and ANDed. An
 attribute name whose column is named differently is mapped to that column, also for `update_all` / `delete_all` (and
 for the keys of an `update_all` `set` hash and of `upsert`): `'space_name'` → `space name`, `'dash_name'` →
