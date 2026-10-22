@@ -1526,13 +1526,18 @@ class Model
     }
 
     /**
-     * Updates a model's timestamps.
+     * Updates a model's timestamps: updated_at on every save, created_at on the first one.
+     * Does nothing while the timestamps of the model's class are suspended, see {@link without_timestamps()}.
      *
      * @return void
      */
     public function set_timestamps()
     {
-        $now = date('Y-m-d H:i:s');
+        if (Timestamps::suspended(static::class)) {
+            return;
+        }
+
+        $now = Timestamps::now();
 
         // isset() also sees a delegate of the same name (#54): only the model's own timestamps are set
         if (isset($this->updated_at) && $this->resolves_locally('updated_at')) {
@@ -1542,6 +1547,27 @@ class Model
         if (isset($this->created_at) && $this->resolves_locally('created_at') && $this->is_new_record()) {
             $this->created_at = $now;
         }
+    }
+
+    /**
+     * Runs $fn without this model class's timestamps, and returns what $fn returns: while it runs,
+     * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at.
+     *
+     * <code>
+     * $author = Author::without_timestamps(fn() => Author::create(['name' => 'Tito']));
+     * </code>
+     *
+     * Calls nest: the class stays suspended until the outermost one returns. The suspension ends
+     * when $fn does, also when it throws. It is for this class only: not for another model of the
+     * same table, nor for a subclass or a parent class.
+     *
+     * @template TResult
+     * @param callable(): TResult $fn
+     * @return TResult What $fn returns
+     */
+    public static function without_timestamps(callable $fn): mixed
+    {
+        return Timestamps::suspend(static::class, $fn);
     }
 
     /**
