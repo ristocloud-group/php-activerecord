@@ -2173,12 +2173,7 @@ class Model
         $options = self::finder_conditions_from_args(func_get_args());
         $options['select'] = 'COUNT(*)';
 
-        $table = static::table();
-        $sql = $table->options_to_sql($options);
-        $values = $table->format_date_bind_values($sql->get_where_values());
-        $row = static::connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
-
-        return false === $row ? 0 : $row[0];
+        return Query::from_options(static::table(), $options)->legacy_count();
     }
 
     /**

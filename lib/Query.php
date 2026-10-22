@@ -9,8 +9,9 @@ namespace ActiveRecord;
 /**
  * One query on one model class, and the engine that turns it into SQL.
  *
- * It holds a QueryState, which QueryCompiler renders as a SQLBuilder. The legacy entries
- * (find, count, exists, ...) hand it their options array through from_options().
+ * It holds a QueryState, which QueryCompiler renders as a SQLBuilder, and runs that statement
+ * through its terminals (get, exists, ...). The legacy entries (find, count, exists, ...) hand it
+ * their options array through from_options().
  *
  * @template TModel of Model
  * @package ActiveRecord
@@ -66,6 +67,60 @@ class Query
     public function state(): QueryState
     {
         return $this->state;
+    }
+
+    /**
+     * Runs the query and returns the models of the rows it selects, through Table::find_by_sql().
+     * The legacy options 'readonly' (the models are readonly) and 'include' (the relationships to
+     * eager load) apply.
+     *
+     * @return list<TModel>
+     */
+    public function get(): array
+    {
+        $options = $this->state->legacy ?? [];
+        $sql = $this->to_sql_builder();
+        $readonly = array_key_exists('readonly', $options) && $options['readonly'];
+        $includes = array_key_exists('include', $options) ? $options['include'] : null;
+
+        /** @var list<TModel> $models */
+        $models = $this->table()->find_by_sql($sql->to_s(), $sql->get_where_values(), $readonly, $includes);
+
+        return $models;
+    }
+
+    /**
+     * Whether any row matches, without counting: the adapter's EXISTS() over the SELECT, which stops
+     * at the first row. The statement that ran is left in Table::$last_sql.
+     */
+    public function exists(): bool
+    {
+        $table = $this->table();
+        $conn = $table->connection();
+        $sql = $this->to_sql_builder();
+        $values = $table->format_date_bind_values($sql->get_where_values());
+        $statement = $conn->exists_sql($sql->to_s());
+        $table->last_sql = $statement;
+
+        return (bool) (int) $conn->query_and_fetch_one($statement, $values);
+    }
+
+    /**
+     * The execution of Model::count(), moved here: the SELECT of the legacy options is run (count()
+     * has them select COUNT(*)) and the first column of its first row is returned, 0 when it
+     * returns none (#34). A grouped count is that of the first group. Unlike exists(), it leaves
+     * Table::$last_sql alone, as count() always did.
+     *
+     * @internal Serves Model::count(); not a supported API.
+     */
+    public function legacy_count(): int|string
+    {
+        $table = $this->table();
+        $sql = $this->to_sql_builder();
+        $values = $table->format_date_bind_values($sql->get_where_values());
+        $row = $table->connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
+
+        return false === $row ? 0 : $row[0];
     }
 
     private function table(): Table

@@ -251,32 +251,25 @@ class Table
     }
 
     /**
+     * The models the options select, found by the Query engine.
+     *
      * @param array<string, mixed> $options
      * @return list<Model>
      */
     public function find($options)
     {
-        $sql = $this->options_to_sql($options);
-        $readonly = (array_key_exists('readonly', $options) && $options['readonly']) ? true : false;
-        $eager_load = array_key_exists('include', $options) ? $options['include'] : null;
-
-        return $this->find_by_sql($sql->to_s(), $sql->get_where_values(), $readonly, $eager_load);
+        return Query::from_options($this, $options)->get();
     }
 
     /**
      * Whether any row matches $options, without counting: emits an EXISTS query
-     * that stops at the first matching row.
+     * that stops at the first matching row, run by the Query engine.
      *
      * @param array<string, mixed> $options
      */
     public function exists($options): bool
     {
-        $conn = $this->connection();
-        $sql = $this->options_to_sql($options);
-        $values = $this->format_date_bind_values($sql->get_where_values());
-        $this->last_sql = $conn->exists_sql($sql->to_s());
-
-        return (bool) (int) $conn->query_and_fetch_one($this->last_sql, $values);
+        return Query::from_options($this, $options)->exists();
     }
 
     /**
