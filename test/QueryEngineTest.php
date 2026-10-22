@@ -27,6 +27,28 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same($options, Query::from_options(Author::table(), $options)->state()->legacy);
     }
 
+    // QueryCompiler::compile_legacy() rewrites the options it is given (a string of conditions
+    // becomes a list, joins add a select) and hands the conditions to Table::map_names() by
+    // reference. It does so on its own copy: the query still holds what it was given, and every
+    // compile is a new SQLBuilder.
+    public function test_compiling_leaves_the_legacy_options_untouched(): void
+    {
+        foreach ([
+            ['conditions' => ['name' => 'Tito']],
+            ['conditions' => "name = 'Tito'"],
+            ['joins' => ['books'], 'conditions' => ['name' => 'Tito']],
+        ] as $options) {
+            $query = Query::from_options(Author::table(), $options);
+
+            $first = $query->to_sql_builder();
+            $second = $query->to_sql_builder();
+
+            $this->assert_not_same($first, $second);
+            $this->assert_same($first->to_s(), $second->to_s());
+            $this->assert_same($options, $query->state()->legacy);
+        }
+    }
+
     public function test_a_query_without_options_selects_every_row(): void
     {
         $builder = (new Query(Author::class))->to_sql_builder();
@@ -124,5 +146,46 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_sql_has('EXISTS(', $given->last_sql);
 
         $this->assert_null(Author::table()->last_sql);
+    }
+
+    // Spec §6.2.1: only find() read an alias_attribute name; count() and exists() read it too
+    public function test_count_and_exists_resolve_aliases_like_find(): void
+    {
+        $this->assert_same(1, Venue::count(['conditions' => ['marquee' => 'Warner Theatre']]));
+        $this->assert_true(Venue::exists(['conditions' => ['marquee' => 'Warner Theatre']]));
+    }
+
+    public function test_the_models_aliases_are_the_default_and_explicit_names_win(): void
+    {
+        $table = Venue::table();
+
+        // no 'mapped_names': the model's $alias_attribute
+        $this->assert_sql_has('WHERE name=?', $table->options_to_sql(['conditions' => ['marquee' => 'x']])->to_s());
+        // given, they replace it: an empty map reads no alias, another maps as it says
+        $this->assert_sql_has('WHERE marquee=?', $table->options_to_sql(['conditions' => ['marquee' => 'x'], 'mapped_names' => []])->to_s());
+        $this->assert_sql_has('WHERE city=?', $table->options_to_sql(['conditions' => ['marquee' => 'x'], 'mapped_names' => ['marquee' => 'city']])->to_s());
+    }
+
+    // An alias named like the pk column must not move the pk: a finder names the pk as the column
+    // itself, whichever alias default the conditions are read with.
+    public function test_a_pk_is_never_read_through_an_alias(): void
+    {
+        // author_id is an alias of name in this model: 1 Tito, 2 George W. Bush
+        $this->assert_same('Tito', AliasedPkAuthor::find(1)->name);
+        $names = array_map(fn($author) => $author->name, AliasedPkAuthor::find(1, 2));
+        sort($names);
+        $this->assert_same(['George W. Bush', 'Tito'], $names);
+        $this->assert_same(1, (int) AliasedPkAuthor::count(1));
+        $this->assert_true(AliasedPkAuthor::exists(1));
+
+        // a hash left before an options hash is no conditions: the first argument alone is the pk
+        $this->assert_same(1, (int) AliasedPkAuthor::count(1, ['name' => 'nobody'], ['readonly' => true]));
+        $this->assert_true(AliasedPkAuthor::exists(1, ['name' => 'nobody'], ['readonly' => true]));
+
+        // the conditions of the call do read the alias, beside the pk
+        $this->assert_same(1, (int) AliasedPkAuthor::count(1, ['conditions' => ['author_id' => 'Tito']]));
+        $this->assert_same(0, (int) AliasedPkAuthor::count(2, ['conditions' => ['author_id' => 'Tito']]));
+        $this->assert_same(1, (int) AliasedPkAuthor::count(['author_id' => 'Tito']));
+        $this->assert_same('Tito', AliasedPkAuthor::find(1, ['conditions' => ['author_id' => 'Tito']])->name);
     }
 }

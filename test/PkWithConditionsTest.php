@@ -254,11 +254,13 @@ class PkWithConditionsTest extends DatabaseTest
         $this->assert_true(Author::exists(1, ['name' => 'George W. Bush'], ['readonly' => true]));
     }
 
-    public function test_count_and_exists_do_not_map_alias_keys()
+    public function test_count_and_exists_map_alias_keys()
     {
-        // as for conditions-only count()/exists() (#144): an alias is no column there
-        $this->expect_exception(ActiveRecord\DatabaseException::class);
-        Venue::count(2, ['marquee' => 'Warner Theatre']);
+        // as find() maps them (#144): an alias names its column, and the pk is ANDed with it
+        $this->assert_same(1, (int) Venue::count(2, ['marquee' => 'Warner Theatre']));
+        $this->assert_same(0, (int) Venue::count(1, ['marquee' => 'Warner Theatre']));
+        $this->assert_true(Venue::exists(2, ['conditions' => ['marquee' => 'Warner Theatre']]));
+        $this->assert_false(Venue::exists(1, ['conditions' => ['marquee' => 'Warner Theatre']]));
     }
 
     public function test_the_callers_options_are_not_changed()

@@ -28,7 +28,8 @@ final class QueryCompiler
      * The SELECT a legacy options array describes: the body Table::options_to_sql() had before
      * the engine took it over, moved as it was (its calls into Table go through $this->table), so
      * that every legacy entry sends the same SQL and the same bind values. Joins come before
-     * conditions, so a hash's keys get qualified (#35).
+     * conditions, so a hash's keys get qualified (#35). A hash's names are read through the
+     * model's aliases (#144), unless the options give the names to map as 'mapped_names'.
      *
      * @param array<string, mixed> $options
      */
@@ -58,8 +59,9 @@ final class QueryCompiler
 
                 call_user_func_array([$sql,'where'], $options['conditions']);
             } else {
-                // aliases (when given) and attribute names become column names (#92)
-                $mapped_names = empty($options['mapped_names']) ? [] : $options['mapped_names'];
+                // aliases and attribute names become column names (#92): the model's aliases,
+                // unless the options give the names to map (an empty list maps no alias)
+                $mapped_names = $options['mapped_names'] ?? $this->alias_attributes();
                 $hashes = $this->table->map_names($options['conditions'], $mapped_names);
 
                 if (1 === count($hashes)) {
@@ -91,5 +93,18 @@ final class QueryCompiler
         }
 
         return $sql;
+    }
+
+    /**
+     * The model's $alias_attribute: the names a hash of conditions can use for its columns.
+     *
+     * @return array<string, string>
+     */
+    private function alias_attributes(): array
+    {
+        /** @var class-string<Model> $model_class */
+        $model_class = $this->table->class->name;
+
+        return $model_class::$alias_attribute;
     }
 }

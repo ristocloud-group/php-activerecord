@@ -240,7 +240,9 @@ class Table
     }
 
     /**
-     * The SELECT the options describe, built by the Query engine.
+     * The SELECT the options describe, built by the Query engine. A hash of conditions has its
+     * names mapped to columns through the model's $alias_attribute, unless the options give
+     * the names to map as 'mapped_names'.
      *
      * @param array<string, mixed> $options
      * @return SQLBuilder

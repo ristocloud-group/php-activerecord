@@ -81,14 +81,10 @@
     ],
     "count_alias_hash": [
         {
-            "sql": "SELECT COUNT(*) FROM \"venues\" WHERE \"marquee\"=?",
+            "sql": "SELECT COUNT(*) FROM \"venues\" WHERE \"name\"=?",
             "values": [
                 "Warner Theatre"
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42703]: Undefined column: 7 ERROR:  column \"marquee\" does not exist"
         }
     ],
     "count_bare_hash": [
@@ -197,14 +193,10 @@
     ],
     "exists_alias_hash": [
         {
-            "sql": "SELECT EXISTS(SELECT 1 FROM \"venues\" WHERE \"marquee\"=?)::int",
+            "sql": "SELECT EXISTS(SELECT 1 FROM \"venues\" WHERE \"name\"=?)::int",
             "values": [
                 "Warner Theatre"
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42703]: Undefined column: 7 ERROR:  column \"marquee\" does not exist"
         }
     ],
     "exists_conditions": [
