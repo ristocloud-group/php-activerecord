@@ -43,9 +43,10 @@ final class QueryCompiler
             $sql->joins($this->table->create_joins($options['joins']));
 
             // a 'from' replaces the model's table by another, whose columns are not known here:
-            // every key keeps naming it, as it always did
+            // every key keeps naming it, as it always did. Otherwise the columns of the model
+            // name it, and so do the ones every table has but its schema never lists (rowid, ...)
             if (!array_key_exists('from', $options)) {
-                $sql->qualify_hash_keys(array_keys($this->table->columns));
+                $sql->qualify_hash_keys([...array_keys($this->table->columns), ...$this->table->connection()->pseudo_columns()]);
             }
 
             // by default, an inner join will not fetch the fields from the joined table

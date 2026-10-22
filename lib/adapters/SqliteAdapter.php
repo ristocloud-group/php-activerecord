@@ -99,6 +99,17 @@ class SqliteAdapter extends Connection
         return $this->query("pragma table_info($table)");
     }
 
+    /**
+     * The three names of a table's rowid.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @return list<string>
+     */
+    public function pseudo_columns(): array
+    {
+        return ['rowid', 'oid', '_rowid_'];
+    }
+
     public function query_for_tables()
     {
         return $this->query("SELECT name FROM sqlite_master");

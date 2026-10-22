@@ -44,6 +44,17 @@ class PgsqlAdapter extends Connection
     }
 
     /**
+     * The system columns of every table.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @return list<string>
+     */
+    public function pseudo_columns(): array
+    {
+        return ['ctid', 'xmin', 'xmax', 'cmin', 'cmax', 'tableoid'];
+    }
+
+    /**
      * Postgres rejects a value that is not an integer when it compares it with an INTEGER
      * column (22P02, which also aborts the open transaction): a string that is not an
      * integer literal (#92). A float is judged by the string it is sent as: 2.0 goes as

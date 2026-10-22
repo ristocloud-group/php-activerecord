@@ -748,6 +748,66 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_sql_has_exact("WHERE {$q}authors{$q}.{$q}name{$q}=?", Author::table()->last_sql);
     }
 
+    // The tests below walk the adapter's own list, so this one pins the list: what the database
+    // documents as on every table (InnoDB's _rowid, SQLite's three names of the rowid, Postgres'
+    // system columns), each of them selectable from a table.
+    public function test_the_adapter_declares_its_pseudo_columns()
+    {
+        $expected = match (true) {
+            $this->conn instanceof ActiveRecord\PgsqlAdapter => ['ctid', 'xmin', 'xmax', 'cmin', 'cmax', 'tableoid'],
+            $this->conn instanceof ActiveRecord\SqliteAdapter => ['rowid', 'oid', '_rowid_'],
+            default => ['_rowid'],
+        };
+
+        $this->assert_equals($expected, $this->conn->pseudo_columns());
+
+        foreach ($expected as $name) {
+            $this->conn->query('SELECT ' . $this->conn->quote_name($name) . ' FROM books');
+        }
+    }
+
+    // Pseudo-columns (_rowid, rowid, ctid, ...) are on every table but in no schema, so they are not
+    // among Table::$columns. With joins a key naming one still gets the base table, as it always
+    // did: unqualified it fails, or is ambiguous with the joined table's own.
+    public function test_joins_qualify_the_pseudo_columns_of_the_adapter()
+    {
+        $names = $this->conn->pseudo_columns();
+        $this->assert_not_empty($names);
+
+        foreach ($names as $name) {
+            $sql = Book::table()->options_to_sql(['joins' => ['author'], 'conditions' => [$name => 1]])->to_s();
+
+            $this->assert_sql_has("WHERE books.$name=?", $sql);
+        }
+
+        // MySQL, MariaDB and SQLite number the rows of Book with its integer key: the comparison runs
+        // and finds book 1. Postgres' system columns have types of their own (ctid is a tid).
+        if (!($this->conn instanceof ActiveRecord\PgsqlAdapter)) {
+            foreach ($names as $name) {
+                $books = Book::all(['joins' => ['author'], 'conditions' => [$name => 1]]);
+
+                $this->assert_equals([1], array_map(fn($book) => $book->book_id, $books), $name);
+            }
+        }
+    }
+
+    // A pseudo-column is matched like any column: regardless of case where the database does, as
+    // 'AUTHOR_ID' is on MySQL, MariaDB and SQLite, and exactly on Postgres.
+    public function test_joins_match_pseudo_column_names_like_column_names()
+    {
+        $this->assert_not_empty($this->conn->pseudo_columns());
+
+        foreach ($this->conn->pseudo_columns() as $name) {
+            $upper = strtoupper($name);
+            $sql = Book::table()->options_to_sql(['joins' => ['author'], 'conditions' => [$upper => 1]])->to_s();
+
+            // on Postgres the upper-case name is another one, no column's: the key stays as written
+            $expected = $this->conn->column_names_are_case_sensitive() ? "WHERE $upper=?" : "WHERE books.$upper=?";
+
+            $this->assert_sql_has($expected, $sql);
+        }
+    }
+
     public function test_qualified_hash_key_in_list_with_null()
     {
         $q = $this->conn::$QUOTE_CHARACTER;

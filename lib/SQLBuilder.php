@@ -51,9 +51,9 @@ class SQLBuilder
     private array $where_values = [];
 
     /**
-     * With joins, the only hash keys that get the table: the model's columns, by name (in lower
-     * case where the database matches column names regardless of case). Null: every unqualified
-     * key gets it. See qualify_hash_keys().
+     * With joins, the only hash keys that get the table: the model's columns and pseudo-columns,
+     * by name (in lower case where the database matches column names regardless of case). Null:
+     * every unqualified key gets it. See qualify_hash_keys().
      *
      * @var array<string, true>|null
      */
@@ -277,8 +277,8 @@ class SQLBuilder
 
     /**
      * With joins, prefix a hash of conditions with the table only where its key names one of
-     * $columns, the model's own: any other key is a column of a joined table, and stays as
-     * written. Without this call every unqualified key is prefixed (#35).
+     * $columns, the model's own (its pseudo-columns included): any other key is a column of a
+     * joined table, and stays as written. Without this call every unqualified key is prefixed (#35).
      *
      * A key names a column the way the database matches it: regardless of case where
      * Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB and SQLite match
@@ -286,7 +286,8 @@ class SQLBuilder
      * this is read when where() applies a hash, so it comes first.
      *
      * @internal Serves QueryCompiler; not a supported API.
-     * @param list<string> $columns the real names of the model's columns
+     * @param list<string> $columns the real names of the model's columns, and the connection's
+     *                              pseudo-columns (see Connection::pseudo_columns())
      */
     public function qualify_hash_keys(array $columns): static
     {
