@@ -182,8 +182,10 @@ class Table
      *
      * The connection is set at construction and only null after drop_connection()
      * (teardown); any query path requires a live connection.
+     *
+     * @internal Serves the Query engine; not a supported API.
      */
-    private function connection(): Connection
+    public function connection(): Connection
     {
         if (null === $this->conn) {
             throw new DatabaseException('No database connection established for ' . $this->class->getName() . '; call reestablish_connection() first.');
@@ -238,68 +240,14 @@ class Table
     }
 
     /**
+     * The SELECT the options describe, built by the Query engine.
+     *
      * @param array<string, mixed> $options
      * @return SQLBuilder
      */
     public function options_to_sql($options)
     {
-        $table = array_key_exists('from', $options) ? $options['from'] : $this->get_fully_qualified_table_name();
-        $sql = new SQLBuilder($this->connection(), $table);
-
-        if (array_key_exists('joins', $options)) {
-            $sql->joins($this->create_joins($options['joins']));
-
-            // by default, an inner join will not fetch the fields from the joined table
-            if (!array_key_exists('select', $options)) {
-                $options['select'] = $this->get_fully_qualified_table_name() . '.*';
-            }
-        }
-
-        if (array_key_exists('select', $options)) {
-            $sql->select($options['select']);
-        }
-
-        if (array_key_exists('conditions', $options)) {
-            if (!is_hash($options['conditions'])) {
-                if (is_string($options['conditions'])) {
-                    $options['conditions'] = [$options['conditions']];
-                }
-
-                call_user_func_array([$sql,'where'], $options['conditions']);
-            } else {
-                // aliases (when given) and attribute names become column names (#92)
-                $mapped_names = empty($options['mapped_names']) ? [] : $options['mapped_names'];
-                $hashes = $this->map_names($options['conditions'], $mapped_names);
-
-                if (1 === count($hashes)) {
-                    $sql->where($hashes[0]);
-                } else {
-                    $sql->where_hashes($hashes);
-                }
-            }
-        }
-
-        if (array_key_exists('order', $options)) {
-            $sql->order($options['order']);
-        }
-
-        if (array_key_exists('limit', $options)) {
-            $sql->limit($options['limit']);
-        }
-
-        if (array_key_exists('offset', $options)) {
-            $sql->offset($options['offset']);
-        }
-
-        if (array_key_exists('group', $options)) {
-            $sql->group($options['group']);
-        }
-
-        if (array_key_exists('having', $options)) {
-            $sql->having($options['having']);
-        }
-
-        return $sql;
+        return Query::from_options($this, $options)->to_sql_builder();
     }
 
     /**
@@ -803,11 +751,12 @@ class Table
      * repeated name starts a new hash: every condition is kept, in order, and the hashes
      * are ANDed. Without a repeated name there is a single hash, as before.
      *
+     * @internal Serves the Query engine; not a supported API.
      * @param array<string, mixed> $hash A hash
      * @param array<string, mixed> $map Hash of used_name => real_name (a model's $alias_attribute, as configured)
      * @return non-empty-list<array<string, mixed>> Hashes with any aliases replaced with their real field name
      */
-    private function map_names(array &$hash, array &$map): array
+    public function map_names(array &$hash, array &$map): array
     {
         $hashes = [];
         $ret = [];
@@ -854,11 +803,12 @@ class Table
     }
 
     /**
+     * @internal Serves the Query engine; not a supported API.
      * @template TKey of int|string
      * @param array<TKey, mixed>|null $hash
      * @return ($hash is null ? null : array<TKey, mixed>)
      */
-    private function &process_data(?array $hash): ?array
+    public function &process_data(?array $hash): ?array
     {
         if (!$hash) {
             return $hash;
