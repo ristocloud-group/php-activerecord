@@ -2173,7 +2173,7 @@ class Model
         $options = self::finder_conditions_from_args(func_get_args());
         $options['select'] = 'COUNT(*)';
 
-        return Query::from_options(static::table(), $options)->legacy_count();
+        return Query::from_options(static::table(), $options)->legacy_count(static::connection());
     }
 
     /**

@@ -111,14 +111,18 @@ class Query
      * returns none (#34). A grouped count is that of the first group. Unlike exists(), it leaves
      * Table::$last_sql alone, as count() always did.
      *
+     * It runs on $connection when one is given: Model::count() passes static::connection(), a
+     * public static that a subclass can override, so that count() keeps calling that hook as it
+     * always did. Without one it runs on the Table's connection.
+     *
      * @internal Serves Model::count(); not a supported API.
      */
-    public function legacy_count(): int|string
+    public function legacy_count(?Connection $connection = null): int|string
     {
         $table = $this->table();
         $sql = $this->to_sql_builder();
         $values = $table->format_date_bind_values($sql->get_where_values());
-        $row = $table->connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
+        $row = ($connection ?? $table->connection())->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
 
         return false === $row ? 0 : $row[0];
     }

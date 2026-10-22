@@ -58,6 +58,16 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same([1], array_map(fn($a) => $a->author_id, OverridingAuthor::all()));
     }
 
+    // Spec §6.3: Model::connection() is a public static that a subclass can override, and count()
+    // has always run its statement on static::connection().
+    public function test_count_still_calls_the_connection_override(): void
+    {
+        ConnectionCountingAuthor::$connection_calls = 0;
+
+        $this->assert_same(4, (int) ConnectionCountingAuthor::count());
+        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+    }
+
     public function test_get_hydrates_the_models_of_a_legacy_state(): void
     {
         $table = Author::table();
