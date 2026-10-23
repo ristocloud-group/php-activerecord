@@ -428,10 +428,140 @@ class QuerySelectTest extends DatabaseTest
         $this->assert_same(['select 1', 'select 2', 'from'], $query->get_bindings());
 
         $sql = new SQLBuilder($this->conn, 'authors');
-        $sql->where('name = ?', 'where')->from_values(['from'])->select('? AS a', ['select']);
+        $sql->where('name = ?', 'where')->from_values(['from'])->select_values(['select'])->select('? AS a');
 
         $this->assert_same(['select', 'from', 'where'], $sql->select_bind_values());
         $this->assert_same(['where'], $sql->get_where_values());
+    }
+
+    // The values get_bindings() gives are those get() sends: the select's, then the FROM's
+    public function test_get_bindings_are_the_values_get_sends(): void
+    {
+        $query = Book::new_query()
+            ->from_raw('(SELECT * FROM books WHERE book_id > ?) books', [1])
+            ->select('book_id')
+            ->select_raw('book_id * ? AS scaled', [10]);
+        $books = [];
+
+        $statements = GoldenStatements::capture(function () use ($query, &$books): void {
+            $books = $query->get();
+        });
+
+        $this->assert_same([10, 1], $query->get_bindings());
+        $this->assert_same([['sql' => $query->to_sql(), 'values' => $query->get_bindings()]], $statements);
+        $this->assert_same([20], array_map(fn(Book $book): int => (int) $book->scaled, $books));
+    }
+
+    // SQLBuilder is public, and a consumer's subclass that overrides select($select) must still load:
+    // the binds of the select come through select_values(), and select() keeps its parameters
+    public function test_sql_builder_select_keeps_its_signature(): void
+    {
+        $select = new ReflectionMethod(SQLBuilder::class, 'select');
+        $parameters = $select->getParameters();
+
+        $this->assert_same(['select'], array_map(fn(ReflectionParameter $parameter): string => $parameter->getName(), $parameters));
+        $this->assert_false($parameters[0]->hasType());
+        $this->assert_false($parameters[0]->isOptional());
+        $this->assert_false($parameters[0]->isPassedByReference());
+        $this->assert_false($select->hasReturnType());
+    }
+
+    // -- names refused, and how AS parts a name from its alias
+
+    // Spec §5.7: an empty name is refused at the call, which names the method, the model and the input,
+    // and the query is left as it was
+    public function test_empty_names_are_refused_at_the_call(): void
+    {
+        $query = Author::new_query()->select('name');
+
+        foreach ([
+            ["Empty alias: 'name as ' in select() on Author", fn() => $query->select('name as ')],
+            ["Empty column name: ' as n' in select() on Author", fn() => $query->select(' as n')],
+            ["Empty column name: '' in select() on Author", fn() => $query->select('')],
+            ["Empty column name: '  ' in add_select() on Author", fn() => $query->add_select(['author_id', '  '])],
+            ["Empty table name: '' in from() on Author", fn() => $query->from('')],
+            ["Empty table name: ' as a' in from() on Author", fn() => $query->from(' as a')],
+            ["Empty alias: 'authors as ' in from() on Author", fn() => $query->from('authors as ')],
+            ["Empty alias: '' in from() on Author", fn() => $query->from('authors', '')],
+            ["Empty table name: '' in from() on Author", fn() => $query->from('', 'a')],
+        ] as [$message, $call]) {
+            $this->assert_exception_message_contains($message, $call, ActiveRecordException::class);
+        }
+
+        $this->assert_same('SELECT ' . $this->quoted('name') . ' FROM ' . $this->quoted('authors'), $query->to_sql());
+    }
+
+    // AS parts a name from its alias only with whitespace on each side, and only outside a quoted
+    // identifier, in which a doubled quote is a quote
+    public function test_as_parts_an_alias_only_between_whitespace_and_outside_quotes(): void
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+
+        $this->assert_same('SELECT ' . $this->quoted('canvas') . ' FROM ' . $this->quoted('canvas'), Book::new_query()->select('canvas')->from('canvas')->to_sql());
+        $this->assert_same('SELECT ' . $this->quoted('gas') . ' AS ' . $this->quoted('fuel') . ' FROM ' . $this->quoted('books'), Book::new_query()->select('gas as fuel')->to_sql());
+        $this->assert_same(
+            'SELECT ' . $this->quoted('x as y') . ' FROM ' . $this->quoted('my as table'),
+            Book::new_query()->select($this->quoted('x as y'))->from($this->quoted('my as table'))->to_sql()
+        );
+        $this->assert_same(
+            'SELECT ' . $this->quoted('x as y') . ' AS ' . $this->quoted('z') . ' FROM ' . $this->quoted('my as table') . ' AS ' . $this->quoted('t'),
+            Book::new_query()->select($this->quoted('x as y') . ' as z')->from($this->quoted('my as table') . ' as t')->to_sql()
+        );
+        // a doubled quote does not close the identifier: " as b" is inside it
+        $this->assert_same('SELECT ' . "{$q}a{$q}{$q} as b{$q}" . ' FROM ' . $this->quoted('books'), Book::new_query()->select("{$q}a{$q}{$q} as b{$q}")->to_sql());
+        $this->assert_same('SELECT ' . "{$q}a{$q}{$q}b{$q}" . ' AS ' . $this->quoted('c') . ' FROM ' . $this->quoted('books'), Book::new_query()->select("{$q}a{$q}{$q}b{$q} as c")->to_sql());
+    }
+
+    // A table has no * form: every part of the name of a table is quoted
+    public function test_from_quotes_every_part_of_a_table(): void
+    {
+        $this->assert_same('SELECT * FROM ' . $this->quoted('*'), Book::new_query()->from('*')->to_sql());
+        $this->assert_same('SELECT * FROM ' . $this->quoted('library', '*'), Book::new_query()->from('library.*')->to_sql());
+    }
+
+    // The one reading of a table reference, which from() takes, and the tables of joins will
+    public function test_a_table_reference_is_its_table_its_alias_and_their_sql(): void
+    {
+        $compiler = new QueryCompiler(Book::table());
+        $books_as_b = ['table' => 'books', 'alias' => 'b', 'sql' => $this->quoted('books') . ' AS ' . $this->quoted('b'), 'name' => $this->quoted('b')];
+
+        $this->assert_same($books_as_b, $compiler->table_reference('books as b', null, 'from'));
+        $this->assert_same($books_as_b, $compiler->table_reference('books', 'b', 'join'));
+        $this->assert_same(
+            ['table' => 'library.books', 'alias' => null, 'sql' => $this->quoted('library', 'books'), 'name' => $this->quoted('library', 'books')],
+            $compiler->table_reference('library.books', null, 'from')
+        );
+        // given an alias, the table is taken as written
+        $this->assert_same(
+            ['table' => 'books as b', 'alias' => 'x', 'sql' => $this->quoted('books as b') . ' AS ' . $this->quoted('x'), 'name' => $this->quoted('x')],
+            $compiler->table_reference('books as b', 'x', 'from')
+        );
+        $this->assert_exception_message_contains("Empty alias: 'authors as ' in join() on Book", fn() => $compiler->table_reference('authors as ', null, 'join'), ActiveRecordException::class);
+    }
+
+    // A state holds legacy options or the builder's clauses, never both: the engine refuses to compile
+    // the one and drop the other. No public call builds such a state.
+    public function test_legacy_options_and_builder_clauses_are_never_compiled_together(): void
+    {
+        $legacy = fn(): Query => Query::from_options(Author::table(), ['conditions' => ['name' => 'Tito']]);
+        $this->assert_same(['Tito'], $legacy()->get_bindings());
+
+        foreach ([
+            fn(Query $query) => $query->select('name'),
+            fn(Query $query) => $query->add_select('name'),
+            fn(Query $query) => $query->select_raw('1 AS one'),
+            fn(Query $query) => $query->distinct(),
+            fn(Query $query) => $query->from('authors', 'a'),
+            fn(Query $query) => $query->from_raw('authors a'),
+            function (Query $query): void {
+                $query->state()->joins[] = 'INNER JOIN books ON(books.author_id = authors.author_id)';
+            },
+        ] as $clause) {
+            $query = $legacy();
+            $clause($query);
+
+            $this->assert_exception_message_contains('A query on Author holds both legacy options and builder clauses', fn() => $query->to_sql(), ActiveRecordException::class);
+        }
     }
 
     // to_sql() and get_bindings() describe a legacy query too: its SELECT, and the values of its WHERE

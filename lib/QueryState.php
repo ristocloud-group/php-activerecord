@@ -40,8 +40,9 @@ final class QueryState
     public bool $distinct = false;
 
     /**
-     * The table the builder reads the rows from instead of the model's, as from() names it, and
-     * the alias the statement gives it, if any. Null: the model's table.
+     * The table the builder reads the rows from instead of the model's, and the alias the statement
+     * gives it, if any, as QueryCompiler::table_reference() reads them from from()'s arguments.
+     * Null: the model's table.
      */
     public ?string $from = null;
 

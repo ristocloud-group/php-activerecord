@@ -161,9 +161,10 @@ class SQLBuilder
     }
 
     /**
-     * The bind values of a SELECT, in the order of its clauses: those of the select (see select()),
-     * of the FROM (see from_values()), then of the WHERE (see get_where_values()), whatever the
-     * order of the calls that gave them. A value that is an array gives its elements in its place.
+     * The bind values of a SELECT, in the order of its clauses: those of the select (see
+     * select_values()), of the FROM (see from_values()), then of the WHERE (see get_where_values()),
+     * whatever the order of the calls that gave them. A value that is an array gives its elements in
+     * its place.
      *
      * @return list<mixed>
      */
@@ -275,14 +276,24 @@ class SQLBuilder
 
     /**
      * @param string|null $select
-     * @param array<mixed> $values The values of the bind markers in $select, if any, in order: the
-     *   first values of the statement (see select_bind_values())
      * @return $this
      */
-    public function select($select, array $values = [])
+    public function select($select)
     {
         $this->operation = 'SELECT';
         $this->select = $select;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the select (see select()): the first values of the statement
+     * (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function select_values(array $values): static
+    {
         $this->select_values = array_values($values);
         return $this;
     }

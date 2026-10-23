@@ -35,7 +35,17 @@ class Query
      *
      * @var list<string>
      */
-    public const array FORWARDABLE = ['get', 'select', 'add_select', 'select_raw', 'distinct', 'from', 'from_raw', 'to_sql', 'get_bindings'];
+    public const array FORWARDABLE = [
+        'get',
+        'select',
+        'add_select',
+        'select_raw',
+        'distinct',
+        'from',
+        'from_raw',
+        'to_sql',
+        'get_bindings',
+    ];
 
     private QueryState $state;
 
@@ -113,9 +123,9 @@ class Query
      * names. Every clause of the builder reads a name by one rule (see QueryCompiler::column()): an
      * alias or an attribute name of the model names its column, with joins a column of the model gets
      * its table, and "table.column" and "table.*" are quoted as written. "name as alias" (AS in any
-     * case) selects the column under that alias, which names the attribute of the models. Called
-     * without columns, it selects what the query selects by default again: every column, or with joins
-     * every column of the model's rows.
+     * case, outside quotes: see QueryCompiler::aliased_column()) selects the column under that alias,
+     * which names the attribute of the models. Called without columns, it selects what the query
+     * selects by default again: every column, or with joins every column of the model's rows.
      *
      * <code>
      * Author::select('name', 'author_id as id')->get();
@@ -123,7 +133,8 @@ class Query
      *
      * @param string|array<mixed> ...$columns
      * @return $this
-     * @throws ActiveRecordException for a name that is not a string, and the query is left as it was
+     * @throws ActiveRecordException for a name that is not a string, or an empty name or alias, and the
+     *   query is left as it was
      */
     public function select(string|array ...$columns): static
     {
@@ -139,7 +150,8 @@ class Query
      *
      * @param string|array<mixed> ...$columns
      * @return $this
-     * @throws ActiveRecordException for a name that is not a string, and the query is left as it was
+     * @throws ActiveRecordException for a name that is not a string, or an empty name or alias, and the
+     *   query is left as it was
      */
     public function add_select(string|array ...$columns): static
     {
@@ -184,24 +196,24 @@ class Query
 
     /**
      * Reads the rows from $table, quoted part by part (database.table), under the alias $as if one is
-     * given; "table as alias" (AS in any case) gives one too. The rows are still read as the model's: with
-     * joins its columns get the alias, else that table (see QueryCompiler::column()). It replaces a
-     * from_raw().
+     * given; without one, "table as alias" (AS in any case, outside quotes) gives one too (see
+     * QueryCompiler::table_reference()). The rows are still read as the model's: with joins its columns
+     * get the alias, else that table (see QueryCompiler::column()). It replaces a from_raw().
      *
      * <code>
      * Book::from('books', 'b')->select('b.name')->get();
      * </code>
      *
      * @return $this
+     * @throws ActiveRecordException for an empty table name or alias, and the query is left as it was
      */
     public function from(string $table, ?string $as = null): static
     {
-        if (null === $as || '' === $as) {
-            [$table, $as] = self::name_and_alias($table);
-        }
+        // read, and refused if need be, at the call (spec §5.7)
+        $reference = $this->compiler()->table_reference($table, $as, __FUNCTION__);
 
-        $this->state->from = $table;
-        $this->state->from_alias = $as;
+        $this->state->from = $reference['table'];
+        $this->state->from_alias = $reference['alias'];
         $this->state->from_raw = null;
         $this->state->from_bindings = [];
 
@@ -579,15 +591,26 @@ class Query
     }
 
     /**
+     * The compiler of the statements of this query, which also reads what the builder methods are given
+     * (column names, table references) at the call.
+     */
+    private function compiler(): QueryCompiler
+    {
+        return new QueryCompiler($this->table());
+    }
+
+    /**
      * The selects of the columns given to $method, select() or add_select(): each argument a name or an
-     * array of names, each name parted from the alias that "name as alias" gives it.
+     * array of names, each name parted from the alias that "name as alias" gives it (see
+     * QueryCompiler::aliased_column()).
      *
      * @param array<string|array<mixed>> $columns
      * @return list<array{column: string, alias: string|null}>
-     * @throws ActiveRecordException for a name that is not a string
+     * @throws ActiveRecordException for a name that is not a string, or an empty name or alias
      */
     private function column_selects(string $method, array $columns): array
     {
+        $compiler = $this->compiler();
         $selects = [];
 
         foreach ($columns as $column) {
@@ -596,24 +619,10 @@ class Query
                     throw new ActiveRecordException(sprintf('A column name must be a string, not %s, in %s() on %s', get_debug_type($name), $method, $this->model_class));
                 }
 
-                [$name, $alias] = self::name_and_alias($name);
-                $selects[] = ['column' => $name, 'alias' => $alias];
+                $selects[] = $compiler->aliased_column($name, $method);
             }
         }
 
         return $selects;
-    }
-
-    /**
-     * A name and the alias that "name as alias" gives it (AS in any case, between whitespace), or the
-     * name and null.
-     *
-     * @return array{string, string|null}
-     */
-    private static function name_and_alias(string $name): array
-    {
-        $parts = preg_split('/\s+as\s+/i', $name, 2);
-
-        return false !== $parts && 2 === count($parts) ? [$parts[0], $parts[1]] : [$name, null];
     }
 }

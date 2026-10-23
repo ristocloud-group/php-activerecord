@@ -31,10 +31,75 @@ final class QueryCompiler
     /**
      * The SELECT of a state: that of its legacy options when it holds some, as the legacy entries always
      * sent it, else that of the builder's clauses. A state that holds nothing selects every row.
+     *
+     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both: the
+     *   one would be compiled and the other dropped
      */
     public function compile_select(QueryState $state): SQLBuilder
     {
-        return null === $state->legacy ? $this->compile_clauses($state) : $this->compile_legacy($state->legacy);
+        if (null === $state->legacy) {
+            return $this->compile_clauses($state);
+        }
+
+        if (self::holds_clauses($state)) {
+            throw new ActiveRecordException(sprintf('A query on %s holds both legacy options and builder clauses: it compiles the one or the other', $this->table->class->name));
+        }
+
+        return $this->compile_legacy($state->legacy);
+    }
+
+    /**
+     * A table reference of the builder, as from() takes it, and the tables of joins: the table $table
+     * under the alias $as, or when $as is null under the alias that "table as alias" gives it (see
+     * split_alias()); given an alias, the table is taken as written. It returns the table and the
+     * alias; the reference as SQL, the table quoted part by part, every part since a table has no *
+     * form, then " AS " and the alias as one identifier; and the name the reference gives its rows, as
+     * SQL: the alias, else the table.
+     *
+     * @internal Serves Query; not a supported API.
+     * @param string $method The builder method the reference was given to, for the message of the exception
+     * @return array{table: string, alias: string|null, sql: string, name: string}
+     * @throws ActiveRecordException for an empty table name or alias
+     */
+    public function table_reference(string $table, ?string $as, string $method): array
+    {
+        if (null === $as) {
+            $input = $table;
+            [$table, $as] = $this->split_alias($table);
+            $this->refuse_empty('table name', $table, $input, $method);
+            $this->refuse_empty('alias', $as, $input, $method);
+        } else {
+            $this->refuse_empty('table name', $table, $table, $method);
+            $this->refuse_empty('alias', $as, $as, $method);
+        }
+
+        $sql = $this->quote_parts($table, false);
+
+        if (null === $as) {
+            return ['table' => $table, 'alias' => null, 'sql' => $sql, 'name' => $sql];
+        }
+
+        $alias = $this->connection()->quote_name($as);
+
+        return ['table' => $table, 'alias' => $as, 'sql' => "$sql AS $alias", 'name' => $alias];
+    }
+
+    /**
+     * A column as select() takes it: the name, and the alias that "name as alias" gives it, if any (see
+     * split_alias()). The name is read by column() when the statement is compiled.
+     *
+     * @internal Serves Query; not a supported API.
+     * @param string $method The builder method the column was given to, for the message of the exception
+     * @return array{column: string, alias: string|null}
+     * @throws ActiveRecordException for an empty column name or alias
+     */
+    public function aliased_column(string $name, string $method): array
+    {
+        [$column, $alias] = $this->split_alias($name);
+        $this->refuse_empty('column name', $column, $name, $method);
+        $this->refuse_empty('alias', $alias, $name, $method);
+
+        return ['column' => $column, 'alias' => $alias];
     }
 
     /**
@@ -231,7 +296,8 @@ final class QueryCompiler
         }
 
         $columns = [] === $columns ? $this->default_select([] !== $state->joins, $this->rows_name($state)) : implode(', ', $columns);
-        $sql->select(($state->distinct ? 'DISTINCT ' : '') . $columns, $values);
+        $sql->select(($state->distinct ? 'DISTINCT ' : '') . $columns);
+        $sql->select_values($values);
 
         return $sql;
     }
@@ -248,8 +314,8 @@ final class QueryCompiler
     }
 
     /**
-     * The FROM of the builder: from_raw()'s as written, else the table of from(), quoted part by part,
-     * with its alias, else the model's table.
+     * The FROM of the builder: from_raw()'s as written, else the table reference of from() (see
+     * table_reference()), else the model's table.
      */
     private function from_clause(QueryState $state): string
     {
@@ -261,15 +327,14 @@ final class QueryCompiler
             return $this->table->get_fully_qualified_table_name();
         }
 
-        $table = $this->quote_parts($state->from);
-
-        return null === $state->from_alias ? $table : "$table AS " . $this->connection()->quote_name($state->from_alias);
+        return $this->table_reference($state->from, $state->from_alias, 'from')['sql'];
     }
 
     /**
      * The name the statement reads the model's rows under, which qualifies their columns with joins:
-     * the from() alias, else the table from() reads them from, which stands for the model's, else the
-     * model's table, under a raw FROM too (the legacy 'from' option selects its rows by it as well).
+     * the from() alias, else the table from() reads them from, which stands for the model's (see
+     * table_reference()), else the model's table, under a raw FROM too (the legacy 'from' option
+     * selects its rows by it as well).
      */
     private function rows_name(QueryState $state): string
     {
@@ -277,7 +342,18 @@ final class QueryCompiler
             return $this->table->get_fully_qualified_table_name();
         }
 
-        return null === $state->from_alias ? $this->quote_parts($state->from) : $this->connection()->quote_name($state->from_alias);
+        return $this->table_reference($state->from, $state->from_alias, 'from')['name'];
+    }
+
+    /**
+     * Whether a state holds a clause of the builder: a field, other than the legacy options, that is
+     * not as in a new state.
+     */
+    private static function holds_clauses(QueryState $state): bool
+    {
+        $legacy = ['legacy' => true];
+
+        return array_diff_key(get_object_vars($state), $legacy) !== array_diff_key(get_object_vars(new QueryState()), $legacy);
     }
 
     /**
@@ -384,11 +460,12 @@ final class QueryCompiler
     }
 
     /**
-     * A name quoted part by part (#64): each part quoted by Connection::quote_name(), which keeps a part
-     * already quoted as it is, and a last part * left bare (table.*). What is no dotted name of
-     * identifiers, with an empty part or a quote left open, is quoted as one identifier.
+     * A name quoted part by part (#64), each part by Connection::quote_name(), which keeps a part already
+     * quoted as it is. With $keep_star, as in a column reference, a last part * stays bare (table.*); a
+     * table has no such form. What is no dotted name of identifiers, with an empty part or a quote left
+     * open, is quoted as one identifier.
      */
-    private function quote_parts(string $name): string
+    private function quote_parts(string $name, bool $keep_star = true): string
     {
         $connection = $this->connection();
         $parts = $this->name_parts($name);
@@ -402,10 +479,44 @@ final class QueryCompiler
 
         // a quoted part is held with its quotes: a quoted * is a column named *
         foreach ($parts as $i => [$part]) {
-            $quoted[] = $last === $i && '*' === $part ? $part : $connection->quote_name($part);
+            $quoted[] = $keep_star && $last === $i && '*' === $part ? $part : $connection->quote_name($part);
         }
 
         return implode('.', $quoted);
+    }
+
+    /**
+     * A name and the alias that "name as alias" gives it, or the name and null. AS is read in any case,
+     * with whitespace on each side ("canvas" holds none), where it first stands outside a quoted
+     * identifier, in which a doubled quote character is a quote (`x as y` is one name): as in
+     * Eloquent, but for the quotes.
+     *
+     * @return array{string, string|null}
+     */
+    private function split_alias(string $name): array
+    {
+        $connection = $this->connection();
+        $q = preg_quote($connection::$QUOTE_CHARACTER, '/');
+        // what comes before AS: characters other than the quote, and whole quoted identifiers. A doubled
+        // quote reads as one identifier closed and the next opened, with nothing between where AS could
+        // stand, so it needs no case of its own
+        $before = "(?:[^{$q}]|{$q}[^{$q}]*{$q})*?";
+
+        return 1 === preg_match("/\\A($before)\\s+as\\s+(.*)\\z/is", $name, $matches) ? [$matches[1], $matches[2]] : [$name, null];
+    }
+
+    /**
+     * Refuses an empty $what (a column name, a table name, an alias): '' or only whitespace. The
+     * message names $method, the model and $input, the argument it was read from. Null is no alias,
+     * which is not refused.
+     *
+     * @throws ActiveRecordException
+     */
+    private function refuse_empty(string $what, ?string $value, string $input, string $method): void
+    {
+        if (null !== $value && '' === trim($value)) {
+            throw new ActiveRecordException(sprintf("Empty %s: '%s' in %s() on %s", $what, $input, $method, $this->table->class->name));
+        }
     }
 
     /**
