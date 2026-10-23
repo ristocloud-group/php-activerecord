@@ -205,7 +205,9 @@ class Model
      * </code>
      *
      * An alias names its column in a hash of conditions too: find(), count(), exists(),
-     * update_all() and delete_all() read `['alias_first_name' => 'Tito']` alike.
+     * update_all() and delete_all() read `['alias_first_name' => 'Tito']` alike, and so does the
+     * declared `conditions` hash of a relationship whose associated model this is (the target of a
+     * has_many through), in the lazy load and the eager include.
      *
      * An alias may not have the name of a column of the model's own table, by the column's real
      * name or by its attribute name (`space_name` for the column `space name`), nor the name of a

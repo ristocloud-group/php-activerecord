@@ -614,6 +614,15 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * list becomes `col IN(?, ...)`, and a null value becomes `col IS NULL`.
      * A positional/fragment condition is returned unchanged.
      *
+     * The keys of a hash are read as the associated model's finders read them
+     * (#144, spec §6.2.7), the associated model being the one the load finds
+     * (for a `through`, the target): its $alias_attribute keys and its
+     * attribute names name their columns (#92), through
+     * {@see Table::map_names()}. An alias next to the column it stands for
+     * keeps both conditions (#129): each hash map_names() returns is rendered
+     * alike, and they are ANDed with their binds in order. Any other key, a
+     * qualified one included, renders as it always did.
+     *
      * @param array<int|string, mixed> $conditions
      * @return array<int|string, mixed>
      */
@@ -621,8 +630,18 @@ abstract class AbstractRelationship implements InterfaceRelationship
     {
         if (is_hash($conditions)) {
             require_once 'Expressions.php';
-            $expressions = new Expressions($conn, $conditions);
-            return array_merge([$expressions->to_s()], array_flatten($expressions->values()));
+            /** @var class-string<Model> $class */
+            $class = $this->class_name;
+            $aliases = $class::$alias_attribute;
+            $fragments = $values = [];
+
+            foreach ($this->get_table()->map_names($conditions, $aliases) as $hash) {
+                $expressions = new Expressions($conn, $hash);
+                $fragments[] = $expressions->to_s();
+                $values[] = $expressions->values();
+            }
+
+            return array_merge([implode(' AND ', $fragments)], array_flatten($values));
         }
 
         return $conditions;

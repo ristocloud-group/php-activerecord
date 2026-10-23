@@ -251,8 +251,13 @@ expression such as `'LOWER(name)' => 'tito'` is one (unknown) column name, not a
 it: write expressions as a positional condition instead, `['conditions' => ['LOWER(name) = ?', 'tito']]`.
 
 An `$alias_attribute` name stands for its column in the conditions hash of `find` / `all` / `first` / `last`, `count`,
-`exists`, `update_all` and `delete_all` alike: with `'marquee' => 'name'`, `['marquee' => 'Warner Theatre']` reads as
-`name = 'Warner Theatre'`. So that a name is never ambiguous, an alias may not be named like a column of the model's
+`exists`, `update_all` and `delete_all` alike, and in a relationship's declared `conditions` hash: with
+`'marquee' => 'name'`, `['marquee' => 'Warner Theatre']` reads as `name = 'Warner Theatre'`. A relationship's hash reads
+the names of its associated model, the one its load finds (the target of a `has_many … through`): its aliases and its
+attribute names (`'space_name'` for the column `space name`), in the lazy load and the eager `include` alike. An alias
+next to its column's own name keeps both conditions, ANDed, and any other key, a qualified one included, is written as
+before (in a `through`, name a column of the middle table qualified: `'events.title'`). So that a name is never
+ambiguous, an alias may not be named like a column of the model's
 own table, by the column's real name or by its attribute name (`'space_name'` for the column `space name`), nor like a
 column every table has without listing it (`_rowid` on MySQL and MariaDB; `rowid`, `oid` and `_rowid_` on SQLite;
 `ctid`, `xmin`, `xmax`, `cmin`, `cmax` and `tableoid` on Postgres): such a model does not load, and its first use
