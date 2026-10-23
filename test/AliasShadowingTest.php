@@ -106,6 +106,44 @@ class AliasShadowingTest extends DatabaseTest
         );
     }
 
+    // The columns every table has though its schema never lists them (Connection::pseudo_columns(): _rowid on
+    // MySQL and MariaDB; rowid, oid and _rowid_ on SQLite; ctid and the other system columns on Postgres) are
+    // named in a hash condition like any column, so an alias of that name hides one too. The message names the
+    // pseudo-column as the column. The map is set at run time, before the table loads: a declaration names
+    // one pseudo-column, and they differ per connection.
+    public function test_an_alias_named_like_a_pseudo_column_of_the_connection(): void
+    {
+        $this->assert_not_empty($this->conn->pseudo_columns());
+
+        foreach ($this->conn->pseudo_columns() as $name) {
+            SettableAliasAuthor::$alias_attribute = [$name => 'name'];
+
+            $this->assert_same(
+                "SettableAliasAuthor::\$alias_attribute: the alias '$name' has the same name as the column '$name' of table authors; rename the alias",
+                $this->config_error(fn() => SettableAliasAuthor::table()),
+                $name,
+            );
+        }
+    }
+
+    // ... and its name is compared as a column's is: regardless of case on MySQL, MariaDB and SQLite (_ROWID is
+    // _rowid), not on Postgres, where CTID is no name of ctid, and an alias like any other
+    public function test_an_alias_differing_from_a_pseudo_column_only_in_case(): void
+    {
+        $name = $this->conn->pseudo_columns()[0];
+        $alias = strtoupper($name);
+        SettableAliasAuthor::$alias_attribute = [$alias => 'name'];
+
+        if ($this->conn->column_names_are_case_sensitive()) {
+            $this->assert_same(1, (int) SettableAliasAuthor::count([$alias => 'Tito']));
+        } else {
+            $this->assert_same(
+                "SettableAliasAuthor::\$alias_attribute: the alias '$alias' has the same name as the column '$name' of table authors; rename the alias",
+                $this->config_error(fn() => SettableAliasAuthor::table()),
+            );
+        }
+    }
+
     // Every alias that names no column resolves in find, count, exists, update_all and delete_all (§6.2.1)
     public function test_an_alias_naming_no_column_resolves_in_every_hash_condition(): void
     {

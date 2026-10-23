@@ -208,13 +208,14 @@ class Model
      * update_all() and delete_all() read `['alias_first_name' => 'Tito']` alike.
      *
      * An alias may not have the name of a column of the model's own table, by the column's real
-     * name or by its attribute name (`space_name` for the column `space name`): the table does not
-     * load, and the first use of the model throws a ConfigException naming the model, the alias and
-     * the column (#144). Names are compared as the database compares column names: regardless of
-     * case, except on Postgres. The check reads the columns as the table loads. A shadowing column
-     * it does not see, one added to the table afterwards (a long-running process, a stale metadata
-     * cache) or, on SQLite, a generated column (PRAGMA table_info omits it), leaves the alias
-     * winning in every condition; the next load with fresh metadata throws.
+     * name or by its attribute name (`space_name` for the column `space name`), nor the name of a
+     * column every table has without listing it (`rowid` on SQLite, `ctid` on Postgres): the table
+     * does not load, and the first use of the model throws a ConfigException naming the model, the
+     * alias and the column (#144). Names are compared as the database compares column names:
+     * regardless of case, except on Postgres. The check reads the columns as the table loads. A
+     * shadowing column it does not see, one added to the table afterwards (a long-running process,
+     * a stale metadata cache) or, on SQLite, a generated column (PRAGMA table_info omits it),
+     * leaves the alias winning in every condition; the next load with fresh metadata throws.
      *
      * @var array<string, string>
      */

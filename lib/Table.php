@@ -766,11 +766,13 @@ class Table
 
     /**
      * Rejects a model whose $alias_attribute has a key named like a column of this table, by the
-     * column's real name or by its attribute name (#92), so that a name in a hash condition is an
-     * alias or a column whatever the schema holds when the query runs (#144, spec §6.2.6). Names are
-     * compared as the database compares column names (see Connection::column_name_key()): regardless
-     * of case, except on Postgres. An alias key is read as a hash condition reads a key (see
-     * Connection::column_reference_key()): a single pre-quoted identifier by its text.
+     * column's real name or by its attribute name (#92), or like a pseudo-column, one every table has
+     * though its schema never lists it (see Connection::pseudo_columns()), so that a name in a hash
+     * condition is an alias or a column whatever the schema holds when the query runs (#144, spec
+     * §6.2.6). Names are compared as the database compares column names (see
+     * Connection::column_name_key()): regardless of case, except on Postgres. An alias key is read as
+     * a hash condition reads a key (see Connection::column_reference_key()): a single pre-quoted
+     * identifier by its text.
      *
      * It reads the columns as get_meta_data() found them. A shadowing column that is not among them,
      * one added to the table after it loaded (a long-running process, a stale metadata cache) or a
@@ -797,6 +799,12 @@ class Table
         foreach ($this->columns as $column) {
             $real_names[$conn->column_name_key($column->name)] ??= $column->name;
             $real_names[$conn->column_name_key($column->inflected_name)] ??= $column->name;
+        }
+
+        // a hash names a pseudo-column as it names the table's own columns: with joins it gets the table too
+        // (spec §6.1)
+        foreach ($conn->pseudo_columns() as $name) {
+            $real_names[$conn->column_name_key($name)] ??= $name;
         }
 
         foreach (array_keys($aliases) as $alias) {

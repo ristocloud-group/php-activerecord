@@ -836,9 +836,10 @@ abstract class Connection
 
     /**
      * Columns every table has that schema introspection never lists; with joins a hash key
-     * naming one is qualified like a model column (spec §6.1). None by default.
+     * naming one is qualified like a model column (spec §6.1), and an $alias_attribute key may
+     * not be named like one (spec §6.2.6). None by default.
      *
-     * @internal Serves QueryCompiler; not a supported API.
+     * @internal Serves QueryCompiler and Table; not a supported API.
      * @return list<string>
      */
     public function pseudo_columns(): array

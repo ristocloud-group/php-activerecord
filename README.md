@@ -253,9 +253,11 @@ it: write expressions as a positional condition instead, `['conditions' => ['LOW
 An `$alias_attribute` name stands for its column in the conditions hash of `find` / `all` / `first` / `last`, `count`,
 `exists`, `update_all` and `delete_all` alike: with `'marquee' => 'name'`, `['marquee' => 'Warner Theatre']` reads as
 `name = 'Warner Theatre'`. So that a name is never ambiguous, an alias may not be named like a column of the model's
-own table, by the column's real name or by its attribute name (`'space_name'` for the column `space name`): such a
-model does not load, and its first use throws `ActiveRecord\ConfigException`, naming the model, the alias and the
-column. Names are compared as the database compares column names, regardless of case, except on Postgres
+own table, by the column's real name or by its attribute name (`'space_name'` for the column `space name`), nor like a
+column every table has without listing it (`_rowid` on MySQL and MariaDB; `rowid`, `oid` and `_rowid_` on SQLite;
+`ctid`, `xmin`, `xmax`, `cmin`, `cmax` and `tableoid` on Postgres): such a model does not load, and its first use
+throws `ActiveRecord\ConfigException`, naming the model, the alias and the column. Names are compared as the
+database compares column names, regardless of case, except on Postgres
 (`'Author_Id'` is the column `author_id` on MySQL, MariaDB and SQLite, not on Postgres). The check reads the columns as
 the table loads, so a shadowing column it does not see (one added to the table afterwards, in a long-running process or
 behind a stale schema cache, or on SQLite a generated column, which `PRAGMA table_info` omits) leaves the alias winning
