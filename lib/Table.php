@@ -537,7 +537,7 @@ class Table
         $data = $this->process_data($data);
 
         // null (no row) is an empty row, which the engine rejects as it rejects anything but a hash
-        return Query::from_options($this, [])->execute_insert($data ?: [], $pk, $sequence_name, $returning, $timestamps);
+        return Query::for_table($this)->execute_insert($data ?: [], $pk, $sequence_name, $returning, $timestamps);
     }
 
     /**
@@ -663,6 +663,16 @@ class Table
     }
 
     /**
+     * UPDATEs the rows of $where with $data through the Query engine, and returns the statement,
+     * which is left in $last_sql. It is the UPDATE of a save(), whose model sets its own timestamps
+     * (Model::set_timestamps()): the engine adds none, also when it is called directly.
+     *
+     * $data is taken by reference and comes back under the names it was given, its DateTime values
+     * formatted for the database. Its keys and those of a $where hash name the columns (#92), as
+     * attribute or column names, never through an alias: a pk is not aliased. A DateTime of the
+     * $where hash is bound in the format of its column, and two of its keys naming one column both
+     * stay conditions. Anything else as $where is the one argument of a condition, as before.
+     *
      * @param array<string, mixed> $data
      * @param array<string, mixed>|string $where
      * @return mixed
@@ -676,41 +686,33 @@ class Table
             $where = $this->process_data($where);
         }
 
-        // the statement names the columns; $data keeps its attribute names for the caller (#92)
-        $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-        // anything but a hash (null: nothing to write) goes to SQLBuilder as before, which rejects it
-        $sql->update(is_hash($data) ? $this->real_column_keys($data) : $data);
+        $conditions = is_array($where) && is_hash($where) ? $where : [$where];
 
-        // two keys naming one column both stay conditions
-        if (is_array($where) && is_hash($where)) {
-            $sql->where_hashes($this->condition_hashes($where));
-        } else {
-            $sql->where($where);
-        }
-
-        $values = $sql->bind_values();
-        return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
+        // the engine sends the values as they are prepared here. Null (nothing to write) is an empty
+        // set, which it rejects as it rejects anything but a hash
+        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])
+            ->execute_update($data ?: [], timestamps: false, format_dates: false);
     }
 
     /**
+     * DELETEs the rows of $data, a pk hash, through the Query engine, and returns the statement,
+     * which is left in $last_sql: the DELETE of Model::delete().
+     *
+     * The keys of $data name the columns (#92), as attribute or column names, never through an
+     * alias: a pk is not aliased. A DateTime of it is bound in the format of its column, and two of
+     * its keys naming one column both stay conditions. Anything but a hash is the one argument of a
+     * condition, as before.
+     *
      * @param array<string, mixed> $data
      * @return mixed
      */
     public function delete($data)
     {
         $data = $this->process_data($data);
+        $conditions = is_hash($data) ? $data : [$data];
 
-        $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-
-        // the WHERE names the columns (#92); two keys naming one column both stay conditions
-        if (is_hash($data)) {
-            $sql->delete()->where_hashes($this->condition_hashes($data));
-        } else {
-            $sql->delete($data);
-        }
-
-        $values = $sql->bind_values();
-        return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
+        // the engine sends the values as they are prepared here
+        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])->execute_delete(format_dates: false);
     }
 
     /**

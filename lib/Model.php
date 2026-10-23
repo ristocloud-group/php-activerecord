@@ -1106,7 +1106,8 @@ class Model
      * An options array takes the following parameters:
      *
      * <ul>
-     * <li><b>conditions:</b> Conditions using a string/hash/array</li>
+     * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
+     * $alias_attribute, as find() reads them</li>
      * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1123,35 +1124,9 @@ class Model
     public static function delete_all($options = [])
     {
         $options = self::bulk_write_options($options, 'delete_all');
-        $table = static::table();
-        $conn = static::connection();
-        $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        $conditions = $options['conditions'] ?? null;
-
-        if (is_array($conditions) && !is_hash($conditions)) {
-            call_user_func_array([$sql, 'delete'], $conditions);
-        } elseif (is_hash($conditions)) {
-            // the keys name the columns (#92); two keys naming one column both stay conditions
-            $sql->delete()->where_hashes($table->condition_hashes($conditions));
-        } else {
-            $sql->delete($conditions);
-        }
-
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
-        }
-
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
-        }
-
-        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
-        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
-
-        $values = $table->format_date_bind_values($sql->bind_values());
-        $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
-        return $ret->rowCount();
+        // on the connection it always took, the hook a subclass can override
+        return self::bulk_write_query($options)->execute_delete(connection: static::connection())->rowCount();
     }
 
     /**
@@ -1171,11 +1146,16 @@ class Model
      * YourModel::update_all(['set' => 'name = "Bob"']);
      * </code>
      *
+     * A 'set' hash also sets updated_at to the current time when the table has that column and the
+     * hash gives it no value; without_timestamps() suspends that. A 'set' string is sent as it is
+     * written, and sets nothing more.
+     *
      * An options array takes the following parameters:
      *
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with</li>
-     * <li><b>conditions:</b> Conditions using a string/hash/array</li>
+     * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
+     * $alias_attribute, as find() reads them</li>
      * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1185,49 +1165,48 @@ class Model
      *
      * @param array<string, mixed> $options
      * @return int Number of rows affected
-     * @throws ActiveRecordException before any SQL: when $options is not an array or has no
-     *   'set' ("Updating requires a hash or string."), is a positional list ("Invalid options
-     *   for update_all(): pass positional conditions as ['conditions' => [...]]"), or has a key
-     *   beside 'set' that is not an option, such as a column name ("Unknown key(s): ...")
+     * @throws ActiveRecordException before any SQL: when $options is not an array, has no 'set',
+     *   or its 'set' is neither a non-empty hash nor a string ("Updating requires a hash or
+     *   string."), is a positional list ("Invalid options for update_all(): pass positional
+     *   conditions as ['conditions' => [...]]"), or has a key beside 'set' that is not an option,
+     *   such as a column name ("Unknown key(s): ...")
      */
     public static function update_all($options = [])
     {
         $options = self::bulk_write_options($options, 'update_all');
-        $table = static::table();
-        $conn = static::connection();
-        $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
-
-        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138);
-        // the keys name the columns (#92)
         $set = $options['set'];
-        $sql->update(is_array($set) ? $table->format_date_bind_values($table->real_column_keys($set)) : $set);
 
-        if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
-            if (is_array($conditions) && !is_hash($conditions)) {
-                call_user_func_array([$sql, 'where'], $conditions);
-            } elseif (is_hash($conditions)) {
-                // the keys name the columns (#92); two keys naming one column both stay conditions
-                $sql->where_hashes($table->condition_hashes($conditions));
-            } else {
-                $sql->where($conditions);
-            }
+        // bulk_write_options() refuses a missing set, and the engine an empty one; a value that is
+        // neither a hash nor a string is refused here, before any SQL, as it always was
+        if (!is_array($set) && !is_string($set)) {
+            throw new ActiveRecordException('Updating requires a hash or string.');
         }
 
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
+        // on the connection it always took, the hook a subclass can override
+        return self::bulk_write_query($options)->execute_update($set, connection: static::connection())->rowCount();
+    }
+
+    /**
+     * The query a bulk write runs: the conditions, order and limit of its options (as
+     * bulk_write_options() returns them), the only ones update_all() and delete_all() ever read,
+     * so the other finder options stay ignored.
+     *
+     * Conditions that are no array are the one argument of a condition, as they always were: a
+     * string, an object that renders one, or a scalar, a falsy one rendering no WHERE; null is none.
+     *
+     * @param array<string, mixed> $options
+     * @return Query<Model>
+     */
+    private static function bulk_write_query(array $options): Query
+    {
+        $clauses = array_intersect_key($options, ['order' => true, 'limit' => true]);
+        $conditions = $options['conditions'] ?? null;
+
+        if (null !== $conditions) {
+            $clauses['conditions'] = is_array($conditions) ? $conditions : [$conditions];
         }
 
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
-        }
-
-        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
-        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
-
-        $values = $table->format_date_bind_values($sql->bind_values());
-        $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
-        return $ret->rowCount();
-
+        return Query::from_options(static::table(), $clauses);
     }
 
     /**
@@ -1554,7 +1533,8 @@ class Model
     /**
      * Runs $fn without this model class's timestamps, and returns what $fn returns: while it runs,
      * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at,
-     * and a row that Table::insert() writes straight to this class's table gets neither.
+     * a row that Table::insert() writes straight to this class's table gets neither, and
+     * update_all() with a hash 'set' does not set updated_at.
      *
      * <code>
      * $author = Author::without_timestamps(fn() => Author::create(['name' => 'Tito']));

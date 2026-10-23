@@ -209,11 +209,12 @@ class GoldenSqlTest extends DatabaseTest
             'include_through' => [fn() => Host::find(1, ['include' => ['venues']]), null],
             'lazy_has_many' => [fn() => Author::find(1)->books, null],
 
-            // update_all and delete_all (the hash and positional forms of update_all change in Task 8)
+            // update_all and delete_all. Since the engine runs them (spec §6.2.2), a hash set also sets updated_at, which
+            // master's UPDATE left out; a string set is sent as written
             'update_all_hash' => [fn() => Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['author_id' => 1]]), null],
             'update_all_string_set' => [fn() => Author::update_all(['set' => "name = 'X'", 'conditions' => 'author_id = 1']), null],
             'update_all_positional_limit_order' => [fn() => Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['author_id > ?', 1], 'order' => 'author_id', 'limit' => 1]), null],
-            // fail on master: only find() resolves an alias (change in Task 8)
+            // failed on master, where only find() resolved an alias (spec §6.2.1)
             'update_all_alias_hash' => [fn() => Venue::update_all(['set' => ['state' => 'XX'], 'conditions' => ['marquee' => 'Warner Theatre']]), null],
             'delete_all_alias_hash' => [fn() => Venue::delete_all(['conditions' => ['marquee' => 'Warner Theatre']]), null],
             'delete_all_hash' => [fn() => Author::delete_all(['conditions' => ['author_id' => 1]]), null],

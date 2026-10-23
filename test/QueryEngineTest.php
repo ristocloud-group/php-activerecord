@@ -6,8 +6,9 @@ use ActiveRecord\Timestamps;
 
 /**
  * The Query engine behind the legacy entries: Table::options_to_sql() builds its SELECT through
- * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs of Table.
- * The statements every entry sends are pinned in GoldenSqlTest.
+ * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs, UPDATEs
+ * and DELETEs of Table, update_all() and delete_all(). The statements every entry sends are pinned
+ * in GoldenSqlTest.
  */
 class QueryEngineTest extends DatabaseTest
 {
@@ -300,7 +301,7 @@ class QueryEngineTest extends DatabaseTest
     public function test_execute_insert_applies_the_timestamp_rule_unless_it_is_told_not_to(): void
     {
         Timestamps::freeze(self::FROZEN);
-        $query = Query::from_options(Author::table(), []);
+        $query = Query::for_table(Author::table());
 
         $query->execute_insert(['name' => 'Ruled']);
         $query->execute_insert(['name' => 'Unruled'], timestamps: false);
@@ -315,7 +316,7 @@ class QueryEngineTest extends DatabaseTest
     {
         $when = new DateTime(self::GIVEN);
 
-        Query::from_options(Author::table(), [])->execute_insert(['name' => 'Dated', 'created_at' => $when], timestamps: false);
+        Query::for_table(Author::table())->execute_insert(['name' => 'Dated', 'created_at' => $when], timestamps: false);
 
         $this->assert_same(self::GIVEN, Author::find_by_name('Dated')->created_at->format('Y-m-d H:i:s'));
     }
@@ -392,7 +393,7 @@ class QueryEngineTest extends DatabaseTest
             }, ActiveRecord\ActiveRecordException::class);
         }
 
-        $this->assert_exception_message_contains('Inserting requires a hash.', fn() => Query::from_options(Author::table(), [])->execute_insert([]), ActiveRecord\ActiveRecordException::class);
+        $this->assert_exception_message_contains('Inserting requires a hash.', fn() => Query::for_table(Author::table())->execute_insert([]), ActiveRecord\ActiveRecordException::class);
         $this->assert_same(4, (int) Author::count());
     }
 
@@ -484,5 +485,332 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Quiet'));
         $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Quiet too'));
         $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps_of('Loud'));
+    }
+
+    // -- updates and deletes (spec §6.2.1, §6.2.2, §6.2.5)
+
+    public function test_update_all_hash_set_touches_updated_at(): void
+    {
+        ActiveRecord\Timestamps::freeze('2026-10-21 10:00:00');
+        Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['author_id' => 1]]);
+        $this->assert_equals('2026-10-21 10:00:00', Author::find(1)->updated_at->format('Y-m-d H:i:s'));
+        ActiveRecord\Timestamps::freeze(null);
+    }
+
+    public function test_update_all_string_set_and_without_timestamps_leave_updated_at(): void
+    {
+        Author::update_all(['set' => "name = 'S'", 'conditions' => 'author_id = 2']);
+        Author::without_timestamps(fn() => Author::update_all(['set' => ['name' => 'Q'], 'conditions' => ['author_id' => 3]]));
+        $this->assert_null(Author::find(2)->updated_at);
+        $this->assert_null(Author::find(3)->updated_at);
+    }
+
+    public function test_bulk_writes_resolve_aliases(): void
+    {
+        $this->assert_same(1, Venue::update_all(['set' => ['state' => 'XX'], 'conditions' => ['marquee' => 'Warner Theatre']]));
+        $this->assert_same(1, Venue::delete_all(['conditions' => ['marquee' => 'Warner Theatre']]));
+    }
+
+    public function test_update_all_empty_set_throws_without_warning(): void
+    {
+        $this->assert_exception_message_contains('Updating requires a hash or string.', fn() => Author::update_all(['set' => []]), ActiveRecord\ActiveRecordException::class);
+    }
+
+    // The rule adds updated_at where the set has no value for that column: one the set gives is kept
+    public function test_update_all_keeps_the_updated_at_its_set_gives(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::update_all(['set' => ['name' => 'Given', 'updated_at' => self::GIVEN], 'conditions' => ['author_id' => 1]]);
+
+        $this->assert_sql_has('UPDATE authors SET name=?, updated_at=? WHERE author_id=?', Author::table()->last_sql);
+        $this->assert_same(['created_at' => null, 'updated_at' => self::GIVEN], $this->stamps_of('Given'));
+    }
+
+    // The set binds a DateTime in the format of its column (#138), the date alone for a DATE column,
+    // and the conditions bind theirs as positional values are bound: what MySQL stores either way
+    public function test_update_all_binds_a_date_of_its_set_in_the_format_of_its_column(): void
+    {
+        // loaded first: loading it reads the schema, which is not the statement this pins
+        DatedCount::table();
+        $when = new DateTime('2026-03-04 10:00:00');
+
+        [$update] = GoldenStatements::capture(fn() => DatedCount::update_all(['set' => ['day' => $when], 'conditions' => ['at < ?', $when]]));
+
+        $this->assert_same([$this->conn->date_to_string($when), $this->conn->datetime_to_string($when)], $update['values']);
+    }
+
+    // #92: the column is named as its table names it ("UPDATED_AT" here), and a set that gives it by
+    // its attribute name keeps its value, assigned once (Postgres refuses a column assigned twice)
+    public function test_update_all_names_the_updated_at_column_of_an_odd_table(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        OddTimestamp::without_timestamps(fn() => OddTimestamp::create(['name' => 'odd']));
+
+        OddTimestamp::update_all(['set' => ['name' => 'stamped'], 'conditions' => ['name' => 'odd']]);
+        $odd = OddTimestamp::find_by_name('stamped');
+        $this->assert_null($odd->created_at);
+        $this->assert_same(self::FROZEN, $odd->updated_at->format('Y-m-d H:i:s'));
+
+        OddTimestamp::update_all(['set' => ['name' => 'given', 'updated_at' => self::GIVEN]]);
+        $this->assert_same(self::GIVEN, OddTimestamp::find_by_name('given')->updated_at->format('Y-m-d H:i:s'));
+    }
+
+    // Spec §6.2.5: an empty set is refused before any SQL. The updated_at of the rule must not make a
+    // SET of it, which would write every row
+    public function test_update_all_with_an_empty_set_sends_no_statement(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        Author::table();
+        $refused = [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => 'Updating requires a hash or string.']];
+
+        $this->assert_same($refused, GoldenStatements::capture(fn() => Author::update_all(['set' => []])));
+        $this->assert_same($refused, GoldenStatements::capture(fn() => Author::update_all(['set' => ['name', 'X']])));
+        $this->assert_same(0, (int) Author::count(['conditions' => ['updated_at' => self::FROZEN]]));
+    }
+
+    // A set that is neither a hash nor a string is refused before any SQL, as it always was: no such
+    // value is made into a SET string
+    public function test_update_all_refuses_a_set_that_is_neither_a_hash_nor_a_string(): void
+    {
+        Author::table();
+        $stringable = new class implements Stringable {
+            public function __toString(): string
+            {
+                return "name = 'X'";
+            }
+        };
+
+        foreach ([5, 2.5, true, false, $stringable] as $set) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => 'Updating requires a hash or string.']],
+                GoldenStatements::capture(fn() => Author::update_all(['set' => $set, 'conditions' => ['author_id' => 1]])),
+            );
+        }
+    }
+
+    // Spec §5.6: a save() sends the timestamps its model sets, and the engine adds none. A model read
+    // with a partial select has no updated_at, so its save() sends none: the rule of update_all() is
+    // not the save()'s, which goes through Table::update()
+    public function test_a_save_of_a_partial_select_leaves_updated_at_alone(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $author = Author::find(1, ['select' => 'author_id, name']);
+        $author->name = 'Partial';
+
+        $this->assert_true($author->save());
+
+        $this->assert_sql_has('UPDATE authors SET name=? WHERE author_id=?', Author::table()->last_sql);
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('PARTIAL'));
+    }
+
+    // Table::update() is the UPDATE of a save() and sends what it is given, called directly too:
+    // unlike Table::insert() (spec §6.2.3), it gets no timestamps from the engine
+    public function test_a_direct_table_update_adds_no_timestamps(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $table = Author::table();
+        $data = ['name' => 'Direct'];
+
+        $statement = $table->update($data, ['author_id' => 1]);
+
+        $this->assert_instance_of(PDOStatement::class, $statement);
+        $this->assert_same(1, $statement->rowCount());
+        $this->assert_sql_has('UPDATE authors SET name=? WHERE author_id=?', $table->last_sql);
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Direct'));
+    }
+
+    // Table::update() takes its data by reference. The caller's array comes back as it always did: the
+    // values as they were sent (a DateTime as the string the database takes), under the names it gave
+    public function test_a_direct_table_update_leaves_the_callers_data_as_it_was_sent(): void
+    {
+        $when = new DateTime(self::GIVEN);
+        $data = ['name' => 'By ref', 'created_at' => $when];
+
+        Author::table()->update($data, ['author_id' => 1]);
+
+        $this->assert_same(['name' => 'By ref', 'created_at' => $this->conn->datetime_to_string($when)], $data);
+        $this->assert_same(['created_at' => self::GIVEN, 'updated_at' => null], $this->stamps_of('By ref'));
+    }
+
+    // Anything but a hash is refused as it always was, an empty array and null included, and gets no
+    // updated_at that would make a SET of it
+    public function test_a_direct_table_update_of_something_that_is_no_hash_is_refused(): void
+    {
+        foreach ([[], null, [1, 2]] as $data) {
+            $this->assert_exception_message_contains('Updating requires a hash or string.', function () use ($data): void {
+                Author::table()->update($data, ['author_id' => 1]);
+            }, ActiveRecord\ActiveRecordException::class);
+        }
+    }
+
+    // The pk hash of a save() or a delete() binds a DateTime in the format of its column, as it always
+    // did: SQLite compares a DATE column as text, '2026-01-01' with '2026-01-01 00:00:00'
+    public function test_table_update_and_delete_bind_a_date_pk_in_its_columns_format(): void
+    {
+        $table = DatedCount::table();
+        $pk = ['day' => new DateTime('2026-01-01'), 'at' => new DateTime('2026-01-01 10:00:00')];
+        $bound = [$this->conn->date_to_string($pk['day']), $this->conn->datetime_to_string($pk['at'])];
+        $data = ['hits' => 7];
+
+        [$update] = GoldenStatements::capture(fn() => $table->update($data, $pk));
+        $this->assert_same([7, ...$bound], $update['values']);
+        $this->assert_same(1, (int) DatedCount::count(['conditions' => ['hits' => 7]]));
+
+        [$delete] = GoldenStatements::capture(fn() => $table->delete($pk));
+        $this->assert_same($bound, $delete['values']);
+        $this->assert_same([2], array_map(fn($count) => (int) $count->hits, DatedCount::all()));
+    }
+
+    // A WHERE that is no hash is the one argument of a condition, as it always was: a string is the
+    // condition, and an array that is no hash names none. It is refused as before (SQLBuilder takes no
+    // array as a condition string), and never makes an UPDATE or a DELETE of every row
+    public function test_table_update_and_delete_read_a_where_that_is_no_hash_as_one_condition(): void
+    {
+        $table = Author::table();
+        $data = ['name' => 'One'];
+
+        $this->assert_same(1, $table->update($data, 'author_id = 1')->rowCount());
+        $this->assert_sql_has('UPDATE authors SET name=? WHERE author_id = 1', $table->last_sql);
+
+        $data = ['name' => 'Every'];
+        $refused = 0;
+
+        foreach ([fn() => $table->update($data, []), fn() => $table->update($data, ['author_id = ?', 2]), fn() => $table->delete([])] as $write) {
+            try {
+                $write();
+            } catch (TypeError) {
+                $refused++;
+            }
+        }
+
+        $this->assert_same(3, $refused);
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Every']]));
+        $this->assert_same(4, (int) Author::count());
+    }
+
+    // Table::update() and Table::delete() send their values as Table prepares them, as they always did:
+    // process_data() formats a DateTime of the pk hash by its column, and leaves one inside a list as
+    // it is. The bulk writes bind that one as a positional value (#138); these two never did
+    public function test_table_update_and_delete_send_their_values_as_table_prepares_them(): void
+    {
+        $table = DatedCount::table();
+        $day = new ActiveRecord\DateTime('2026-01-01');
+        $data = ['hits' => 7];
+
+        [$update] = GoldenStatements::capture(fn() => $table->update($data, ['day' => [$day]]));
+        [$delete] = GoldenStatements::capture(fn() => $table->delete(['day' => [$day]]));
+
+        $this->assert_same([7, $day], $update['values']);
+        $this->assert_same([$day], $delete['values']);
+    }
+
+    // A pk hash names its columns as they are, never through an alias: the alias map the conditions of
+    // update_all() and delete_all() are read with is not a save()'s or a delete()'s. AliasedPkAuthor has
+    // an alias named like its pk column (author_id => name)
+    public function test_table_update_and_delete_never_read_a_pk_hash_through_an_alias(): void
+    {
+        $table = AliasedPkAuthor::table();
+        $data = ['name' => 'Renamed'];
+
+        $this->assert_same(1, $table->update($data, ['author_id' => 1])->rowCount());
+        $this->assert_sql_has('UPDATE authors SET name=? WHERE author_id=?', $table->last_sql);
+        $this->assert_same(1, $table->delete(['author_id' => 2])->rowCount());
+        $this->assert_sql_has('DELETE FROM authors WHERE author_id=?', $table->last_sql);
+
+        $this->assert_same('Renamed', Author::find(1)->name);
+        $this->assert_null(Author::find_by_author_id(2));
+    }
+
+    // Spec §6.2.1 (#144): the conditions of update_all() and delete_all() read an alias as find() and
+    // count() do, and the alias wins, also over a column of its name
+    public function test_bulk_writes_read_an_alias_named_like_a_column_as_the_alias(): void
+    {
+        $this->assert_same(1, AliasedPkAuthor::update_all(['set' => ['parent_author_id' => 9], 'conditions' => ['author_id' => 'Tito']]));
+        $this->assert_sql_has('WHERE name=?', AliasedPkAuthor::table()->last_sql);
+        $this->assert_same(1, AliasedPkAuthor::delete_all(['conditions' => ['author_id' => 'Uncle Bob']]));
+        $this->assert_sql_has('DELETE FROM authors WHERE name=?', AliasedPkAuthor::table()->last_sql);
+
+        $this->assert_same(9, Author::find(1)->parent_author_id);
+        $this->assert_null(Author::find_by_author_id(4));
+    }
+
+    // Spec §6.3: Model::connection() is a public static that a subclass can override, and update_all()
+    // and delete_all() have always taken their connection from it
+    public function test_bulk_writes_still_call_the_connection_override(): void
+    {
+        ConnectionCountingAuthor::table();
+
+        ConnectionCountingAuthor::$connection_calls = 0;
+        ConnectionCountingAuthor::update_all(['set' => ['name' => 'Counted'], 'conditions' => ['author_id' => 1]]);
+        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+
+        ConnectionCountingAuthor::$connection_calls = 0;
+        ConnectionCountingAuthor::delete_all(['conditions' => ['author_id' => 1]]);
+        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+    }
+
+    // ... and run their statement on the connection it returns: a subclass can route its writes
+    public function test_bulk_writes_run_on_the_connection_the_override_returns(): void
+    {
+        RoutedAuthor::table();
+        $routed = ActiveRecord\Connection::instance(ActiveRecord\Config::instance()->get_default_connection());
+        $this->conn->last_query = 'untouched';
+        RoutedAuthor::$route = $routed;
+
+        try {
+            $this->assert_same(1, RoutedAuthor::update_all(['set' => ['name' => 'Routed'], 'conditions' => ['author_id' => 1]]));
+            $this->assert_sql_has('UPDATE authors SET name=?, updated_at=? WHERE author_id=?', $routed->last_query);
+            $this->assert_same(1, RoutedAuthor::delete_all(['conditions' => ['author_id' => 2]]));
+            $this->assert_sql_has('DELETE FROM authors WHERE author_id=?', $routed->last_query);
+        } finally {
+            RoutedAuthor::$route = null;
+            $routed->close();
+        }
+
+        $this->assert_same('untouched', $this->conn->last_query);
+        $this->assert_same('Routed', Author::find(1)->name);
+        $this->assert_null(Author::find_by_author_id(2));
+    }
+
+    // like the other terminals, an update and a delete run through the Table their query was given
+    public function test_an_update_and_a_delete_run_through_the_table_they_were_given(): void
+    {
+        $given = Table::load('\\Author');
+        $this->assert_not_same(Author::table(), $given);
+        $data = ['name' => 'Given'];
+
+        $given->update($data, ['author_id' => 1]);
+        $this->assert_sql_has('UPDATE authors SET name=? WHERE author_id=?', $given->last_sql);
+        $given->delete(['author_id' => 2]);
+        $this->assert_sql_has('DELETE FROM authors WHERE author_id=?', $given->last_sql);
+
+        $this->assert_null(Author::table()->last_sql);
+    }
+
+    public function test_for_table_is_a_query_of_the_table_without_options(): void
+    {
+        $query = Query::for_table(Author::table());
+
+        $this->assert_null($query->state()->legacy);
+        $this->assert_same('DELETE FROM ' . $this->conn->quote_name('authors'), (new ActiveRecord\QueryCompiler(Author::table()))->compile_delete($query->state())->to_s());
+    }
+
+    // Where the adapter has no LIMIT on UPDATE and DELETE (Postgres), a limited one picks its rows by the
+    // pk in a subquery (#92): by the pk's column ("space name"), not by its attribute name
+    public function test_limited_writes_pick_their_rows_by_the_pk_column(): void
+    {
+        $table = OddColumnBySpace::table();
+        $state = Query::from_options($table, ['order' => 'id', 'limit' => 1])->state();
+        $compiler = new ActiveRecord\QueryCompiler($table);
+        $column = $this->conn->quote_name('space name');
+
+        foreach ([$compiler->compile_update($state, ['camelcase' => 'y']), $compiler->compile_delete($state)] as $sql) {
+            if ($this->conn->accepts_limit_and_order_for_update_and_delete()) {
+                $this->assert_string_contains_string(' ORDER BY id LIMIT 1', $sql->to_s());
+            } else {
+                $this->assert_string_contains_string(" WHERE $column IN (SELECT $column FROM ", $sql->to_s());
+            }
+        }
     }
 }

@@ -177,7 +177,7 @@ class SQLBuilder
      * WHERE from several conditions hashes, ANDed in order: like where($hash) for each,
      * without one hash overwriting a key of another.
      *
-     * @internal Serves Table, for hashes whose keys name the same column; not a supported API.
+     * @internal Serves QueryCompiler, for hashes whose keys name the same column; not a supported API.
      * @param list<array<string, mixed>> $hashes
      */
     public function where_hashes(array $hashes): static
@@ -202,7 +202,7 @@ class SQLBuilder
      * UPDATE/DELETE by these columns in a subquery; without any it uses the adapter's own
      * row identity (#92). Other adapters do not use them.
      *
-     * @internal Serves Model::update_all() and Model::delete_all(); not a supported API.
+     * @internal Serves the UPDATE and DELETE of QueryCompiler; not a supported API.
      * @param list<string> $columns
      */
     public function key_columns(array $columns): static

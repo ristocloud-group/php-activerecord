@@ -11,8 +11,8 @@ namespace ActiveRecord;
  *
  * It holds a QueryState, which QueryCompiler renders as a SQLBuilder, and runs that statement
  * through its terminals (get, exists, ...). The legacy entries (find, count, exists, ...) hand it
- * their options array through from_options(). The writes of Table (insert, ...) run through its
- * execute_*() methods.
+ * their options array through from_options(). The writes of Table (insert, update, delete) and of
+ * Model (update_all, delete_all) run through its execute_*() methods.
  *
  * @template TModel of Model
  * @package ActiveRecord
@@ -32,9 +32,13 @@ class Query
     }
 
     /**
-     * A query on $table's model that holds a legacy options array exactly as given (the one
-     * Table::options_to_sql() receives). It reads and builds through $table itself, not through
-     * the Table the model class would load, which can be another instance.
+     * A query on $table's model that holds a legacy options array exactly as given: the options
+     * of a finder (those Table::options_to_sql() receives), or the conditions, order and limit of
+     * a legacy write, which execute_update() and execute_delete() read. Model::update_all() and
+     * Model::delete_all() give those of their options; Table::update() and Table::delete() give
+     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read.
+     *
+     * Like for_table(), it reads and builds through $table itself.
      *
      * @internal Serves the legacy entries; not a supported API.
      * @param array<string, mixed> $options
@@ -42,12 +46,28 @@ class Query
      */
     public static function from_options(Table $table, array $options): self
     {
+        $query = self::for_table($table);
+        $query->state->legacy = $options;
+
+        return $query;
+    }
+
+    /**
+     * A query on $table's model that holds no options: where a statement starts that reads none,
+     * such as the INSERT of Table::insert() (see execute_insert()). It reads and builds through
+     * $table itself, not through the Table the model class would load, which can be another
+     * instance.
+     *
+     * @internal Serves the legacy entries; not a supported API.
+     * @return self<Model>
+     */
+    public static function for_table(Table $table): self
+    {
         /** @var class-string<Model> $model_class */
         $model_class = $table->class->name;
 
         $query = new self($model_class);
         $query->table = $table;
-        $query->state->legacy = $options;
 
         return $query;
     }
@@ -164,6 +184,90 @@ class Query
         $values = array_values($row);
 
         return $table->connection()->query(($table->last_sql = $sql->to_s()), $values);
+    }
+
+    /**
+     * UPDATEs the rows of the query's conditions, order and limit (the legacy options it holds, see
+     * from_options()) and returns the statement that ran, left in Table::$last_sql. Where the
+     * adapter has no LIMIT on UPDATE (Postgres), a limit picks the rows by primary key in a
+     * subquery (#92).
+     *
+     * $set is a hash or a raw SQL string. The keys of a hash are column names or attribute names
+     * (#92), and it gets the updated_at it lacks, the way Timestamps fills it for the class the
+     * table was loaded for (what Model::without_timestamps() of it suspends), unless $timestamps is
+     * false: the UPDATE of a save(), whose model sets its own timestamps (set_timestamps()). A string
+     * is sent as written, without timestamps: a column added to it could be assigned twice, which
+     * Postgres refuses (spec §5.6). Anything else (an empty hash, a list) gets no timestamps and goes
+     * to SQLBuilder, which rejects it ("Updating requires a hash or string."): the timestamps would
+     * otherwise make a SET of an empty one.
+     *
+     * The values are prepared: a DateTime of the hash in the format of its column (#138), and one
+     * among the bind values of the conditions as the finders bind a positional value, unless
+     * $format_dates is false. Table::update() turns it off: it formats its data and its pk hash
+     * itself, by column (Table::process_data()), and its statement always sent them as they are.
+     *
+     * The statement is rendered for $connection and runs on it when one is given: Model::update_all()
+     * passes static::connection(), a public static that a subclass can override, on which it always
+     * built and ran its statement. Without one, the Table's.
+     *
+     * @internal Serves Model::update_all() and Table::update(); not a supported API.
+     * @param array<string, mixed>|string $set
+     */
+    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null): \PDOStatement
+    {
+        $table = $this->table();
+
+        if (is_array($set)) {
+            // the statement names the columns (#92)
+            $set = $table->real_column_keys($set);
+
+            if ($format_dates) {
+                $set = $table->format_date_bind_values($set);
+            }
+
+            if ($timestamps && is_hash($set)) {
+                $set = Timestamps::apply_to_update($table, $table->class->getName(), $set);
+            }
+        }
+
+        $sql = (new QueryCompiler($table, $connection))->compile_update($this->state, $set);
+
+        return $this->execute_write($sql, $format_dates, $connection);
+    }
+
+    /**
+     * DELETEs the rows of the query's conditions, order and limit (the legacy options it holds, see
+     * from_options()) and returns the statement that ran, left in Table::$last_sql. A query without
+     * conditions deletes every row. Where the adapter has no LIMIT on DELETE (Postgres), a limit
+     * picks the rows by primary key in a subquery (#92).
+     *
+     * A DateTime among the bind values is bound as the finders bind a positional value (#138),
+     * unless $format_dates is false: Table::delete() formats its pk hash itself, by column
+     * (Table::process_data()), and its statement always sent it as it is.
+     *
+     * The statement is rendered for $connection and runs on it when one is given: Model::delete_all()
+     * passes static::connection(), as execute_update() describes. Without one, the Table's.
+     *
+     * @internal Serves Model::delete_all() and Table::delete(); not a supported API.
+     */
+    public function execute_delete(bool $format_dates = true, ?Connection $connection = null): \PDOStatement
+    {
+        $sql = (new QueryCompiler($this->table(), $connection))->compile_delete($this->state);
+
+        return $this->execute_write($sql, $format_dates, $connection);
+    }
+
+    /**
+     * Runs an UPDATE or a DELETE on $connection, else on the Table's, and leaves it in
+     * Table::$last_sql. With $format_dates, a DateTime among its bind values is formatted as a
+     * positional value is (Table::format_date_bind_values()).
+     */
+    private function execute_write(SQLBuilder $sql, bool $format_dates, ?Connection $connection): \PDOStatement
+    {
+        $table = $this->table();
+        $values = $format_dates ? $table->format_date_bind_values($sql->bind_values()) : $sql->bind_values();
+
+        return ($connection ?? $table->connection())->query(($table->last_sql = $sql->to_s()), $values);
     }
 
     private function table(): Table

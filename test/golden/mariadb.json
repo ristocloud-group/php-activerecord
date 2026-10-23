@@ -126,14 +126,10 @@
     ],
     "delete_all_alias_hash": [
         {
-            "sql": "DELETE FROM `venues` WHERE `marquee`=?",
+            "sql": "DELETE FROM `venues` WHERE `name`=?",
             "values": [
                 "Warner Theatre"
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'marquee' in 'WHERE'"
         }
     ],
     "delete_all_hash": [
@@ -459,31 +455,29 @@
     ],
     "update_all_alias_hash": [
         {
-            "sql": "UPDATE `venues` SET `state`=? WHERE `marquee`=?",
+            "sql": "UPDATE `venues` SET `state`=? WHERE `name`=?",
             "values": [
                 "XX",
                 "Warner Theatre"
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'marquee' in 'WHERE'"
         }
     ],
     "update_all_hash": [
         {
-            "sql": "UPDATE `authors` SET `name`=? WHERE `author_id`=?",
+            "sql": "UPDATE `authors` SET `name`=?, `updated_at`=? WHERE `author_id`=?",
             "values": [
                 "X",
+                "<now>",
                 1
             ]
         }
     ],
     "update_all_positional_limit_order": [
         {
-            "sql": "UPDATE `authors` SET `name`=? WHERE author_id > ? ORDER BY author_id LIMIT 1",
+            "sql": "UPDATE `authors` SET `name`=?, `updated_at`=? WHERE author_id > ? ORDER BY author_id LIMIT 1",
             "values": [
                 "X",
+                "<now>",
                 1
             ]
         }
