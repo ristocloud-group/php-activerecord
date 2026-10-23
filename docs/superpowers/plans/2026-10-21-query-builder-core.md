@@ -601,7 +601,7 @@ public function test_forwardable_matches_the_method_tags(): void
 ### Task 11: Column references and the select/from family
 
 **Files:**
-- Modify: `lib/Query.php`, `lib/QueryState.php`, `lib/QueryCompiler.php`, `lib/SQLBuilder.php` (`select($select, array $values = [])`, `select_bind_values(): list<mixed>`)
+- Modify: `lib/Query.php`, `lib/QueryState.php`, `lib/QueryCompiler.php`, `lib/SQLBuilder.php` (`@internal select_values(array $values): static` and `from_values()`, `select_bind_values(): list<mixed>`; `select($select)` keeps its signature — ruling 2026-10-23: SQLBuilder gets additions only)
 - Test: `test/QuerySelectTest.php`
 
 **Interfaces:**
@@ -770,7 +770,7 @@ public function test_legacy_positional_date_differs_from_the_builder(): void
 
 **Files:**
 - Create: `lib/JoinClause.php`
-- Modify: `lib/Query.php`, `lib/QueryState.php`, `lib/QueryCompiler.php`, `lib/Relationship.php` (`construct_inner_join_sql` `:697-744`), `lib/Table.php` (`create_joins` `:199-238`), `lib/SQLBuilder.php` (`joins($joins, array $values = [])`), `ActiveRecord.php`
+- Modify: `lib/Query.php`, `lib/QueryState.php`, `lib/QueryCompiler.php`, `lib/Relationship.php` (`construct_inner_join_sql` `:697-744`), `lib/Table.php` (`create_joins` `:199-238`), `lib/SQLBuilder.php` (`@internal join_values(array $values): static`; `joins($joins)` keeps its signature — ruling 2026-10-23: SQLBuilder gets additions only), `ActiveRecord.php`
 - Test: `test/QueryJoinTest.php`
 
 **Interfaces:**
@@ -827,7 +827,7 @@ public function test_undeclared_relationship_throws(): void
 ### Task 14: Order, group, having and the window
 
 **Files:**
-- Modify: `lib/Query.php`, `lib/QueryState.php`, `lib/QueryCompiler.php`, `lib/SQLBuilder.php` (`order($order, array $values = [])`, `group($group, array $values = [])`, `having($having, array $values = [])`), `lib/Connection.php` + `lib/adapters/MysqlAdapter.php` (`random_function()`)
+- Modify: `lib/Query.php`, `lib/QueryState.php`, `lib/QueryCompiler.php`, `lib/SQLBuilder.php` (`@internal order_values()`, `group_values()`, `having_values()` setters returning `static`; `order($order)`, `group($group)` and `having($having)` keep their signatures — ruling 2026-10-23: SQLBuilder gets additions only), `lib/Connection.php` + `lib/adapters/MysqlAdapter.php` (`random_function()`)
 - Test: `test/QueryOrderGroupTest.php`
 
 **Interfaces:**
