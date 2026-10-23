@@ -16,6 +16,26 @@ class QueryEngineTest extends DatabaseTest
 
     private const string GIVEN = '2001-02-03 04:05:06';
 
+    public function tear_down(): void
+    {
+        // the alias a test gave this model after its table loaded is not the model's own
+        SettableAliasAuthor::$alias_attribute = [];
+
+        parent::tear_down();
+    }
+
+    /**
+     * Gives SettableAliasAuthor an alias named like its pk column after its table loaded. A model that
+     * declares one does not load (spec §6.2.6, AliasedPkAuthor and AliasShadowingTest); this is the shadow
+     * the schema read at load cannot see, a column the table gained since, which leaves the alias winning
+     * and the pk still named as the column.
+     */
+    private function shadow_the_pk_after_load(): void
+    {
+        SettableAliasAuthor::table();
+        SettableAliasAuthor::$alias_attribute = ['author_id' => 'name'];
+    }
+
     public function test_options_to_sql_is_served_by_the_engine(): void
     {
         $options = ['conditions' => ['name' => 'Tito'], 'order' => 'name', 'limit' => 1];
@@ -173,26 +193,29 @@ class QueryEngineTest extends DatabaseTest
     }
 
     // An alias named like the pk column must not move the pk: a finder names the pk as the column
-    // itself, whichever alias default the conditions are read with.
+    // itself, whichever alias default the conditions are read with. The library keeps it so where a
+    // shadow escaped the check at load (see shadow_the_pk_after_load()).
     public function test_a_pk_is_never_read_through_an_alias(): void
     {
+        $this->shadow_the_pk_after_load();
+
         // author_id is an alias of name in this model: 1 Tito, 2 George W. Bush
-        $this->assert_same('Tito', AliasedPkAuthor::find(1)->name);
-        $names = array_map(fn($author) => $author->name, AliasedPkAuthor::find(1, 2));
+        $this->assert_same('Tito', SettableAliasAuthor::find(1)->name);
+        $names = array_map(fn($author) => $author->name, SettableAliasAuthor::find(1, 2));
         sort($names);
         $this->assert_same(['George W. Bush', 'Tito'], $names);
-        $this->assert_same(1, (int) AliasedPkAuthor::count(1));
-        $this->assert_true(AliasedPkAuthor::exists(1));
+        $this->assert_same(1, (int) SettableAliasAuthor::count(1));
+        $this->assert_true(SettableAliasAuthor::exists(1));
 
         // a hash left before an options hash is no conditions: the first argument alone is the pk
-        $this->assert_same(1, (int) AliasedPkAuthor::count(1, ['name' => 'nobody'], ['readonly' => true]));
-        $this->assert_true(AliasedPkAuthor::exists(1, ['name' => 'nobody'], ['readonly' => true]));
+        $this->assert_same(1, (int) SettableAliasAuthor::count(1, ['name' => 'nobody'], ['readonly' => true]));
+        $this->assert_true(SettableAliasAuthor::exists(1, ['name' => 'nobody'], ['readonly' => true]));
 
         // the conditions of the call do read the alias, beside the pk
-        $this->assert_same(1, (int) AliasedPkAuthor::count(1, ['conditions' => ['author_id' => 'Tito']]));
-        $this->assert_same(0, (int) AliasedPkAuthor::count(2, ['conditions' => ['author_id' => 'Tito']]));
-        $this->assert_same(1, (int) AliasedPkAuthor::count(['author_id' => 'Tito']));
-        $this->assert_same('Tito', AliasedPkAuthor::find(1, ['conditions' => ['author_id' => 'Tito']])->name);
+        $this->assert_same(1, (int) SettableAliasAuthor::count(1, ['conditions' => ['author_id' => 'Tito']]));
+        $this->assert_same(0, (int) SettableAliasAuthor::count(2, ['conditions' => ['author_id' => 'Tito']]));
+        $this->assert_same(1, (int) SettableAliasAuthor::count(['author_id' => 'Tito']));
+        $this->assert_same('Tito', SettableAliasAuthor::find(1, ['conditions' => ['author_id' => 'Tito']])->name);
     }
 
     // Spec §6.2.4: with joins, a hash key is qualified with the model's table only when it names
@@ -781,11 +804,12 @@ class QueryEngineTest extends DatabaseTest
     }
 
     // A pk hash names its columns as they are, never through an alias: the alias map the conditions of
-    // update_all() and delete_all() are read with is not a save()'s or a delete()'s. AliasedPkAuthor has
-    // an alias named like its pk column (author_id => name)
+    // update_all() and delete_all() are read with is not a save()'s or a delete()'s. SettableAliasAuthor
+    // gets an alias named like its pk column (author_id => name) after its table loaded
     public function test_table_update_and_delete_never_read_a_pk_hash_through_an_alias(): void
     {
-        $table = AliasedPkAuthor::table();
+        $this->shadow_the_pk_after_load();
+        $table = SettableAliasAuthor::table();
         $data = ['name' => 'Renamed'];
 
         $this->assert_same(1, $table->update($data, ['author_id' => 1])->rowCount());
@@ -798,13 +822,16 @@ class QueryEngineTest extends DatabaseTest
     }
 
     // Spec §6.2.1 (#144): the conditions of update_all() and delete_all() read an alias as find() and
-    // count() do, and the alias wins, also over a column of its name
+    // count() do, and the alias wins, also over a column of its name that the check at load did not see
+    // (see shadow_the_pk_after_load())
     public function test_bulk_writes_read_an_alias_named_like_a_column_as_the_alias(): void
     {
-        $this->assert_same(1, AliasedPkAuthor::update_all(['set' => ['parent_author_id' => 9], 'conditions' => ['author_id' => 'Tito']]));
-        $this->assert_sql_has('WHERE name=?', AliasedPkAuthor::table()->last_sql);
-        $this->assert_same(1, AliasedPkAuthor::delete_all(['conditions' => ['author_id' => 'Uncle Bob']]));
-        $this->assert_sql_has('DELETE FROM authors WHERE name=?', AliasedPkAuthor::table()->last_sql);
+        $this->shadow_the_pk_after_load();
+
+        $this->assert_same(1, SettableAliasAuthor::update_all(['set' => ['parent_author_id' => 9], 'conditions' => ['author_id' => 'Tito']]));
+        $this->assert_sql_has('WHERE name=?', SettableAliasAuthor::table()->last_sql);
+        $this->assert_same(1, SettableAliasAuthor::delete_all(['conditions' => ['author_id' => 'Uncle Bob']]));
+        $this->assert_sql_has('DELETE FROM authors WHERE name=?', SettableAliasAuthor::table()->last_sql);
 
         $this->assert_same(9, Author::find(1)->parent_author_id);
         $this->assert_null(Author::find_by_author_id(4));

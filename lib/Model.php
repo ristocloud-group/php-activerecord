@@ -193,15 +193,28 @@ class Model
      *
      * <code>
      * class Person extends ActiveRecord\Model {
-     *   static $alias_attribute = array(
+     *   static $alias_attribute = [
      *     'alias_first_name' => 'first_name',
-     *     'alias_last_name' => 'last_name');
+     *     'alias_last_name' => 'last_name',
+     *   ];
      * }
      *
      * $person = Person::first();
      * $person->alias_first_name = 'Tito';
      * echo $person->alias_first_name;
      * </code>
+     *
+     * An alias names its column in a hash of conditions too: find(), count(), exists(),
+     * update_all() and delete_all() read `['alias_first_name' => 'Tito']` alike.
+     *
+     * An alias may not have the name of a column of the model's own table, by the column's real
+     * name or by its attribute name (`space_name` for the column `space name`): the table does not
+     * load, and the first use of the model throws a ConfigException naming the model, the alias and
+     * the column (#144). Names are compared as the database compares column names: regardless of
+     * case, except on Postgres. The check reads the columns as the table loads. A shadowing column
+     * it does not see, one added to the table afterwards (a long-running process, a stale metadata
+     * cache) or, on SQLite, a generated column (PRAGMA table_info omits it), leaves the alias
+     * winning in every condition; the next load with fresh metadata throws.
      *
      * @var array<string, string>
      */
@@ -2121,7 +2134,9 @@ class Model
         // argument alone is the pk then
         if ([] !== array_filter($args, fn($arg) => is_hash($arg))) {
             $options['conditions'] = static::pk_conditions($args[0]);
-            $options['mapped_names'] = []; // the pk names its column, even where an alias is named like it
+            // the pk names its column, even where an alias is named like it: a model that declares one does
+            // not load, but a shadow the load did not see must not move the pk (spec §6.2.6)
+            $options['mapped_names'] = [];
 
             return $options;
         }
@@ -2134,10 +2149,13 @@ class Model
      * "<pk> AND (<conditions>)", the latter parenthesized so that an OR of theirs cannot
      * widen the pk (#149). Both are rendered as options_to_sql() renders them (a hash's
      * names mapped to columns, by $mapped_names in the own conditions and by no alias in the
-     * pk, which names its column even where an alias is named like it; keys qualified with
-     * the table when joining; list values expanded) and passed on as positional conditions.
-     * Without own conditions, or with ones rendering no WHERE, $pk become the conditions, as
-     * they always did, and the returned options map no alias in them.
+     * pk; keys qualified with the table when joining; list values expanded) and passed on as
+     * positional conditions. Without own conditions, or with ones rendering no WHERE, $pk become
+     * the conditions, as they always did, and the returned options map no alias in them.
+     *
+     * The pk names its column even where an alias is named like it. A model that declares one
+     * does not load (spec §6.2.6), but a shadow the load did not see (a column the table gained
+     * since, a SQLite generated column) can exist: this is the defense in depth.
      *
      * @param array<string, mixed> $pk
      * @param array<string, mixed> $options

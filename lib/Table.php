@@ -131,6 +131,7 @@ class Table
         $this->reestablish_connection(false);
         $this->set_table_name();
         $this->get_meta_data();
+        $this->check_alias_attribute();
         $this->set_primary_key();
         $this->set_sequence_name();
         $this->set_delegates();
@@ -671,9 +672,11 @@ class Table
      *
      * $data is taken by reference and comes back under the names it was given, its DateTime values
      * formatted for the database. Its keys and those of a $where hash name the columns (#92), as
-     * attribute or column names, never through an alias: a pk is not aliased. A DateTime of the
-     * $where hash is bound in the format of its column, and two of its keys naming one column both
-     * stay conditions. Anything else as $where is the one argument of a condition, as before.
+     * attribute or column names, never through an alias: a pk is not aliased, also where an alias is
+     * named like a column that the check at load did not see (defense in depth, spec §6.2.6). A
+     * DateTime of the $where hash is bound in the format of its column, and two of its keys naming
+     * one column both stay conditions. Anything else as $where is the one argument of a condition,
+     * as before.
      *
      * @param array<string, mixed> $data
      * @param array<string, mixed>|string $where
@@ -691,7 +694,9 @@ class Table
         $conditions = is_array($where) && is_hash($where) ? $where : [$where];
 
         // the engine sends the values as they are prepared here. Null (nothing to write) is an empty
-        // set, which it rejects as it rejects anything but a hash
+        // set, which it rejects as it rejects anything but a hash. 'mapped_names' => []: a pk hash reads
+        // no alias. The check at load (check_alias_attribute()) keeps an alias from being named like a
+        // column, but a shadow it did not see must not move the rows a save() writes
         return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])
             ->execute_update($data ?: [], timestamps: false, format_dates: false);
     }
@@ -701,9 +706,10 @@ class Table
      * which is left in $last_sql: the DELETE of Model::delete().
      *
      * The keys of $data name the columns (#92), as attribute or column names, never through an
-     * alias: a pk is not aliased. A DateTime of it is bound in the format of its column, and two of
-     * its keys naming one column both stay conditions. Anything but a hash is the one argument of a
-     * condition, as before.
+     * alias: a pk is not aliased, also where an alias is named like a column that the check at load
+     * did not see (defense in depth, spec §6.2.6). A DateTime of it is bound in the format of its
+     * column, and two of its keys naming one column both stay conditions. Anything but a hash is the
+     * one argument of a condition, as before.
      *
      * @param array<string, mixed> $data
      * @return mixed
@@ -713,7 +719,8 @@ class Table
         $data = $this->process_data($data);
         $conditions = is_hash($data) ? $data : [$data];
 
-        // the engine sends the values as they are prepared here
+        // the engine sends the values as they are prepared here. 'mapped_names' => []: a pk hash reads no
+        // alias (see update())
         return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])->execute_delete(format_dates: false);
     }
 
@@ -753,6 +760,56 @@ class Table
         foreach ($this->columns as $name => $column) {
             if ($column->inflected_name !== $name && ($case_sensitive || strtolower($name) !== $column->inflected_name)) {
                 $this->real_column_names[$column->inflected_name] ??= $name;
+            }
+        }
+    }
+
+    /**
+     * Rejects a model whose $alias_attribute has a key named like a column of this table, by the
+     * column's real name or by its attribute name (#92), so that a name in a hash condition is an
+     * alias or a column whatever the schema holds when the query runs (#144, spec §6.2.6). Names are
+     * compared as the database compares column names (see Connection::column_name_key()): regardless
+     * of case, except on Postgres. An alias key is read as a hash condition reads a key (see
+     * Connection::column_reference_key()): a single pre-quoted identifier by its text.
+     *
+     * It reads the columns as get_meta_data() found them. A shadowing column that is not among them,
+     * one added to the table after it loaded (a long-running process, a stale metadata cache) or a
+     * SQLite generated column, which PRAGMA table_info omits, leaves the alias winning in every hash
+     * condition, a pk hash excepted (the library never reads one through an alias): the next load
+     * with fresh metadata reports it.
+     *
+     * @throws ConfigException
+     */
+    private function check_alias_attribute(): void
+    {
+        /** @var class-string<Model> $model_class */
+        $model_class = $this->class->name;
+        $aliases = $model_class::$alias_attribute;
+
+        if ([] === $aliases) {
+            return;
+        }
+
+        $conn = $this->connection();
+        $real_names = [];
+
+        // by the key the database knows each name by; a name two columns have stays the first one's
+        foreach ($this->columns as $column) {
+            $real_names[$conn->column_name_key($column->name)] ??= $column->name;
+            $real_names[$conn->column_name_key($column->inflected_name)] ??= $column->name;
+        }
+
+        foreach (array_keys($aliases) as $alias) {
+            $real_name = $real_names[$conn->column_reference_key((string) $alias)] ?? null;
+
+            if (null !== $real_name) {
+                throw new ConfigException(sprintf(
+                    "%s::\$alias_attribute: the alias '%s' has the same name as the column '%s' of table %s; rename the alias",
+                    $model_class,
+                    $alias,
+                    $real_name,
+                    $this->table,
+                ));
             }
         }
     }
