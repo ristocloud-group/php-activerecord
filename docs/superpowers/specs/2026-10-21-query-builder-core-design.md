@@ -408,7 +408,10 @@ These were explicitly approved by the maintainer on 2026-10-21, and all go in th
 3. INSERTs that bypass the model (`Table::insert()` called directly, `->insert()`) fill `created_at` / `updated_at`.
    The monolith never calls `Table::insert()` directly. `upsert` follows the same rule (§5.6), so it recognizes a
    timestamp column by its attribute name: a table whose timestamp columns have odd names (#92: `"created at"`,
-   `UPDATED_AT`) now gets them filled by `upsert` too. The monolith never calls `upsert`.
+   `UPDATED_AT`) now gets them filled by `upsert` too. A row key that respells a timestamp column (`UPDATED_AT`,
+   `` `created_at` ``) is recognized as that column: on MySQL/MariaDB the duplicated column error 1110 becomes a
+   success, and SQLite (which tolerated the duplicate) sends the column once and stores the same rows. The monolith
+   never calls `upsert`.
 4. With joins, legacy hash keys that are not model columns are no longer qualified with the model's table.
    Those calls fail today.
 5. The PHP warning before `update_all`'s "Updating requires a hash or string." disappears. The exception is
