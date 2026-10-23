@@ -929,10 +929,16 @@ class Model
      * Bulk insert-or-update. Faithful to Laravel Eloquent's upsert: a single
      * atomic operation that bypasses validations, callbacks and dirty-tracking.
      *
+     * Every row gets the created_at and updated_at it lacks, set to the current time (one time for
+     * the whole call), and updated_at is overwritten on a conflict too, unless $update is empty;
+     * the default list never overwrites created_at. {@link without_timestamps()} suspends that for
+     * this class: its rows go as given, and updated_at is not added to the columns a conflict
+     * overwrites.
+     *
      * @param array<array<string,mixed>> $values Rows to insert/update (identical keys)
      * @param array<string>|string $unique_by Column(s) identifying a record
      * @param array<string>|null $update Columns to overwrite on conflict; null = all
-     *   inserted columns; [] = plain insert (error on duplicates)
+     *   inserted columns but created_at; [] = plain insert (error on duplicates)
      * @return int Affected row count (summed across chunks)
      */
     public static function upsert(array $values, array|string $unique_by, ?array $update = null): int
@@ -1549,8 +1555,10 @@ class Model
     /**
      * Runs $fn without this model class's timestamps, and returns what $fn returns: while it runs,
      * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at,
-     * a row that Table::insert() writes straight to this class's table gets neither, and
-     * update_all() with a hash 'set' does not set updated_at.
+     * a row that Table::insert() writes straight to this class's table gets neither,
+     * update_all() with a hash 'set' does not set updated_at, and upsert() gives its rows neither
+     * and does not add updated_at to the columns a conflict overwrites. A timestamp the caller
+     * writes is still written.
      *
      * <code>
      * $author = Author::without_timestamps(fn() => Author::create(['name' => 'Tito']));

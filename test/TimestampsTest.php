@@ -5,8 +5,8 @@ use ActiveRecord\Timestamps;
 
 /**
  * The timestamp policy (ActiveRecord\Timestamps): the one "now", which columns of a table are its
- * timestamps, the rule that fills them in an INSERT or an UPDATE, and the per-class suspension
- * behind Model::without_timestamps().
+ * timestamps, the rule that fills them in an INSERT, an UPDATE or an UPSERT, and the per-class
+ * suspension behind Model::without_timestamps().
  */
 class TimestampsTest extends DatabaseTest
 {
@@ -544,5 +544,203 @@ class TimestampsTest extends DatabaseTest
         Author::without_timestamps(function () use ($other): void {
             $this->assert_same(['name' => 'x'], Timestamps::apply_to_update(Author::table(), Author::class, ['name' => 'x'], $other));
         });
+    }
+
+    // -- upsert(): the clock, the columns and the suspension of every other write
+
+    public function test_upsert_honors_without_timestamps(): void
+    {
+        Author::without_timestamps(fn() => Author::upsert([['author_id' => 1, 'name' => 'U']], 'author_id', ['name']));
+
+        $this->assert_null(Author::find(1)->updated_at);
+    }
+
+    // The conflict clause is part of the rule. With updated_at in it, the clause would read the column from a row
+    // that does not insert it (NULL on MySQL, the column's default on the others) and wipe the stamp the row has
+    public function test_a_suspended_upsert_leaves_the_stamps_of_the_row_it_updates(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $author = Author::create(['name' => 'Stamped']);
+        Timestamps::freeze('2026-10-21 11:00:00');
+
+        Author::without_timestamps(fn() => Author::upsert([['author_id' => $author->author_id, 'name' => 'Quiet']], 'author_id', ['name']));
+        $sql = Author::table()->last_sql;
+
+        $this->assert_same('Quiet', Author::find($author->author_id)->name);
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps($author->author_id));
+        $this->assert_sql_doesnt_has('created_at', $sql);
+        $this->assert_sql_doesnt_has('updated_at', $sql);
+    }
+
+    public function test_a_suspended_upsert_stamps_the_rows_it_inserts_with_nothing(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::without_timestamps(fn() => Author::upsert([['author_id' => 70, 'name' => 'New'], ['author_id' => 71, 'name' => 'Newer']], 'author_id'));
+
+        foreach ([70, 71] as $id) {
+            $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps($id));
+        }
+
+        // the suspension ended with the call
+        Author::upsert([['author_id' => 72, 'name' => 'After']], 'author_id');
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps(72));
+    }
+
+    // What the caller gives is the caller's, and so is the conflict clause: updated_at joins it of the library's own
+    // accord only where the class is not suspended
+    public function test_a_suspended_upsert_keeps_the_timestamps_the_caller_gives_and_adds_none_to_the_conflict_clause(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $author = Author::create(['name' => 'Stamped']);
+        $rows = [
+            ['author_id' => $author->author_id, 'name' => 'Given', 'updated_at' => self::GIVEN],
+            ['author_id' => 90, 'name' => 'Fresh', 'updated_at' => self::GIVEN],
+        ];
+
+        Author::without_timestamps(fn() => Author::upsert($rows, 'author_id', ['name']));
+
+        // the row that existed was asked for its name and nothing else; the new one has what it came with, and no created_at
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps($author->author_id));
+        $this->assert_same(['created_at' => null, 'updated_at' => self::GIVEN], $this->stamps(90));
+
+        // outside the suspension the same call overwrites updated_at too, with the value its row has
+        Author::upsert($rows, 'author_id', ['name']);
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::GIVEN], $this->stamps($author->author_id));
+    }
+
+    // The default list is every column the rows insert: a suspended class inserts the timestamps the caller gave, and no more
+    public function test_a_suspended_upsert_with_the_default_list_overwrites_the_columns_it_inserts(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $author = Author::create(['name' => 'Stamped', 'parent_author_id' => 1]);
+
+        Author::without_timestamps(fn() => Author::upsert([['author_id' => $author->author_id, 'name' => 'Quiet', 'updated_at' => self::GIVEN]], 'author_id'));
+
+        $found = Author::find($author->author_id);
+        $this->assert_same(['Quiet', 1], [$found->name, $found->parent_author_id]);
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::GIVEN], $this->stamps($author->author_id));
+    }
+
+    public function test_the_suspension_of_a_class_leaves_the_upsert_of_another_model_stamping(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $stamped = ['created_at' => self::FROZEN, 'updated_at' => self::FROZEN];
+
+        // JoinAuthor is another model of the authors table, OverridingAuthor a subclass of Author
+        Author::without_timestamps(function (): void {
+            JoinAuthor::upsert([['author_id' => 60, 'name' => 'Other']], 'author_id');
+            OverridingAuthor::upsert([['author_id' => 61, 'name' => 'Sub']], 'author_id');
+        });
+        $this->assert_same($stamped, $this->stamps(60));
+        $this->assert_same($stamped, $this->stamps(61));
+
+        // nor does a subclass suspend its parent
+        OverridingAuthor::without_timestamps(fn() => Author::upsert([['author_id' => 62, 'name' => 'Parent']], 'author_id'));
+        $this->assert_same($stamped, $this->stamps(62));
+    }
+
+    public function test_upsert_stamps_with_the_clock_of_the_policy(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::upsert([['author_id' => 80, 'name' => 'A'], ['author_id' => 81, 'name' => 'B']], 'author_id', ['name']);
+
+        $stamped = ['created_at' => self::FROZEN, 'updated_at' => self::FROZEN];
+        $this->assert_same($stamped, $this->stamps(80));
+        $this->assert_same($stamped, $this->stamps(81));
+    }
+
+    public function test_upsert_on_a_conflict_sets_updated_at_to_the_clock_and_keeps_created_at(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $author = Author::create(['name' => 'Old']);
+
+        // with the default list, then with one of its own
+        foreach ([['2026-10-21 11:00:00', null], ['2026-10-21 12:00:00', ['name']]] as [$later, $update]) {
+            Timestamps::freeze($later);
+            Author::upsert([['author_id' => $author->author_id, 'name' => "At $later"]], 'author_id', $update);
+
+            $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => $later], $this->stamps($author->author_id));
+        }
+    }
+
+    public function test_upsert_with_an_empty_update_list_stamps_its_rows_and_has_no_conflict_clause(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::upsert([['author_id' => 85, 'name' => 'Plain']], 'author_id', []);
+        $sql = Author::table()->last_sql;
+
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps(85));
+        $this->assert_sql_doesnt_has('ON CONFLICT', $sql);
+        $this->assert_sql_doesnt_has('ON DUPLICATE', $sql);
+    }
+
+    public function test_upsert_keeps_a_null_timestamp_the_caller_gives(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::upsert([['author_id' => 86, 'name' => 'Nulls', 'created_at' => null, 'updated_at' => null]], 'author_id', []);
+
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps(86));
+    }
+
+    // "created at" and UPDATED_AT are the attributes created_at and updated_at (#92), and the policy names them.
+    // Upsert used to stamp only the columns that are named created_at and updated_at themselves
+    public function test_upsert_stamps_the_timestamp_columns_the_policy_names(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        OddTimestamp::upsert([['id' => 5, 'name' => 'odd']], 'id');
+
+        $odd = OddTimestamp::find(5);
+        $this->assert_same([self::FROZEN, self::FROZEN], [$odd->created_at->format('Y-m-d H:i:s'), $odd->updated_at->format('Y-m-d H:i:s')]);
+    }
+
+    public function test_upsert_on_a_conflict_bumps_the_updated_at_column_the_policy_names(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        OddTimestamp::upsert([['id' => 5, 'name' => 'odd']], 'id');
+
+        // the default list leaves "created at" out and keeps UPDATED_AT, then a list of its own gets UPDATED_AT added
+        foreach ([['default', '2026-10-21 11:00:00', null], ['listed', '2026-10-21 12:00:00', ['name']]] as [$name, $later, $update]) {
+            Timestamps::freeze($later);
+            OddTimestamp::upsert([['id' => 5, 'name' => $name]], 'id', $update);
+
+            $odd = OddTimestamp::find(5);
+            $this->assert_same($name, $odd->name);
+            $this->assert_same([self::FROZEN, $later], [$odd->created_at->format('Y-m-d H:i:s'), $odd->updated_at->format('Y-m-d H:i:s')]);
+        }
+    }
+
+    // A table with one of the two columns touches that one only. authors, seen through a Table that knows one of them
+    public function test_upsert_on_a_table_with_only_created_at(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $table = clone Author::table();
+        unset($table->columns['updated_at']);
+
+        // author 1 exists: created_at is not overwritten, and updated_at is none of this table's business
+        $table->upsert([['author_id' => 1, 'name' => 'C1'], ['author_id' => 50, 'name' => 'C2']], 'author_id');
+
+        $this->assert_same('C1', Author::find(1)->name);
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps(1));
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => null], $this->stamps(50));
+        $this->assert_sql_doesnt_has('updated_at', (string) $table->last_sql);
+    }
+
+    public function test_upsert_on_a_table_with_only_updated_at(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $table = clone Author::table();
+        unset($table->columns['created_at']);
+
+        $table->upsert([['author_id' => 1, 'name' => 'U1'], ['author_id' => 51, 'name' => 'U2']], 'author_id', ['name']);
+
+        $this->assert_same('U1', Author::find(1)->name);
+        $this->assert_same(['created_at' => null, 'updated_at' => self::FROZEN], $this->stamps(1));
+        $this->assert_same(['created_at' => null, 'updated_at' => self::FROZEN], $this->stamps(51));
+        $this->assert_sql_doesnt_has('created_at', (string) $table->last_sql);
     }
 }

@@ -8,9 +8,15 @@ namespace ActiveRecord;
 
 /**
  * The library's one timestamp policy: where "now" comes from, which columns of a table are its
- * timestamps, what an INSERT or an UPDATE fills in, and the per-class suspension behind
+ * timestamps, what an INSERT, an UPDATE or an UPSERT fills in, and the per-class suspension behind
  * Model::without_timestamps(). Whatever sets created_at or updated_at of its own accord asks
- * here, so that they all agree.
+ * here, so that they all agree:
+ *
+ * - the save() of a model, through Model::set_timestamps(), asks for now() and suspended(), and
+ *   reads the columns as the model's attributes, which is the rule below;
+ * - the INSERTs and UPSERTs of the Query engine ask apply_to_insert(), and its UPDATEs
+ *   apply_to_update(). An upsert also asks columns() and suspended() for the updated_at that a
+ *   conflict overwrites (see Query::upsert()).
  *
  * A timestamp column is a column whose attribute name (its inflected name, see Column) is
  * created_at or updated_at. That is not always its name: "created at" is created_at (#92).

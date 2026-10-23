@@ -79,6 +79,24 @@ final class QueryCompiler
     }
 
     /**
+     * The UPSERT of $row_count rows of $columns: the SQLBuilder calls Table::upsert() made before the
+     * engine took it over, moved as they were. The names are the columns' real names, unquoted (see
+     * Query::upsert()). $unique_by is the conflict target where the adapter names one, and $update the
+     * columns a conflict overwrites: with none the statement is a plain INSERT, without a conflict clause.
+     *
+     * @param list<string> $columns
+     * @param list<string> $unique_by
+     * @param list<string> $update
+     */
+    public function compile_upsert(array $columns, int $row_count, array $unique_by, array $update): SQLBuilder
+    {
+        $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
+        $sql->upsert($columns, $row_count, $unique_by, $update);
+
+        return $sql;
+    }
+
+    /**
      * The SELECT a legacy options array describes: the body Table::options_to_sql() had before
      * the engine took it over, moved as it was (its calls into Table go through $this->table), so
      * that every legacy entry sends the same SQL and the same bind values. Joins come before

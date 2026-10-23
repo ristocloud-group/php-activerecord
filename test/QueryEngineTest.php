@@ -6,9 +6,9 @@ use ActiveRecord\Timestamps;
 
 /**
  * The Query engine behind the legacy entries: Table::options_to_sql() builds its SELECT through
- * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs, UPDATEs
- * and DELETEs of Table, update_all() and delete_all(). The statements every entry sends are pinned
- * in GoldenSqlTest.
+ * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs, UPDATEs,
+ * DELETEs and UPSERTs of Table, update_all() and delete_all(). The statements every entry sends are
+ * pinned in GoldenSqlTest.
  */
 class QueryEngineTest extends DatabaseTest
 {
@@ -915,5 +915,132 @@ class QueryEngineTest extends DatabaseTest
                 $this->assert_string_contains_string(" WHERE $column IN (SELECT $column FROM ", $sql->to_s());
             }
         }
+    }
+
+    // -- upsert()
+
+    // Table::upsert() hands the rows to the engine: both send the same statement with the same binds
+    public function test_upsert_is_served_by_the_engine(): void
+    {
+        $rows = [['author_id' => 1, 'name' => 'Up'], ['author_id' => 9, 'name' => 'New']];
+        // loaded before the capture: a cold Table reads its schema inside it
+        $table = Author::table();
+
+        [$engine] = GoldenStatements::mask(GoldenStatements::capture(fn() => Query::for_table($table)->upsert($rows, 'author_id', ['name'])));
+        [$legacy] = GoldenStatements::mask(GoldenStatements::capture(fn() => $table->upsert($rows, 'author_id', ['name'])));
+
+        $this->assert_array_has_key('sql', $engine);
+        $this->assert_same($engine, $legacy);
+        $this->assert_same(['Up', 'New'], [Author::find(1)->name, Author::find(9)->name]);
+    }
+
+    public function test_the_upsert_of_the_engine_returns_the_affected_rows_and_leaves_its_statement_in_the_table(): void
+    {
+        $table = Author::table();
+
+        $affected = Query::for_table($table)->upsert([['author_id' => 1, 'name' => 'Up'], ['author_id' => 9, 'name' => 'New']], 'author_id', ['name']);
+
+        // MySQL counts 2 for a row it updated, the others 1
+        $this->assert_greater_than_or_equal(2, $affected);
+        $this->assert_sql_has('INSERT INTO authors (author_id, name, created_at, updated_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)', (string) $table->last_sql);
+    }
+
+    // like the other terminals, an upsert runs through the Table its query was given
+    public function test_an_upsert_runs_through_the_table_it_was_given(): void
+    {
+        $given = Table::load('\\Author');
+        $this->assert_not_same(Author::table(), $given);
+
+        $given->upsert([['author_id' => 1, 'name' => 'Given']], 'author_id', ['name']);
+
+        $this->assert_sql_has('INSERT INTO authors', (string) $given->last_sql);
+        $this->assert_null(Author::table()->last_sql);
+        $this->assert_same('Given', Author::find(1)->name);
+    }
+
+    public function test_compile_upsert_renders_the_statement_of_the_rows_it_is_given(): void
+    {
+        $sql = (new ActiveRecord\QueryCompiler(Author::table()))->compile_upsert(['author_id', 'name'], 2, ['author_id'], ['name']);
+
+        $this->assert_sql_has('INSERT INTO authors (author_id, name) VALUES (?, ?), (?, ?)', $sql->to_s());
+        $this->assert_sql_has(
+            $this->conn instanceof ActiveRecord\MysqlAdapter
+                ? 'ON DUPLICATE KEY UPDATE name = VALUES(name)'
+                : 'ON CONFLICT (author_id) DO UPDATE SET name = EXCLUDED.name',
+            $sql->to_s()
+        );
+
+        // no column to overwrite, no conflict clause: a plain INSERT
+        $plain = (new ActiveRecord\QueryCompiler(Author::table()))->compile_upsert(['author_id', 'name'], 1, ['author_id'], []);
+        $this->assert_same('INSERT INTO ' . $this->conn->quote_name('authors') . ' (' . $this->conn->quote_name('author_id') . ', ' . $this->conn->quote_name('name') . ') VALUES (?, ?)', $plain->to_s());
+    }
+
+    // The values of an upsert are prepared as the finders prepare theirs: a DateTime in the format of its column,
+    // a DATE column's as a date
+    public function test_upsert_formats_each_datetime_by_its_column(): void
+    {
+        $table = DatedCount::table();
+        $day = new DateTime('2026-01-03 11:12:13');
+        $at = new DateTime('2026-01-03 10:00:00');
+
+        [$statement] = GoldenStatements::capture(fn() => $table->upsert([['day' => $day, 'at' => $at, 'hits' => 3]], ['day', 'at'], ['hits']));
+
+        $this->assert_same([$this->conn->date_to_string($day), $this->conn->datetime_to_string($at), 3], $statement['values']);
+        $this->assert_same(3, DatedCount::find_by_hits(3)->hits);
+    }
+
+    // The rows of an upsert are prepared once, by Table::process_data(): Table::insert() does it twice (its data is
+    // taken by reference), and the engine's upsert is not to copy that. A Table that counts its calls
+    public function test_upsert_prepares_each_row_once(): void
+    {
+        $table = new class (Author::class) extends Table {
+            public int $prepared = 0;
+
+            public function &process_data(?array $hash): ?array
+            {
+                $this->prepared++;
+
+                return parent::process_data($hash);
+            }
+        };
+
+        Query::for_table($table)->upsert([['author_id' => 1, 'name' => 'A'], ['author_id' => 9, 'name' => 'B']], 'author_id', ['name']);
+
+        $this->assert_same(2, $table->prepared);
+    }
+
+    // Spec §6.3: Model::connection() is a public static that a subclass can override. update_all() and delete_all()
+    // take their connection from it; upsert never did: it has always run on the connection of its Table, and never
+    // calls the hook
+    public function test_upsert_never_calls_the_connection_override(): void
+    {
+        ConnectionCountingAuthor::table();
+
+        ConnectionCountingAuthor::$connection_calls = 0;
+        ConnectionCountingAuthor::upsert([['author_id' => 1, 'name' => 'Counted']], 'author_id', ['name']);
+
+        $this->assert_same(0, ConnectionCountingAuthor::$connection_calls);
+        $this->assert_same('Counted', Author::find(1)->name);
+    }
+
+    public function test_upsert_runs_on_the_connection_of_its_table_not_the_one_the_override_returns(): void
+    {
+        RoutedAuthor::table();
+        $routed = ActiveRecord\Connection::instance(ActiveRecord\Config::instance()->get_default_connection());
+        $routed->last_query = 'untouched';
+        $this->conn->last_query = 'untouched';
+        RoutedAuthor::$route = $routed;
+
+        try {
+            RoutedAuthor::upsert([['author_id' => 1, 'name' => 'Routed']], 'author_id', ['name']);
+            $on_routed = $routed->last_query;
+        } finally {
+            RoutedAuthor::$route = null;
+            $routed->close();
+        }
+
+        $this->assert_same('untouched', $on_routed);
+        $this->assert_sql_has('INSERT INTO authors', (string) $this->conn->last_query);
+        $this->assert_same('Routed', Author::find(1)->name);
     }
 }

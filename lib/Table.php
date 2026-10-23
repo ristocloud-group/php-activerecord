@@ -544,125 +544,19 @@ class Table
     }
 
     /**
+     * Bulk insert-or-update, through the Query engine: it hands its arguments to Query::upsert(), which
+     * holds the logic, and returns the affected rows that counts. The last statement sent is left in
+     * $last_sql. The rows get the created_at and updated_at they lack, set to the current time (see
+     * Timestamps), and updated_at is overwritten on a conflict too; a class whose timestamps are
+     * suspended gets neither, see Model::without_timestamps().
+     *
      * @param list<array<string, mixed>> $values
      * @param string|list<string> $unique_by
      * @param list<string>|null $update
      */
     public function upsert(array $values, array|string $unique_by, ?array $update = null): int
     {
-        $unique_by = is_array($unique_by) ? $unique_by : [$unique_by];
-
-        if (empty($unique_by) || in_array('', $unique_by, true)) {
-            throw new ActiveRecordException('upsert requires a non-empty $unique_by.');
-        }
-
-        if (empty($values)) {
-            return 0;
-        }
-
-        // The statement names the columns (#92): row keys, $unique_by and $update are
-        // mapped from attribute names first, so everything below works on column names.
-        // (string): a name that is not a string renders as quote_name() always cast it.
-        $column_name = fn(mixed $name): string => $this->real_column_name((string) $name);
-        $values = array_map(fn(array $row): array => $this->real_column_keys($row), $values);
-        $unique_by = array_map($column_name, $unique_by);
-        $update = null === $update ? null : array_map($column_name, $update);
-
-        // Every row must share the same set of keys.
-        $first_keys = array_keys(reset($values));
-        $sorted = $first_keys;
-        sort($sorted);
-        foreach ($values as $row) {
-            $keys = array_keys($row);
-            sort($keys);
-            if ($keys !== $sorted) {
-                throw new ActiveRecordException('upsert requires every row to have the same set of keys.');
-            }
-        }
-
-        // Auto-manage timestamps where the columns exist and the caller omitted them.
-        $now = date('Y-m-d H:i:s');
-        $has_created = isset($this->columns['created_at']);
-        $has_updated = isset($this->columns['updated_at']);
-        foreach ($values as &$row) {
-            if ($has_created && !array_key_exists('created_at', $row)) {
-                $row['created_at'] = $now;
-            }
-            if ($has_updated && !array_key_exists('updated_at', $row)) {
-                $row['updated_at'] = $now;
-            }
-        }
-        unset($row);
-
-        // Canonical column order (after timestamp injection, all rows share these).
-        $columns = array_keys(reset($values));
-
-        // Resolve the update column list.
-        if (is_null($update)) {
-            // All inserted columns (Eloquent-faithful), minus created_at.
-            $update = array_values(array_filter($columns, fn($c) => $c !== 'created_at'));
-        }
-        if ($update !== [] && $has_updated && !in_array('updated_at', $update, true)) {
-            $update[] = 'updated_at';
-        }
-
-        // Convert values (DateTime -> string) per row.
-        foreach ($values as &$row) {
-            $row = $this->process_data($row);
-        }
-        unset($row);
-
-        $max = $this->connection()::$MAX_BIND_PARAMS;
-        $column_count = count($columns);
-
-        if ($column_count === 0) {
-            throw new ActiveRecordException('upsert requires at least one column.');
-        }
-
-        if ($column_count > $max) {
-            throw new ActiveRecordException(
-                "upsert: a row has more columns ($column_count) than the adapter's bind-parameter limit ($max)."
-            );
-        }
-
-        // $column_count is >= 1 (checked above) and <= $max (checked above), so this is always >= 1.
-        $chunk_size = max(1, intdiv($max, $column_count));
-        $chunks = array_chunk($values, $chunk_size);
-
-        $use_transaction = count($chunks) > 1 && !$this->connection()->inTransaction();
-        if ($use_transaction) {
-            $this->connection()->transaction();
-        }
-
-        $affected = 0;
-
-        try {
-            foreach ($chunks as $chunk) {
-                $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-                $sql->upsert($columns, count($chunk), $unique_by, $update);
-
-                $bind = [];
-                foreach ($chunk as $row) {
-                    foreach ($columns as $column) {
-                        $bind[] = $row[$column];
-                    }
-                }
-
-                $sth = $this->connection()->query(($this->last_sql = $sql->to_s()), $bind);
-                $affected += $sth->rowCount();
-            }
-
-            if ($use_transaction) {
-                $this->connection()->commit();
-            }
-        } catch (\Throwable $e) {
-            if ($use_transaction) {
-                $this->connection()->rollback();
-            }
-            throw $e;
-        }
-
-        return $affected;
+        return Query::for_table($this)->upsert($values, $unique_by, $update);
     }
 
     /**

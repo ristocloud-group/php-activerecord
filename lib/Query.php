@@ -12,7 +12,8 @@ namespace ActiveRecord;
  * It holds a QueryState, which QueryCompiler renders as a SQLBuilder, and runs that statement
  * through its terminals (get, exists, ...). The legacy entries (find, count, exists, ...) hand it
  * their options array through from_options(). The writes of Table (insert, update, delete) and of
- * Model (update_all, delete_all) run through its execute_*() methods.
+ * Model (update_all, delete_all) run through its execute_*() methods, and the upsert of Table through
+ * upsert().
  *
  * @template TModel of Model
  * @package ActiveRecord
@@ -54,9 +55,9 @@ class Query
 
     /**
      * A query on $table's model that holds no options: where a statement starts that reads none,
-     * such as the INSERT of Table::insert() (see execute_insert()). It reads and builds through
-     * $table itself, not through the Table the model class would load, which can be another
-     * instance.
+     * such as the INSERT of Table::insert() (see execute_insert()) and the UPSERT of Table::upsert()
+     * (see upsert()). It reads and builds through $table itself, not through the Table the model
+     * class would load, which can be another instance.
      *
      * @internal Serves the legacy entries; not a supported API.
      * @return self<Model>
@@ -255,6 +256,147 @@ class Query
         $sql = (new QueryCompiler($this->table(), $connection))->compile_delete($this->state);
 
         return $this->execute_write($sql, $format_dates, $connection);
+    }
+
+    /**
+     * Bulk insert-or-update: the body of Table::upsert(), moved here. One atomic operation that bypasses
+     * validations, callbacks and dirty-tracking, and returns the rows it affected, summed across its
+     * statements (MySQL counts a row it updated twice).
+     *
+     * $values is a list of rows, hashes that all have the same keys. These and the names of $unique_by
+     * and $update are column names or attribute names (#92). $unique_by identifies a record: the
+     * conflict target where the adapter names one (Postgres, SQLite); MySQL conflicts on any unique
+     * index. $update is the columns a conflict overwrites: null, every column the rows insert except
+     * created_at; an empty list, none, which makes a plain INSERT that fails on a duplicate. The
+     * values are prepared as the finders prepare theirs (Table::process_data()), once. The rows go in
+     * statements of at most Connection::$MAX_BIND_PARAMS binds, in one transaction when there are
+     * several and the connection is not in one already.
+     *
+     * The timestamps are those of Timestamps, for the class the table was loaded for: every row gets
+     * the created_at and updated_at it lacks, all set to the one time of the statement, and updated_at
+     * is overwritten on a conflict besides, unless $update is empty. While the class is suspended
+     * (Model::without_timestamps()) the rows go as they are and updated_at is not added to the
+     * columns a conflict overwrites: a timestamp the caller puts in a row, or in $update, is the
+     * caller's.
+     *
+     * It runs on the connection of the Table, as Table::upsert() always did, and never calls
+     * Model::connection(), the hook a subclass can override and update_all() and delete_all() take
+     * theirs from. The last statement it sent is left in Table::$last_sql. The query's own conditions
+     * play no part: an upsert has none.
+     *
+     * @param list<array<string, mixed>> $values
+     * @param string|list<string> $unique_by
+     * @param list<string>|null $update
+     * @throws ActiveRecordException before any SQL: for an empty $unique_by, rows that do not share their
+     *   keys, no column to insert, or a row with more columns than the adapter has bind parameters
+     */
+    public function upsert(array $values, array|string $unique_by, ?array $update = null): int
+    {
+        $table = $this->table();
+        $unique_by = is_array($unique_by) ? $unique_by : [$unique_by];
+
+        if (empty($unique_by) || in_array('', $unique_by, true)) {
+            throw new ActiveRecordException('upsert requires a non-empty $unique_by.');
+        }
+
+        if (empty($values)) {
+            return 0;
+        }
+
+        // The statement names the columns (#92): row keys, $unique_by and $update are
+        // mapped from attribute names first, so everything below works on column names.
+        // (string): a name that is not a string renders as quote_name() always cast it.
+        $column_name = fn(mixed $name): string => $table->real_column_name((string) $name);
+        $values = array_map(fn(array $row): array => $table->real_column_keys($row), $values);
+        $unique_by = array_map($column_name, $unique_by);
+        $update = null === $update ? null : array_map($column_name, $update);
+
+        // Every row must share the same set of keys.
+        $first_keys = array_keys(reset($values));
+        $sorted = $first_keys;
+        sort($sorted);
+        foreach ($values as $row) {
+            $keys = array_keys($row);
+            sort($keys);
+            if ($keys !== $sorted) {
+                throw new ActiveRecordException('upsert requires every row to have the same set of keys.');
+            }
+        }
+
+        // The timestamps the rows lack, all at the one time of the statement (see Timestamps)
+        $class = $table->class->getName();
+        $now = Timestamps::now();
+        $values = array_map(fn(array $row): array => Timestamps::apply_to_insert($table, $class, $row, $now), $values);
+
+        // Canonical column order (after timestamp injection, all rows share these).
+        $columns = array_keys(reset($values));
+
+        // Resolve the update column list.
+        $timestamps = Timestamps::columns($table);
+        if (is_null($update)) {
+            // All inserted columns (Eloquent-faithful), minus created_at.
+            $update = array_values(array_filter($columns, fn($c) => $c !== $timestamps['created_at']));
+        }
+        // updated_at is overwritten on a conflict as an UPDATE sets it, unless the class is suspended
+        if ($update !== [] && null !== $timestamps['updated_at'] && !Timestamps::suspended($class) && !in_array($timestamps['updated_at'], $update, true)) {
+            $update[] = $timestamps['updated_at'];
+        }
+
+        // Convert values (DateTime -> string) per row.
+        $values = array_map(fn(array $row): array => $table->process_data($row), $values);
+
+        $connection = $table->connection();
+        $max = $connection::$MAX_BIND_PARAMS;
+        $column_count = count($columns);
+
+        if ($column_count === 0) {
+            throw new ActiveRecordException('upsert requires at least one column.');
+        }
+
+        if ($column_count > $max) {
+            throw new ActiveRecordException(
+                "upsert: a row has more columns ($column_count) than the adapter's bind-parameter limit ($max)."
+            );
+        }
+
+        // $column_count is >= 1 (checked above) and <= $max (checked above), so this is always >= 1.
+        $chunk_size = max(1, intdiv($max, $column_count));
+        $chunks = array_chunk($values, $chunk_size);
+
+        $use_transaction = count($chunks) > 1 && !$connection->inTransaction();
+        if ($use_transaction) {
+            $connection->transaction();
+        }
+
+        $compiler = new QueryCompiler($table);
+        $affected = 0;
+
+        try {
+            foreach ($chunks as $chunk) {
+                $sql = $compiler->compile_upsert($columns, count($chunk), $unique_by, $update);
+
+                $bind = [];
+                foreach ($chunk as $row) {
+                    foreach ($columns as $column) {
+                        $bind[] = $row[$column];
+                    }
+                }
+
+                $sth = $connection->query(($table->last_sql = $sql->to_s()), $bind);
+                $affected += $sth->rowCount();
+            }
+
+            if ($use_transaction) {
+                $connection->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($use_transaction) {
+                $connection->rollback();
+            }
+            throw $e;
+        }
+
+        return $affected;
     }
 
     /**
