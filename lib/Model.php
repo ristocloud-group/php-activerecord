@@ -77,6 +77,7 @@ use Closure;
  * @property mixed $id Primary-key attribute, present on virtually every table; resolved
  *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
  *           property since column schema is introspected at runtime.
+ * @method static list<static> get() The models of the rows of a new query on this class
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */
@@ -908,6 +909,29 @@ class Model
     public static function table()
     {
         return Table::load(get_called_class());
+    }
+
+    /**
+     * Starts a query on this model: the entry point of the fluent builder.
+     *
+     * <code>
+     * $authors = Author::new_query()->get();
+     * </code>
+     *
+     * The builder methods can also be called on the class itself, which is this method followed by
+     * the call: Author::get() is Author::new_query()->get() (see {@link __callStatic()}). It is
+     * not find() or any other legacy finder, so what a subclass overrides in those is not run.
+     * It is not query() either, which runs a raw SQL statement.
+     *
+     * @return Query<static>
+     */
+    public static function new_query(): Query
+    {
+        // the query is on the class this was called on, read through its table as the legacy entries do
+        /** @var Query<static> $query */
+        $query = Query::for_table(static::table());
+
+        return $query;
     }
 
     /**
@@ -1896,17 +1920,27 @@ class Model
      * Person::find_or_create_by_name_and_id(array('name' => 'Tito', 'id' => 1));
      * </code>
      *
+     * Any other name is a call of the query builder: a method named in {@link Query::FORWARDABLE} is
+     * called, with the arguments as given, on a new query of this class ({@link new_query()}), so
+     * that Person::get() is Person::new_query()->get(). The `@method static` tags of the class
+     * describe them. A static update() or delete() is refused, since it would write every row: use
+     * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
+     * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
+     *
      * @param string $method Name of method
      * @param mixed $args Method args
-     * @return Model|list<Model>|int|string|null Model or null for the find-by-attributes and
-     *   find-or-create-by-attributes dynamic finders, an array of Model for the
-     *   find-all-by-attributes finder, int|string for the count-by-attributes finder
-     * @throws ActiveRecordException if invalid query
+     * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
+     *   find-or-create-by-attributes), a list of Model (find-all-by-attributes) or an int|string
+     *   (count-by-attributes). For a builder method, what that method returns.
+     * @throws ActiveRecordException if invalid query, for a static update() or delete(), or if there
+     *   is no such method
      * @see find
      */
     public static function __callStatic($method, $args)
     {
-        $options = static::extract_and_validate_options($args);
+        // only a dynamic finder takes an options hash out of its arguments: the call of a builder
+        // method keeps them as they were given
+        $options = self::is_dynamic_finder($method) ? static::extract_and_validate_options($args) : [];
         $create = false;
 
         if (substr($method, 0, 17) == 'find_or_create_by') {
@@ -1952,7 +1986,29 @@ class Model
             return static::count($options);
         }
 
+        if ('update' === $method || 'delete' === $method) {
+            $class = static::class;
+
+            throw new ActiveRecordException("$class::$method() would write every row: use $class::where(...)->$method(...) or $class::new_query()->$method(...)");
+        }
+
+        if (in_array($method, Query::FORWARDABLE, true)) {
+            return static::new_query()->$method(...$args);
+        }
+
         throw new ActiveRecordException("Call to undefined method: $method");
+    }
+
+    /**
+     * Whether $method is one of the dynamic finders that __callStatic() answers: find_by_*,
+     * find_all_by_*, count_by_* and find_or_create_by_*.
+     */
+    private static function is_dynamic_finder(string $method): bool
+    {
+        return str_starts_with($method, 'find_by')
+            || str_starts_with($method, 'find_all_by')
+            || str_starts_with($method, 'count_by')
+            || str_starts_with($method, 'find_or_create_by');
     }
 
     /**

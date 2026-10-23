@@ -20,6 +20,23 @@ namespace ActiveRecord;
  */
 class Query
 {
+    /**
+     * The public builder methods that Model::__callStatic() forwards to a new query of the class it
+     * is called on: Author::get() is Author::new_query()->get(). Each has a `@method static` tag in
+     * the class docblock of Model, and each such tag a name here (QueryForwardingTest pins both).
+     *
+     * Not on it:
+     * - update() and delete(): called statically they would write every row, so __callStatic()
+     *   refuses them;
+     * - the names that Model defines itself (find, first, last, all, count, exists, create, upsert,
+     *   query, find_by_sql, update_all, delete_all, transaction, table, connection, ...): PHP calls
+     *   them and they keep their legacy meaning, so they are reached through new_query() or a chain;
+     * - the internals of the legacy entries (from_options, to_sql_builder, state, execute_*, legacy_*).
+     *
+     * @var list<string>
+     */
+    public const array FORWARDABLE = ['get'];
+
     private QueryState $state;
 
     private ?Table $table = null;
@@ -56,10 +73,10 @@ class Query
     /**
      * A query on $table's model that holds no options: where a statement starts that reads none,
      * such as the INSERT of Table::insert() (see execute_insert()) and the UPSERT of Table::upsert()
-     * (see upsert()). It reads and builds through $table itself, not through the Table the model
-     * class would load, which can be another instance.
+     * (see upsert()), and where the builder starts, Model::new_query(). It reads and builds through
+     * $table itself, not through the Table the model class would load, which can be another instance.
      *
-     * @internal Serves the legacy entries; not a supported API.
+     * @internal Serves the legacy entries and Model::new_query(); not a supported API.
      * @return self<Model>
      */
     public static function for_table(Table $table): self
