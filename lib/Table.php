@@ -831,7 +831,8 @@ class Table
      * repeated name starts a new hash: every condition is kept, in order, and the hashes
      * are ANDed. Without a repeated name there is a single hash, as before.
      *
-     * @internal Serves the Query engine; not a supported API.
+     * @internal Serves the Query engine and the declared conditions of relationships
+     *   (AbstractRelationship::to_positional_conditions()); not a supported API.
      * @param array<string, mixed> $hash A hash
      * @param array<string, mixed> $map Hash of used_name => real_name (a model's $alias_attribute, as configured)
      * @return non-empty-list<array<string, mixed>> Hashes with any aliases replaced with their real field name

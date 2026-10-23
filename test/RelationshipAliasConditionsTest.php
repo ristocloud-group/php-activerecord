@@ -8,7 +8,9 @@ use ActiveRecord\Table;
  * The keys of a relationship's declared hash conditions name the columns of the associated model as its
  * finders read them (#144, spec §6.2.7): an $alias_attribute key, and an attribute name whose column is
  * named differently (#92), in the lazy load and in the eager include alike. An alias next to its column's
- * own name keeps both conditions, ANDed (#129). Every other declared condition sends the SQL it always did.
+ * own name keeps both conditions, ANDed (#129). In a has_many through, which joins the middle table, a key
+ * the mapping changed is named with the target's table. Every other declared condition sends the SQL it
+ * always did.
  *
  * Fixture data:
  *   venues:       1 New York, 2 "Warner Theatre" (Washington, DC), 6 West Chester, 7 and 8 (VA), 9 "YMCA" (Washington, DC)
@@ -21,6 +23,14 @@ use ActiveRecord\Table;
  */
 class RelationshipAliasConditionsTest extends DatabaseTest
 {
+    public function tear_down(): void
+    {
+        // the relationships a test declared are not the model's
+        AliasConditionSettableHost::$has_many = [];
+
+        parent::tear_down();
+    }
+
     // ---- each relationship type: the lazy load and the eager include give every owner the same rows ----
 
     public function test_has_many_conditions_name_an_alias_of_the_associated_model(): void
@@ -53,15 +63,16 @@ class RelationshipAliasConditionsTest extends DatabaseTest
         $this->assert_statement('WHERE (city=?) AND id=?', ['Washington', 9], fn() => $event->washington_venue);
     }
 
-    // the join shape: the load finds the target, Venue, through events; its aliases are the ones read
+    // the join shape: the load finds the target, Venue, through events; its aliases are the ones read, and a
+    // key they map is named with the target's table
     public function test_has_many_through_conditions_name_an_alias_of_the_target(): void
     {
         // host 4's events are at venues 6 (West Chester), 500 (none) and 9 (Washington)
         $sql = $this->assert_parity([1 => [], 2 => [2], 3 => [2], 4 => [9]], 'AliasConditionHost', 'venues');
-        $this->assert_sql_has('WHERE (city=?) AND events.host_id IN(?,?,?,?) ORDER BY venues.id asc', $sql);
+        $this->assert_sql_has('WHERE (venues.city=?) AND events.host_id IN(?,?,?,?) ORDER BY venues.id asc', $sql);
 
         $host = AliasConditionHost::find(4);
-        $this->assert_statement('WHERE (city=?) AND events.host_id=? ORDER BY venues.id asc', ['Washington', 4], fn() => $host->venues);
+        $this->assert_statement('WHERE (venues.city=?) AND events.host_id=? ORDER BY venues.id asc', ['Washington', 4], fn() => $host->venues);
     }
 
     // the reverse-FK shape (#22): the load finds the target, AliasedBookReview, through books
@@ -69,10 +80,57 @@ class RelationshipAliasConditionsTest extends DatabaseTest
     {
         // score is rating: author 1's reviews are 1 (5) and 2 (3), author 2's is 3 (4)
         $sql = $this->assert_parity([1 => [1], 2 => [3], 3 => [], 4 => []], 'AliasConditionAuthor', 'book_reviews', 'author_id asc', 'author_id');
-        $this->assert_sql_has('WHERE (rating IN(?,?)) AND books.author_id IN(?,?,?,?) ORDER BY book_reviews.id asc', $sql);
+        $this->assert_sql_has('WHERE (book_reviews.rating IN(?,?)) AND books.author_id IN(?,?,?,?) ORDER BY book_reviews.id asc', $sql);
 
         $author = AliasConditionAuthor::find(1);
-        $this->assert_statement('WHERE (rating IN(?,?)) AND books.author_id=? ORDER BY book_reviews.id asc', [4, 5, 1], fn() => $author->book_reviews);
+        $this->assert_statement('WHERE (book_reviews.rating IN(?,?)) AND books.author_id=? ORDER BY book_reviews.id asc', [4, 5, 1], fn() => $author->book_reviews);
+    }
+
+    // ---- through: a key the mapping changed is named with the target's table, which the middle table joins ----
+
+    // the join shape: venue_number is venues.id, and events has an id too; state, unchanged, stays as declared.
+    // The statements are pinned whole: the qualifier is the target's table as the rest of the statement names
+    // it, not aliased
+    public function test_has_many_through_names_a_mapped_key_with_the_target_table(): void
+    {
+        $this->assert_parity([1 => [], 2 => [2], 3 => [2], 4 => [9]], 'AliasConditionHost', 'shared_column_venues');
+
+        $host = AliasConditionHost::find(4);
+        $this->assert_same([[
+            'sql' => $this->on_connection('SELECT `venues`.* FROM `venues` INNER JOIN `events` ON(`venues`.id = `events`.venue_id) WHERE (`venues`.`id` IN(?,?) AND `state`=?) AND `events`.`host_id`=? ORDER BY venues.id asc'),
+            'values' => [2, 9, 'DC', 4],
+        ]], GoldenStatements::capture(fn() => $host->shared_column_venues));
+
+        $this->assert_same([[
+            'sql' => $this->on_connection('SELECT * FROM `hosts` ORDER BY id asc'),
+            'values' => [],
+        ], [
+            'sql' => $this->on_connection('SELECT `venues`.*, `events`.host_id AS host_id FROM `venues` INNER JOIN `events` ON(`venues`.id = `events`.venue_id) WHERE (`venues`.`id` IN(?,?) AND `state`=?) AND `events`.`host_id` IN(?,?,?,?) ORDER BY venues.id asc'),
+            'values' => [2, 9, 'DC', 1, 2, 3, 4],
+        ]], GoldenStatements::capture(fn() => AliasConditionHost::all(['include' => 'shared_column_venues', 'order' => 'id asc'])));
+    }
+
+    // the reverse-FK shape: reviewed_book is book_reviews.book_id, and books has a book_id too; rating, unchanged,
+    // stays as declared
+    public function test_reverse_fk_has_many_through_names_a_mapped_key_with_the_target_table(): void
+    {
+        // author 2's review 3 is the one rated 4
+        $sql = $this->assert_parity([1 => [], 2 => [3], 3 => [], 4 => []], 'AliasConditionAuthor', 'scored_reviews', 'author_id asc', 'author_id');
+        $this->assert_sql_has('WHERE (book_reviews.book_id IN(?,?) AND rating=?) AND books.author_id IN(?,?,?,?) ORDER BY book_reviews.id asc', $sql);
+
+        $author = AliasConditionAuthor::find(2);
+        $this->assert_statement('WHERE (book_reviews.book_id IN(?,?) AND rating=?) AND books.author_id=? ORDER BY book_reviews.id asc', [1, 2, 4, 2], fn() => $author->scored_reviews);
+    }
+
+    // the exception spec §6.2.7 accepts: an unqualified key named like a column of the middle table (events.title)
+    // that is an alias of the target (title is name) names the target's column. No event is titled 'Warner Theatre'
+    public function test_through_key_named_like_a_middle_column_and_aliased_by_the_target_names_the_target_column(): void
+    {
+        $sql = $this->assert_parity([1 => [], 2 => [2], 3 => [2], 4 => []], 'AliasConditionHost', 'titled_venues');
+        $this->assert_sql_has('WHERE (venues.name=?) AND events.host_id IN(?,?,?,?) ORDER BY venues.id asc', $sql);
+
+        $host = AliasConditionHost::find(2);
+        $this->assert_statement('WHERE (venues.name=?) AND events.host_id=? ORDER BY venues.id asc', ['Warner Theatre', 2], fn() => $host->titled_venues);
     }
 
     // ---- #129: an alias and its column's own name in one hash are both kept, ANDed ----
@@ -107,6 +165,50 @@ class RelationshipAliasConditionsTest extends DatabaseTest
         $this->assert_parity([1 => null, 2 => null, 3 => null, 5 => null, 6 => null, 7 => null], 'AliasConditionEvent', 'contradicted_venue');
     }
 
+    public function test_an_alias_and_its_column_are_both_kept_in_a_has_one(): void
+    {
+        $sql = $this->assert_parity([1 => 1, 2 => 2, 6 => 5, 7 => null, 8 => null, 9 => null], 'AliasConditionVenue', 'first_music_event');
+        $this->assert_sql_has('WHERE (type=? AND type=?) AND venue_id IN(?,?,?,?,?,?) ORDER BY id asc', $sql);
+
+        // either title alone would match an event of venue 2 (3) or of venue 9 (7)
+        $this->assert_parity([1 => null, 2 => null, 6 => null, 7 => null, 8 => null, 9 => null], 'AliasConditionVenue', 'contradicted_event');
+
+        $venue = AliasConditionVenue::find(2);
+        $this->assert_statement('WHERE (title=? AND title=?) AND venue_id=? ORDER BY id asc', ['Love Overboard', 'Blah', 2], fn() => $venue->contradicted_event);
+    }
+
+    // in a through, the key the mapping changed is named with the target's table, its column's own name as declared
+    public function test_an_alias_and_its_column_are_both_kept_in_a_through(): void
+    {
+        $sql = $this->assert_parity([1 => [], 2 => [2], 3 => [2], 4 => []], 'AliasConditionHost', 'warner_venues_twice');
+        $this->assert_sql_has('WHERE (venues.name=? AND name=?) AND events.host_id IN(?,?,?,?) ORDER BY venues.id asc', $sql);
+
+        // host 4's venue 9 is the YMCA: name alone would match it
+        $this->assert_parity([1 => [], 2 => [], 3 => [], 4 => []], 'AliasConditionHost', 'contradicted_venues');
+
+        $host = AliasConditionHost::find(4);
+        $this->assert_statement('WHERE (venues.name=? AND name=?) AND events.host_id=? ORDER BY venues.id asc', ['Warner Theatre', 'YMCA', 4], fn() => $host->contradicted_venues);
+    }
+
+    // a key declared as the qualification writes the alias's column (`venues`.`name`, quoted for the connection)
+    // comes to equal the qualified alias in one hash: both are kept, ANDed, not one overwriting the other
+    public function test_a_key_declared_as_the_qualified_alias_is_kept_too_in_a_through(): void
+    {
+        $q = $this->conn::$QUOTE_CHARACTER;
+        AliasConditionSettableHost::$has_many = [
+            ['events', 'class_name' => 'Event', 'foreign_key' => 'host_id'],
+            ['venues', 'through' => 'events', 'class_name' => 'AliasThrough\Venue', 'foreign_key' => 'host_id', 'order' => 'venues.id asc',
+                'conditions' => ['title' => 'Warner Theatre', "{$q}venues{$q}.{$q}name{$q}" => 'YMCA']],
+        ];
+
+        // host 4's venue 9 is the YMCA: the declared key alone would match it
+        $sql = $this->assert_parity([1 => [], 2 => [], 3 => [], 4 => []], 'AliasConditionSettableHost', 'venues');
+        $this->assert_sql_has('WHERE (venues.name=? AND venues.name=?) AND events.host_id IN(?,?,?,?) ORDER BY venues.id asc', $sql);
+
+        $host = AliasConditionSettableHost::find(4);
+        $this->assert_statement('WHERE (venues.name=? AND venues.name=?) AND events.host_id=? ORDER BY venues.id asc', ['Warner Theatre', 'YMCA', 4], fn() => $host->venues);
+    }
+
     // ---- #92: attribute names whose columns are named differently ----
 
     public function test_conditions_name_columns_named_differently_from_their_attributes(): void
@@ -130,6 +232,23 @@ class RelationshipAliasConditionsTest extends DatabaseTest
 
         $event = AliasConditionOddEvent::find(1);
         $this->assert_statement('WHERE (space name=? AND space name=?) AND id=?', ['keep', 'drop', 1], fn() => $event->nick_contradicted);
+    }
+
+    // in a through (the reverse-FK shape, odd_columns.id = books.book_id), a name the mapping changed is named with
+    // the target's table: space_name everywhere, camelcase on Postgres only
+    public function test_through_conditions_name_columns_named_differently_from_their_attributes(): void
+    {
+        foreach ([[1, 'keep', 'x'], [2, 'keep', 'y']] as [$id, $space, $camel]) {
+            OddColumn::create(['id' => $id, 'space_name' => $space, 'camelcase' => $camel]);
+        }
+
+        // author 1's book 1 is odd_columns 1, author 2's book 2 odd_columns 2
+        $camel = $this->conn->column_names_are_case_sensitive() ? 'odd_columns.camelCase' : 'camelcase';
+        $sql = $this->assert_parity([1 => [1], 2 => [], 3 => [], 4 => []], 'AliasConditionAuthor', 'odd_columns', 'author_id asc', 'author_id');
+        $this->assert_sql_has("WHERE (odd_columns.space name=? AND $camel=?) AND books.author_id IN(?,?,?,?) ORDER BY odd_columns.id asc", $sql);
+
+        $author = AliasConditionAuthor::find(1);
+        $this->assert_statement("WHERE (odd_columns.space name=? AND $camel=?) AND books.author_id=? ORDER BY odd_columns.id asc", ['keep', 'x', 1], fn() => $author->odd_columns);
     }
 
     // ---- composite keys: one bind per placeholder after the mapped conditions (#116) ----

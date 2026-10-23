@@ -16,5 +16,9 @@ class AliasConditionVenue extends ActiveRecord\Model
     public static $has_one = [
         ['headline_event', 'class_name' => 'AliasedEvent', 'foreign_key' => 'venue_id', 'order' => 'id asc',
             'conditions' => ['headline' => ['Love Overboard', 'Blah']]],
+        ['first_music_event', 'class_name' => 'AliasedEvent', 'foreign_key' => 'venue_id', 'order' => 'id asc',
+            'conditions' => ['kind' => 'Music', 'type' => 'Music']],
+        ['contradicted_event', 'class_name' => 'AliasedEvent', 'foreign_key' => 'venue_id', 'order' => 'id asc',
+            'conditions' => ['headline' => 'Love Overboard', 'title' => 'Blah']],
     ];
 }

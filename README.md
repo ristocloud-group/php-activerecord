@@ -256,8 +256,11 @@ An `$alias_attribute` name stands for its column in the conditions hash of `find
 the names of its associated model, the one its load finds (the target of a `has_many … through`): its aliases and its
 attribute names (`'space_name'` for the column `space name`), in the lazy load and the eager `include` alike. An alias
 next to its column's own name keeps both conditions, ANDed, and any other key, a qualified one included, is written as
-before (in a `through`, name a column of the middle table qualified: `'events.title'`). So that a name is never
-ambiguous, an alias may not be named like a column of the model's
+before. In a `through`, which joins the middle table, a key the mapping changes (an alias, or an attribute name whose
+column is named differently) is named with the target's table, `` `venues`.`city` ``, so it stays unambiguous when the
+middle table has a column of the same name. Still write a key of the middle table qualified (`'events.title'`):
+unqualified, a name that is also an alias or an attribute name of the target names the target's column. So that a name
+is never ambiguous, an alias may not be named like a column of the model's
 own table, by the column's real name or by its attribute name (`'space_name'` for the column `space name`), nor like a
 column every table has without listing it (`_rowid` on MySQL and MariaDB; `rowid`, `oid` and `_rowid_` on SQLite;
 `ctid`, `xmin`, `xmax`, `cmin`, `cmax` and `tableoid` on Postgres): such a model does not load, and its first use
