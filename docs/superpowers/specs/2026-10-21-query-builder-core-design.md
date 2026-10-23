@@ -415,11 +415,11 @@ These were explicitly approved by the maintainer on 2026-10-21, and all go in th
 Approved by the maintainer on 2026-10-23 (issue #144):
 
 6. **Breaking:** an `$alias_attribute` key that names a column of the model's own table, by its real name or by its
-   attribute name (#92), or a pseudo-column of the connection (`_rowid`, `rowid`/`oid`/`_rowid_`,
-   `ctid`/`xmin`/…, which hash keys already treat like columns), is a configuration error. Loading the table throws `ConfigException`, naming the model,
-   the alias and the column. Names are compared the way the database compares column names: case-insensitively,
-   except on Postgres. Every other alias resolves in every hash condition: `find`, `count`, `exists`, `update_all`,
-   `delete_all` and relationship conditions (change 7).
+   attribute name (#92), or a pseudo-column of the connection (`_rowid`, `rowid`/`oid`/`_rowid_`, `ctid`/`xmin`/…,
+   which hash keys already treat like columns), is a configuration error. Loading the table throws `ConfigException`,
+   naming the model, the alias and the column. Names are compared the way the database compares column names:
+   case-insensitively, except on Postgres. Every other alias resolves in every hash condition: `find`, `count`,
+   `exists`, `update_all`, `delete_all` and relationship conditions (change 7).
    - The mapping is static. It never depends on a schema read after the table was loaded, so a schema change at
      runtime cannot change which rows a write touches. That is #144's requirement, and the reason the
      "column wins" rule of #129 was dropped.

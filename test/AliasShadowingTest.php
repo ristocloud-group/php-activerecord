@@ -144,6 +144,50 @@ class AliasShadowingTest extends DatabaseTest
         }
     }
 
+    // ... and only the connection's own: an alias named like a pseudo-column of another adapter is an alias like
+    // any other here, so a check over the names of every adapter would fail. The names the others list are the
+    // literal ones below, minus these (compared as the database does); each goes through a fresh load.
+    public function test_an_alias_named_like_a_pseudo_column_of_another_adapter_is_an_alias(): void
+    {
+        $own = array_map($this->conn->column_name_key(...), $this->conn->pseudo_columns());
+        $foreign = array_filter(
+            ['_rowid', 'rowid', 'oid', '_rowid_', 'ctid', 'xmin', 'xmax', 'cmin', 'cmax', 'tableoid'],
+            fn(string $name) => !in_array($this->conn->column_name_key($name), $own, true),
+        );
+        $this->assert_not_empty($foreign);
+
+        foreach ($foreign as $name) {
+            Table::clear_cache();
+            SettableAliasAuthor::$alias_attribute = [$name => 'name'];
+
+            $this->assert_same('authors', SettableAliasAuthor::table()->table, $name);
+            $this->assert_same(1, (int) SettableAliasAuthor::count([$name => 'Tito']), $name);
+        }
+    }
+
+    // An inherited map is checked against the table of the class that loads, whichever class declares it.
+    // SettableAliasVenue (venues: a city column, no author_id) shares the map set on SettableAliasAuthor
+    // (authors: an author_id column, no city)
+    public function test_an_inherited_alias_is_checked_against_the_table_of_the_child(): void
+    {
+        SettableAliasAuthor::$alias_attribute = ['city' => 'name'];
+
+        $this->assert_same('authors', SettableAliasAuthor::table()->table);
+        $this->assert_same(
+            "SettableAliasVenue::\$alias_attribute: the alias 'city' has the same name as the column 'city' of table venues; rename the alias",
+            $this->config_error(fn() => SettableAliasVenue::table()),
+        );
+
+        Table::clear_cache();
+        SettableAliasAuthor::$alias_attribute = ['author_id' => 'name'];
+
+        $this->assert_same(
+            "SettableAliasAuthor::\$alias_attribute: the alias 'author_id' has the same name as the column 'author_id' of table authors; rename the alias",
+            $this->config_error(fn() => SettableAliasAuthor::table()),
+        );
+        $this->assert_same(1, (int) SettableAliasVenue::count(['author_id' => 'Warner Theatre']));
+    }
+
     // Every alias that names no column resolves in find, count, exists, update_all and delete_all (§6.2.1)
     public function test_an_alias_naming_no_column_resolves_in_every_hash_condition(): void
     {

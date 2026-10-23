@@ -102,7 +102,7 @@ class SqliteAdapter extends Connection
     /**
      * The three names of a table's rowid.
      *
-     * @internal Serves QueryCompiler; not a supported API.
+     * @internal Serves QueryCompiler and Table; not a supported API.
      * @return list<string>
      */
     public function pseudo_columns(): array

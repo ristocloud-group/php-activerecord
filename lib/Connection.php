@@ -806,7 +806,7 @@ abstract class Connection
      * case-sensitive (see column_names_are_case_sensitive()), else as it is. The column a query names
      * is the one whose key equals the key of the reference (see column_reference_key()).
      *
-     * @internal Serves SQLBuilder and Timestamps; not a supported API.
+     * @internal Serves SQLBuilder, Timestamps and Table; not a supported API.
      */
     public function column_name_key(string $name): string
     {
@@ -819,7 +819,7 @@ abstract class Connection
      * (`a``b` is the identifier a`b), anything else as written. A name of several parts is kept
      * whole, so it is the key of no column.
      *
-     * @internal Serves SQLBuilder and Timestamps; not a supported API.
+     * @internal Serves SQLBuilder, Timestamps and Table; not a supported API.
      */
     public function column_reference_key(string $reference): string
     {

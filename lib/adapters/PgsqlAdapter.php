@@ -46,7 +46,7 @@ class PgsqlAdapter extends Connection
     /**
      * The system columns of every table.
      *
-     * @internal Serves QueryCompiler; not a supported API.
+     * @internal Serves QueryCompiler and Table; not a supported API.
      * @return list<string>
      */
     public function pseudo_columns(): array
