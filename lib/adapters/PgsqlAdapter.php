@@ -134,6 +134,18 @@ class PgsqlAdapter extends Connection
     }
 
     /**
+     * The operators Laravel's Postgres grammar adds (ranges, arrays, JSON, networks, text search,
+     * IS [NOT] DISTINCT FROM), less those with a ?: ?, ?|, ?& and @? would read as bind markers,
+     * since the library binds positionally.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return ['between', '#', '<<=', '>>=', '&&', '@>', '<@', '||', '-', '@@', '#-', 'is distinct from', 'is not distinct from'];
+    }
+
+    /**
      * Reads pg_attribute.attidentity, so it needs PostgreSQL 10 or later. A default is
      * classed as an expression (default_is_expression) from its parsed tree: anything
      * but constants and casts of them (#47).

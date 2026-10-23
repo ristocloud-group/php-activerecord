@@ -125,10 +125,19 @@ class MysqlAdapter extends Connection
     }
 
     /**
-     * A case-sensitive LIKE compares bytes: "column LIKE CAST(? AS BINARY)". LIKE BINARY ? would
-     * too, but MySQL deprecates the BINARY operator (warning 1287); MySQL and MariaDB read the CAST
-     * without a warning. A case-insensitive one is the default "column LIKE ?", which the column's
-     * collation decides.
+     * A case-sensitive LIKE compares characters in a binary collation:
+     * "column LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin". The explicit collation has the
+     * strongest coercibility, so the column is converted to utf8mb4 as well. Whatever its character
+     * set (latin1, utf8mb3, utf8mb4), its characters compare with the pattern's in the case given, and
+     * _ is one character. CAST(? AS BINARY) compares bytes: a latin1 column never matches a non-ASCII
+     * pattern, and _ is one byte of an accented letter. LIKE BINARY ? draws MySQL's deprecation
+     * warning 1287.
+     *
+     * Known limit, measured on MySQL 9.7 but not MariaDB: on a connection whose character set
+     * set_encoding() made latin1 (a charset=latin1 connection), with PDO's emulated prepares, MySQL
+     * misreads a non-ASCII pattern (warning 1300) and matches nothing.
+     *
+     * A case-insensitive LIKE is the default "column LIKE ?", which the column's collation decides.
      */
     public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
     {
@@ -136,7 +145,17 @@ class MysqlAdapter extends Connection
             return parent::like_condition($column_sql, false, $not);
         }
 
-        return $column_sql . ($not ? ' NOT LIKE' : ' LIKE') . ' CAST(? AS BINARY)';
+        return $column_sql . ($not ? ' NOT LIKE' : ' LIKE') . ' CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin';
+    }
+
+    /**
+     * The operator Laravel's MySQL grammar adds, SOUNDS LIKE, which MariaDB reads too.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return ['sounds like'];
     }
 
     /**

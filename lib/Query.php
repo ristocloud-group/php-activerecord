@@ -94,8 +94,9 @@ class Query
     ];
 
     /**
-     * The operators a condition takes: Laravel 13's, in lower case. They are matched in any case and
-     * written in upper case; any other is refused (spec §5.2), where Laravel takes it for the value.
+     * The operators a condition takes: Laravel 13's, in lower case, and those the adapter adds (see
+     * Connection::extra_operators()). They are matched in any case and written in upper case; any
+     * other is refused (spec §5.2), where Laravel takes it for the value.
      *
      * @var list<string>
      */
@@ -310,8 +311,10 @@ class Query
     /**
      * Adds a condition to the WHERE, ANDed with the conditions before it. Its forms:
      * - where('name', 'Tito'): the column equals the value;
-     * - where('author_id', '>', 2): the column compared with the value by an operator, one of Laravel's
-     *   in any case (=, <, >, <=, >=, <>, !=, <=>, like, not like, ilike, ...: see OPERATORS);
+     * - where('author_id', '>', 2): the column compared with the value by an operator, in any case:
+     *   one of Laravel's (=, <, >, <=, >=, <>, !=, <=>, like, not like, ilike, ...: see OPERATORS), or
+     *   one the adapter adds (sounds like on MySQL and MariaDB; @>, &&, is distinct from, ... on
+     *   Postgres: see Connection::extra_operators());
      * - where('parent_author_id', null): IS NULL, and with != or <> IS NOT NULL;
      * - where(['name' => 'Tito', 'author_id' => [1, 2]]): a hash of conditions, read as the legacy
      *   finders read one: a list is IN, an empty list 1=0, a null in it IS NULL;
@@ -681,11 +684,13 @@ class Query
     /**
      * Adds a group in parentheses, ANDed, of the same comparison on each column, in where()'s forms,
      * joined with AND: where_all(['name', 'some_text'], 'like', 'T%') is (name LIKE ? AND some_text
-     * LIKE ?). As in Laravel, a list of no column adds no condition.
+     * LIKE ?). An empty list of columns is refused, where Laravel adds no condition: all, any or none of
+     * no column has no meaning.
      *
      * @param array<mixed> $columns
      * @return $this
-     * @throws ActiveRecordException as where() does, and for a column name that is not a string
+     * @throws ActiveRecordException as where() does, and for an empty list of columns or a column name
+     *   that is not a string
      */
     public function where_all(array $columns, mixed $operator = null, mixed $value = null): static
     {
@@ -1350,16 +1355,20 @@ class Query
     }
 
     /**
-     * An operator of a condition, matched in any case against OPERATORS and returned in upper case; null
-     * is =.
+     * An operator of a condition, matched in any case against OPERATORS and the adapter's own (see
+     * Connection::extra_operators()), and returned in upper case; null is =. An operator with a ? is
+     * refused whatever the adapter lists: it would read as a bind marker.
      *
      * @throws ActiveRecordException for any other
      */
     private function operator(string $method, mixed $operator): string
     {
         $operator ??= '=';
+        $key = is_string($operator) ? strtolower($operator) : null;
+        $known = null !== $key && !str_contains($key, '?')
+            && (in_array($key, self::OPERATORS, true) || in_array($key, $this->table()->connection()->extra_operators(), true));
 
-        if (!is_string($operator) || !in_array(strtolower($operator), self::OPERATORS, true)) {
+        if (!$known) {
             throw new ActiveRecordException(sprintf('Unknown operator %s in %s() on %s', is_string($operator) ? "'$operator'" : get_debug_type($operator), $method, $this->model_class));
         }
 
@@ -1501,10 +1510,16 @@ class Query
      * @param 'AND'|'OR' $glue
      * @param array<mixed> $columns
      * @return list<Where>
-     * @throws ActiveRecordException as comparison() does, and for a column name that is not a string, or empty
+     * @throws ActiveRecordException as comparison() does, for an empty list of columns, and for a column
+     *   name that is not a string, or empty
      */
     private function columns_wheres(string $method, string $boolean, string $glue, bool $not, array $columns, mixed $operator, mixed $value, int $count): array
     {
+        // all, any or none of no column has no meaning: Laravel's silent "no condition" would match every row
+        if ([] === $columns) {
+            throw new ActiveRecordException(sprintf('%s() needs at least one column, not an empty list, on %s', $method, $this->model_class));
+        }
+
         $columns = $this->column_list($method, $columns);
         [$operator, $value] = $this->comparison($method, implode(', ', $columns), $operator, $value, $count);
         $wheres = [];

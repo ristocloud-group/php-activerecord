@@ -3,6 +3,8 @@
 use ActiveRecord\ActiveRecordException;
 use ActiveRecord\Connection;
 use ActiveRecord\Model;
+use ActiveRecord\MysqlAdapter;
+use ActiveRecord\PgsqlAdapter;
 use ActiveRecord\Query;
 use ActiveRecord\QueryCompiler;
 use ActiveRecord\Table;
@@ -139,10 +141,11 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same([4], $this->values(Author::where('name', 'LIKE', '%Bob')->get()));
     }
 
-    // Spec §5.2: an operator that is not on the list throws at the call, where Laravel would take it as the value
+    // Spec §5.2: an operator that is not on the list throws at the call, where Laravel would take it as the value.
+    // None of these is an adapter's own either (see test_each_adapter_takes_its_own_operators_and_no_others).
     public function test_an_unknown_operator_is_refused_at_the_call(): void
     {
-        foreach (['equals', '==', 'in', 'not in', 'between', 'like ', ' like', 'not  like', '', '=>', 'glob', 'sounds like', '&&', '@>'] as $operator) {
+        foreach (['equals', '==', 'in', 'not in', 'like ', ' like', 'not  like', '', '=>', 'glob'] as $operator) {
             $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecordException::class);
         }
 
@@ -150,6 +153,69 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_exception_message_contains("Unknown operator 'equals' in or_where_not() on Author", fn() => Author::or_where_not('name', 'equals', 'x'), ActiveRecordException::class);
         $this->assert_exception_message_contains("Unknown operator 'equals' in where_column() on Author", fn() => Author::where_column('author_id', 'equals', 'parent_author_id'), ActiveRecordException::class);
         $this->assert_exception_message_contains("Unknown operator 'equals' in where_any() on Author", fn() => Author::where_any(['name'], 'equals', 'x'), ActiveRecordException::class);
+    }
+
+    // Spec §5.2: each adapter adds the operators of Laravel's grammar of its database (Connection::extra_operators()):
+    // MySQL and MariaDB SOUNDS LIKE, Postgres @>, &&, IS DISTINCT FROM, ...; SQLite none. Another database's are
+    // refused, and so is an operator with a ?, which would read as a bind marker.
+    public function test_each_adapter_takes_its_own_operators_and_no_others(): void
+    {
+        $mysql = ['sounds like'];
+        $pgsql = ['is distinct from', '@>', '&&', 'between'];
+        [$own, $others] = match (true) {
+            $this->conn instanceof MysqlAdapter => [$mysql, $pgsql],
+            $this->conn instanceof PgsqlAdapter => [$pgsql, $mysql],
+            default => [[], [...$mysql, ...$pgsql]],
+        };
+
+        foreach ($own as $operator) {
+            $this->assert_same($this->authors_where('`name` ' . strtoupper($operator) . ' ?'), Author::where('name', ucwords($operator), 'x')->to_sql());
+        }
+
+        foreach ([...$others, '?', '?|', '?&', '@?'] as $operator) {
+            $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecordException::class);
+        }
+    }
+
+    // The builder refuses an operator with a ? whatever an adapter lists: the library binds positionally
+    public function test_an_operator_with_a_question_mark_is_refused_whatever_the_adapter_lists(): void
+    {
+        $connection = new class extends Connection {
+            // no database: the hooks only write SQL
+            public function __construct() {}
+
+            public function extra_operators(): array
+            {
+                return ['contains', '?|'];
+            }
+
+            public function limit($sql, $offset, $limit)
+            {
+                return $sql;
+            }
+
+            public function query_column_info($table)
+            {
+                throw new LogicException('not read');
+            }
+
+            public function query_for_tables()
+            {
+                throw new LogicException('not read');
+            }
+
+            public function set_encoding($charset) {}
+
+            public function native_database_types()
+            {
+                return [];
+            }
+        };
+        $table = new Table('Author');
+        $table->conn = $connection;
+
+        $this->assert_same('SELECT * FROM `authors` WHERE `name` CONTAINS ?', Query::for_table($table)->where('name', 'contains', 'x')->to_sql());
+        $this->assert_exception_message_contains("Unknown operator '?|' in where() on Author", fn() => Query::for_table($table)->where('name', '?|', 'x'), ActiveRecordException::class);
     }
 
     // Spec §5.2: null with = (or <=>) is IS NULL, with != or <> IS NOT NULL, and with any other operator an error
@@ -514,6 +580,16 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same(['a[b]*c?d'], $names(Book::where_like('name', '%[B]%')));
     }
 
+    // A case-sensitive LIKE compares characters in the case given on every adapter: an accented letter matches
+    // itself and not its other case, and _ is one character, an accented one too. charset_words: 1 Café, 2 école.
+    public function test_case_sensitive_like_compares_characters(): void
+    {
+        foreach (['Caf%' => [1], 'caf%' => [], 'Café' => [1], 'café' => [], 'CAFÉ' => [], 'é%' => [2], 'É%' => [], 'Caf_' => [1], '_cole' => [2], '%é' => [1]] as $pattern => $ids) {
+            $this->assert_same($ids, $this->values(CharsetWord::where_like('utf8mb4_word', $pattern, true)->get(), 'id'), "LIKE '$pattern'");
+            $this->assert_same(array_values(array_diff([1, 2], $ids)), $this->values(CharsetWord::where_not_like('utf8mb4_word', $pattern, true)->get(), 'id'), "NOT LIKE '$pattern'");
+        }
+    }
+
     // An adapter writes a case-sensitive LIKE its own way: the default refuses it at the call, and leaves the
     // pattern as it is
     public function test_the_default_like_hooks(): void
@@ -575,8 +651,10 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same([1, 3], $this->values(Author::where_none(['author_id', 'parent_author_id'], 2)->get()));
         $this->assert_same([4], $this->values(Author::where_any(['name', 'some_text'], 'like', '%Bob')->get()));
 
-        // as in Laravel, no column is no condition
-        $this->assert_same($this->sql('SELECT * FROM `authors`'), Author::where_any([], 'x')->to_sql());
+        // all, any or none of no column has no meaning: refused at the call, where Laravel adds no condition
+        foreach (['where_all', 'or_where_all', 'where_any', 'or_where_any', 'where_none', 'or_where_none'] as $method) {
+            $this->assert_exception_message_contains("$method() needs at least one column, not an empty list, on Author", fn() => Author::$method([], 'x'), ActiveRecordException::class);
+        }
 
         $this->assert_exception_message_contains('A column name must be a string, not int, in where_all() on Author', fn() => Author::where_all(['name', 5], 'x'), ActiveRecordException::class);
     }

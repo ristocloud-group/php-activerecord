@@ -197,3 +197,11 @@ CREATE TABLE odd_timestamps (
   "created at" timestamp,
   "UPDATED_AT" timestamp
 );
+
+-- the character sets of these columns are MySQL's (see mysql.sql): here they are text alike
+CREATE TABLE charset_words (
+  id serial primary key,
+  latin1_word varchar(20),
+  utf8mb3_word varchar(20),
+  utf8mb4_word varchar(20)
+);

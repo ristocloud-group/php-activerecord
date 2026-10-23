@@ -41,4 +41,14 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same(1, count(Author::where_like('name', 't_t%')->get()));
         $this->assert_same(4, count(Author::where_not_like('name', 't%', true)->get()));
     }
+
+    // Spec §5.2: Laravel's SQLite grammar adds no operator to the base ones, so neither does the adapter
+    public function test_no_operator_of_its_own(): void
+    {
+        $this->assert_same([], $this->conn->extra_operators());
+
+        foreach (['sounds like', 'is distinct from', '@>', 'glob'] as $operator) {
+            $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecord\ActiveRecordException::class);
+        }
+    }
 }

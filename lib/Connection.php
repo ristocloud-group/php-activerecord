@@ -687,6 +687,19 @@ abstract class Connection
     }
 
     /**
+     * The operators a condition of the query builder takes on this database besides Laravel's own
+     * (see Query::where()), in lower case: those Laravel's grammar of the database adds. None by
+     * default, and none for SQLite, whose grammar adds none. Whatever an adapter lists, the builder
+     * refuses an operator with a ?, which would read as a bind marker: the library binds positionally.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return [];
+    }
+
+    /**
      * Return a date time formatted into the database's date format.
      *
      * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)
