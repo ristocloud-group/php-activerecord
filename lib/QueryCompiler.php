@@ -15,17 +15,65 @@ namespace ActiveRecord;
 final class QueryCompiler
 {
     /**
+     * The keys (see Connection::column_name_key()) of the names of the model's columns (see
+     * model_column_names()), read once.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $model_column_keys = null;
+
+    /**
      * The statements are rendered for $connection when one is given, else for $table's: a bulk write
      * of Model gives the connection it always built its statement on (see Query::execute_update()).
      */
     public function __construct(private readonly Table $table, private readonly ?Connection $connection = null) {}
 
     /**
-     * The SELECT of a state. A state that holds nothing selects every row.
+     * The SELECT of a state: that of its legacy options when it holds some, as the legacy entries always
+     * sent it, else that of the builder's clauses. A state that holds nothing selects every row.
      */
     public function compile_select(QueryState $state): SQLBuilder
     {
-        return $this->compile_legacy($state->legacy ?? []);
+        return null === $state->legacy ? $this->compile_clauses($state) : $this->compile_legacy($state->legacy);
+    }
+
+    /**
+     * How a clause of the builder names a column: the one rule every clause follows (spec §5.1).
+     *
+     * - An unqualified name of a column of the model, by its alias, its attribute name or its own name,
+     *   is the column's real name (#92, #144), quoted. With joins it also gets the name the statement
+     *   reads the model's rows under (the from() alias, else the from() table, else the model's table;
+     *   see rows_name()), so that a joined table's column of the same name never makes it ambiguous.
+     *   Under a raw FROM (from_raw()), which names its rows itself, nothing is qualified.
+     * - Any other unqualified name, a joined table's column or the alias of an expression, is quoted as
+     *   written and never qualified.
+     * - A qualified name (table.column, table.*) and * are quoted part by part as written (#64), a part
+     *   already quoted kept as it is.
+     *
+     * A name is the model's as the database matches column names, as a key of a hash of conditions
+     * with joins is (see SQLBuilder::qualify_hash_keys()): regardless of case except on Postgres, and
+     * a pre-quoted name by its text, which no alias or attribute name maps. The columns every table has
+     * without listing them (rowid, ...) are the model's too. The result is only ever identifiers, never
+     * SQL: an expression is written with the *_raw() methods.
+     */
+    public function column(string $name, QueryState $state): string
+    {
+        $parts = $this->name_parts($name);
+
+        // table.column, table.* and *, or what is no name of identifiers: as written
+        if (null === $parts || 1 !== count($parts) || '*' === $name) {
+            return $this->quote_parts($name);
+        }
+
+        // an alias names an attribute, and an attribute its column; a pre-quoted name is the column's own
+        $column = $parts[0][1] ? $name : $this->table->real_column_name($this->alias_attributes()[$name] ?? $name);
+        $sql = $this->connection()->quote_name($column);
+
+        if ([] === $state->joins || null !== $state->from_raw || !$this->names_model_column($column)) {
+            return $sql;
+        }
+
+        return $this->rows_name($state) . '.' . $sql;
     }
 
     /**
@@ -118,12 +166,12 @@ final class QueryCompiler
             // every key keeps naming it, as it always did. Otherwise the columns of the model
             // name it, and so do the ones every table has but its schema never lists (rowid, ...)
             if (!array_key_exists('from', $options)) {
-                $sql->qualify_hash_keys([...array_keys($this->table->columns), ...$this->connection()->pseudo_columns()]);
+                $sql->qualify_hash_keys($this->model_column_names());
             }
 
             // by default, an inner join will not fetch the fields from the joined table
             if (!array_key_exists('select', $options)) {
-                $options['select'] = $this->table->get_fully_qualified_table_name() . '.*';
+                $options['select'] = $this->default_select(true, $this->table->get_fully_qualified_table_name());
             }
         }
 
@@ -154,6 +202,82 @@ final class QueryCompiler
         }
 
         return $sql;
+    }
+
+    /**
+     * The SELECT of the builder's clauses: what it selects, else the default select, from the model's
+     * table or the FROM that from() or from_raw() gives, with the joins.
+     */
+    private function compile_clauses(QueryState $state): SQLBuilder
+    {
+        $sql = new SQLBuilder($this->connection(), $this->from_clause($state));
+        $sql->from_values($state->from_bindings);
+
+        if ([] !== $state->joins) {
+            $sql->joins(implode(' ', $state->joins));
+        }
+
+        $columns = [];
+        $values = [];
+
+        foreach ($state->selects as $select) {
+            if (array_key_exists('raw', $select)) {
+                $columns[] = $select['raw'];
+                $values = [...$values, ...$select['bindings']];
+            } else {
+                $alias = null === $select['alias'] ? '' : ' AS ' . $this->connection()->quote_name($select['alias']);
+                $columns[] = $this->column($select['column'], $state) . $alias;
+            }
+        }
+
+        $columns = [] === $columns ? $this->default_select([] !== $state->joins, $this->rows_name($state)) : implode(', ', $columns);
+        $sql->select(($state->distinct ? 'DISTINCT ' : '') . $columns, $values);
+
+        return $sql;
+    }
+
+    /**
+     * What a SELECT that names no columns selects, for the legacy options and the builder alike: every
+     * column, or with joins every column of the model's rows only, which the statement reads under
+     * $rows. A joined table's columns would otherwise come too, and overwrite the model's attributes of
+     * the same name.
+     */
+    private function default_select(bool $joins, string $rows): string
+    {
+        return $joins ? "$rows.*" : '*';
+    }
+
+    /**
+     * The FROM of the builder: from_raw()'s as written, else the table of from(), quoted part by part,
+     * with its alias, else the model's table.
+     */
+    private function from_clause(QueryState $state): string
+    {
+        if (null !== $state->from_raw) {
+            return $state->from_raw;
+        }
+
+        if (null === $state->from) {
+            return $this->table->get_fully_qualified_table_name();
+        }
+
+        $table = $this->quote_parts($state->from);
+
+        return null === $state->from_alias ? $table : "$table AS " . $this->connection()->quote_name($state->from_alias);
+    }
+
+    /**
+     * The name the statement reads the model's rows under, which qualifies their columns with joins:
+     * the from() alias, else the table from() reads them from, which stands for the model's, else the
+     * model's table, under a raw FROM too (the legacy 'from' option selects its rows by it as well).
+     */
+    private function rows_name(QueryState $state): string
+    {
+        if (null !== $state->from_raw || null === $state->from) {
+            return $this->table->get_fully_qualified_table_name();
+        }
+
+        return null === $state->from_alias ? $this->quote_parts($state->from) : $this->connection()->quote_name($state->from_alias);
     }
 
     /**
@@ -219,6 +343,69 @@ final class QueryCompiler
     private function connection(): Connection
     {
         return $this->connection ?? $this->table->connection();
+    }
+
+    /**
+     * The names of the model's columns: those of its table, and the pseudo-columns of the connection
+     * (rowid, ...), which every table has though its schema never lists them. With joins, they are
+     * the keys of a hash of conditions that get the model's table, and the names that a clause of the
+     * builder qualifies (see column()).
+     *
+     * @return list<string>
+     */
+    private function model_column_names(): array
+    {
+        return [...array_keys($this->table->columns), ...$this->connection()->pseudo_columns()];
+    }
+
+    /**
+     * Whether $reference names one of the model's columns (see model_column_names()), as the database
+     * matches names (see Connection::column_reference_key()).
+     */
+    private function names_model_column(string $reference): bool
+    {
+        $connection = $this->connection();
+        $this->model_column_keys ??= array_fill_keys(array_map($connection->column_name_key(...), $this->model_column_names()), true);
+
+        return isset($this->model_column_keys[$connection->column_reference_key($reference)]);
+    }
+
+    /**
+     * The parts of a dotted name, in the quote character of the connection (see
+     * Connection::split_name_parts()), or null when $name is not one.
+     *
+     * @return list<array{0: string, 1: bool}>|null
+     */
+    private function name_parts(string $name): ?array
+    {
+        $connection = $this->connection();
+
+        return Connection::split_name_parts($name, $connection::$QUOTE_CHARACTER);
+    }
+
+    /**
+     * A name quoted part by part (#64): each part quoted by Connection::quote_name(), which keeps a part
+     * already quoted as it is, and a last part * left bare (table.*). What is no dotted name of
+     * identifiers, with an empty part or a quote left open, is quoted as one identifier.
+     */
+    private function quote_parts(string $name): string
+    {
+        $connection = $this->connection();
+        $parts = $this->name_parts($name);
+
+        if (null === $parts) {
+            return $connection->quote_name($name);
+        }
+
+        $last = count($parts) - 1;
+        $quoted = [];
+
+        // a quoted part is held with its quotes: a quoted * is a column named *
+        foreach ($parts as $i => [$part]) {
+            $quoted[] = $last === $i && '*' === $part ? $part : $connection->quote_name($part);
+        }
+
+        return implode('.', $quoted);
     }
 
     /**

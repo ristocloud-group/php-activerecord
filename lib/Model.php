@@ -78,6 +78,14 @@ use Closure;
  *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
  *           property since column schema is introspected at runtime.
  * @method static list<static> get() The models of the rows of a new query on this class
+ * @method static Query<static> select(string|array<mixed> ...$columns) A new query on this class that selects these columns
+ * @method static Query<static> add_select(string|array<mixed> ...$columns) A new query on this class that selects these columns
+ * @method static Query<static> select_raw(string $sql, array<mixed> $bindings = []) A new query on this class that selects this SQL expression
+ * @method static Query<static> distinct(bool $value = true) A new query on this class that selects each row once
+ * @method static Query<static> from(string $table, ?string $as = null) A new query on this class that reads the rows from this table
+ * @method static Query<static> from_raw(string $sql, array<mixed> $bindings = []) A new query on this class that reads the rows from this SQL FROM
+ * @method static string to_sql() The SELECT of a new query on this class
+ * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */

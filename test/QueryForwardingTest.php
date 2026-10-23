@@ -90,6 +90,29 @@ class QueryForwardingTest extends DatabaseTest
         $this->assert_same([['conditions' => ['name' => 'Tito']]], self::$received);
     }
 
+    // A query is mutable (spec §3.2), so each new_query() is a query of its own: a builder method changes the
+    // query it is called on and no other, nor any later new_query(), nor the query of a forwarded call.
+    public function test_every_new_query_is_a_new_query_and_changing_one_leaves_the_others_alone(): void
+    {
+        $every_author = 'SELECT * FROM ' . $this->conn->quote_name('authors');
+        $their_names = 'SELECT ' . $this->conn->quote_name('name') . ' FROM ' . $this->conn->quote_name('authors');
+
+        $first = Author::new_query();
+        $second = Author::new_query();
+        $this->assert_not_same($first, $second);
+        $this->assert_not_same($first->state(), $second->state());
+
+        $this->assert_same($first, $first->select('name'));
+        $this->assert_same($their_names, $first->to_sql());
+        $this->assert_same($every_author, $second->to_sql());
+        $this->assert_same($every_author, Author::new_query()->to_sql());
+
+        // a forwarded call is a call on a new query too
+        $this->assert_same('SELECT ' . $this->conn->quote_name('author_id') . ' FROM ' . $this->conn->quote_name('authors'), Author::select('author_id')->to_sql());
+        $this->assert_same($every_author, Author::to_sql());
+        $this->assert_same($their_names, $first->to_sql());
+    }
+
     public function test_static_update_and_delete_are_refused(): void
     {
         $this->assert_exception_message_contains('would write every row', fn() => Author::update(['name' => 'x']), ActiveRecord\ActiveRecordException::class);

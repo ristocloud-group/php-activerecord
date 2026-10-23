@@ -35,7 +35,7 @@ class Query
      *
      * @var list<string>
      */
-    public const array FORWARDABLE = ['get'];
+    public const array FORWARDABLE = ['get', 'select', 'add_select', 'select_raw', 'distinct', 'from', 'from_raw', 'to_sql', 'get_bindings'];
 
     private QueryState $state;
 
@@ -109,6 +109,148 @@ class Query
     }
 
     /**
+     * Selects these columns, in place of what the query selected: each argument a name, or an array of
+     * names. Every clause of the builder reads a name by one rule (see QueryCompiler::column()): an
+     * alias or an attribute name of the model names its column, with joins a column of the model gets
+     * its table, and "table.column" and "table.*" are quoted as written. "name as alias" (AS in any
+     * case) selects the column under that alias, which names the attribute of the models. Called
+     * without columns, it selects what the query selects by default again: every column, or with joins
+     * every column of the model's rows.
+     *
+     * <code>
+     * Author::select('name', 'author_id as id')->get();
+     * </code>
+     *
+     * @param string|array<mixed> ...$columns
+     * @return $this
+     * @throws ActiveRecordException for a name that is not a string, and the query is left as it was
+     */
+    public function select(string|array ...$columns): static
+    {
+        $this->state->selects = $this->column_selects(__FUNCTION__, $columns);
+
+        return $this;
+    }
+
+    /**
+     * Selects these columns besides what the query selects, read as select() reads them. As in Eloquent,
+     * a column the query already selects under the same alias is not selected twice, and on a query that
+     * selects nothing yet they are all it selects.
+     *
+     * @param string|array<mixed> ...$columns
+     * @return $this
+     * @throws ActiveRecordException for a name that is not a string, and the query is left as it was
+     */
+    public function add_select(string|array ...$columns): static
+    {
+        foreach ($this->column_selects(__FUNCTION__, $columns) as $select) {
+            if (!in_array($select, $this->state->selects, true)) {
+                $this->state->selects[] = $select;
+            }
+        }
+
+        return $this;
+    }
+
+    /**
+     * Selects an SQL expression besides what the query selects, sent as written, with the values of its
+     * bind markers. A select() replaces it, its values included.
+     *
+     * <code>
+     * Author::select('name')->select_raw('LENGTH(name) > ? AS long_name', [10])->get();
+     * </code>
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function select_raw(string $sql, array $bindings = []): static
+    {
+        $this->state->selects[] = ['raw' => $sql, 'bindings' => array_values($bindings)];
+
+        return $this;
+    }
+
+    /**
+     * Selects each row once (SELECT DISTINCT), or with false every row again.
+     *
+     * @return $this
+     */
+    public function distinct(bool $value = true): static
+    {
+        $this->state->distinct = $value;
+
+        return $this;
+    }
+
+    /**
+     * Reads the rows from $table, quoted part by part (database.table), under the alias $as if one is
+     * given; "table as alias" (AS in any case) gives one too. The rows are still read as the model's: with
+     * joins its columns get the alias, else that table (see QueryCompiler::column()). It replaces a
+     * from_raw().
+     *
+     * <code>
+     * Book::from('books', 'b')->select('b.name')->get();
+     * </code>
+     *
+     * @return $this
+     */
+    public function from(string $table, ?string $as = null): static
+    {
+        if (null === $as || '' === $as) {
+            [$table, $as] = self::name_and_alias($table);
+        }
+
+        $this->state->from = $table;
+        $this->state->from_alias = $as;
+        $this->state->from_raw = null;
+        $this->state->from_bindings = [];
+
+        return $this;
+    }
+
+    /**
+     * Reads the rows from a FROM written in SQL, a subquery for instance, sent as written, with the
+     * values of its bind markers. It names its rows itself, so no column of the model gets a table then
+     * (see QueryCompiler::column()). It replaces a from().
+     *
+     * <code>
+     * Book::from_raw('(SELECT * FROM books WHERE book_id > ?) books', [10])->get();
+     * </code>
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function from_raw(string $sql, array $bindings = []): static
+    {
+        $this->state->from = null;
+        $this->state->from_alias = null;
+        $this->state->from_raw = $sql;
+        $this->state->from_bindings = array_values($bindings);
+
+        return $this;
+    }
+
+    /**
+     * The SELECT the query sends, with its bind markers (see get_bindings()).
+     */
+    public function to_sql(): string
+    {
+        return $this->to_sql_builder()->to_s();
+    }
+
+    /**
+     * The values the query binds to the markers of its SELECT, in the order of the clauses: those of the
+     * select, of the FROM, then of the WHERE. They are as they were given: the query prepares them
+     * when it runs (a DateTime is sent as a string).
+     *
+     * @return list<mixed>
+     */
+    public function get_bindings(): array
+    {
+        return $this->to_sql_builder()->select_bind_values();
+    }
+
+    /**
      * Runs the query and returns the models of the rows it selects, through Table::find_by_sql().
      * The legacy options 'readonly' (the models are readonly) and 'include' (the relationships to
      * eager load) apply.
@@ -123,7 +265,7 @@ class Query
         $includes = array_key_exists('include', $options) ? $options['include'] : null;
 
         /** @var list<TModel> $models */
-        $models = $this->table()->find_by_sql($sql->to_s(), $sql->get_where_values(), $readonly, $includes);
+        $models = $this->table()->find_by_sql($sql->to_s(), $sql->select_bind_values(), $readonly, $includes);
 
         return $models;
     }
@@ -137,7 +279,7 @@ class Query
         $table = $this->table();
         $conn = $table->connection();
         $sql = $this->to_sql_builder();
-        $values = $table->format_date_bind_values($sql->get_where_values());
+        $values = $table->format_date_bind_values($sql->select_bind_values());
         $statement = $conn->exists_sql($sql->to_s());
         $table->last_sql = $statement;
 
@@ -434,5 +576,44 @@ class Query
     private function table(): Table
     {
         return $this->table ??= Table::load($this->model_class);
+    }
+
+    /**
+     * The selects of the columns given to $method, select() or add_select(): each argument a name or an
+     * array of names, each name parted from the alias that "name as alias" gives it.
+     *
+     * @param array<string|array<mixed>> $columns
+     * @return list<array{column: string, alias: string|null}>
+     * @throws ActiveRecordException for a name that is not a string
+     */
+    private function column_selects(string $method, array $columns): array
+    {
+        $selects = [];
+
+        foreach ($columns as $column) {
+            foreach (is_array($column) ? $column : [$column] as $name) {
+                if (!is_string($name)) {
+                    throw new ActiveRecordException(sprintf('A column name must be a string, not %s, in %s() on %s', get_debug_type($name), $method, $this->model_class));
+                }
+
+                [$name, $alias] = self::name_and_alias($name);
+                $selects[] = ['column' => $name, 'alias' => $alias];
+            }
+        }
+
+        return $selects;
+    }
+
+    /**
+     * A name and the alias that "name as alias" gives it (AS in any case, between whitespace), or the
+     * name and null.
+     *
+     * @return array{string, string|null}
+     */
+    private static function name_and_alias(string $name): array
+    {
+        $parts = preg_split('/\s+as\s+/i', $name, 2);
+
+        return false !== $parts && 2 === count($parts) ? [$parts[0], $parts[1]] : [$name, null];
     }
 }

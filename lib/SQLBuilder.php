@@ -36,6 +36,13 @@ class SQLBuilder
     private string $operation = 'SELECT';
     private ?string $table;
     private ?string $select = '*';
+
+    /** @var list<mixed> */
+    private array $select_values = [];
+
+    /** @var list<mixed> */
+    private array $from_values = [];
+
     private ?string $joins = null;
     private ?string $order = null;
     private ?int $limit = null;
@@ -154,6 +161,18 @@ class SQLBuilder
     }
 
     /**
+     * The bind values of a SELECT, in the order of its clauses: those of the select (see select()),
+     * of the FROM (see from_values()), then of the WHERE (see get_where_values()), whatever the
+     * order of the calls that gave them. A value that is an array gives its elements in its place.
+     *
+     * @return list<mixed>
+     */
+    public function select_bind_values(): array
+    {
+        return array_flatten([...$this->select_values, ...$this->from_values, ...$this->where_values]);
+    }
+
+    /**
      * The WHERE fragment (without the keyword) whose bind values get_where_values() returns.
      *
      * @internal Serves Model's primary-key finders; not a supported API.
@@ -256,12 +275,28 @@ class SQLBuilder
 
     /**
      * @param string|null $select
+     * @param array<mixed> $values The values of the bind markers in $select, if any, in order: the
+     *   first values of the statement (see select_bind_values())
      * @return $this
      */
-    public function select($select)
+    public function select($select, array $values = [])
     {
         $this->operation = 'SELECT';
         $this->select = $select;
+        $this->select_values = array_values($values);
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the table of the statement, a FROM written in SQL: they
+     * follow those of the select (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function from_values(array $values): static
+    {
+        $this->from_values = array_values($values);
         return $this;
     }
 
