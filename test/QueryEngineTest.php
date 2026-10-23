@@ -919,8 +919,8 @@ class QueryEngineTest extends DatabaseTest
 
     // -- upsert()
 
-    // Table::upsert() hands the rows to the engine: both send the same statement with the same binds
-    public function test_upsert_is_served_by_the_engine(): void
+    // The legacy entry and the engine's terminal send the same statement with the same binds, and the rows land
+    public function test_table_upsert_sends_the_same_statement_as_the_engines_upsert(): void
     {
         $rows = [['author_id' => 1, 'name' => 'Up'], ['author_id' => 9, 'name' => 'New']];
         // loaded before the capture: a cold Table reads its schema inside it
@@ -940,8 +940,9 @@ class QueryEngineTest extends DatabaseTest
 
         $affected = Query::for_table($table)->upsert([['author_id' => 1, 'name' => 'Up'], ['author_id' => 9, 'name' => 'New']], 'author_id', ['name']);
 
-        // MySQL counts 2 for a row it updated, the others 1
-        $this->assert_greater_than_or_equal(2, $affected);
+        // the row of author 1 is updated and the one of author 9 inserted: MySQL and MariaDB count 2 for an updated row and
+        // 1 for an inserted one, Postgres and SQLite 1 for each
+        $this->assert_same($this->conn instanceof ActiveRecord\MysqlAdapter ? 3 : 2, $affected);
         $this->assert_sql_has('INSERT INTO authors (author_id, name, created_at, updated_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)', (string) $table->last_sql);
     }
 

@@ -1,6 +1,7 @@
 <?php
 
 use ActiveRecord\Query;
+use ActiveRecord\Table;
 use ActiveRecord\Timestamps;
 
 /**
@@ -649,6 +650,51 @@ class TimestampsTest extends DatabaseTest
         $stamped = ['created_at' => self::FROZEN, 'updated_at' => self::FROZEN];
         $this->assert_same($stamped, $this->stamps(80));
         $this->assert_same($stamped, $this->stamps(81));
+    }
+
+    // One time for the whole call. This Table moves the frozen clock a second on at every connection() call, which the
+    // stamping of a row makes before it would read the clock for itself: a row that did read it would get a later time than
+    // the row before. Chunked, the rows of the later statements must not read a later one either
+    public function test_the_rows_of_an_upsert_all_take_the_one_time_of_the_call(): void
+    {
+        $table = new class (Author::class) extends Table {
+            public bool $ticking = false;
+
+            public function connection(): ActiveRecord\Connection
+            {
+                if ($this->ticking) {
+                    Timestamps::freeze(date('Y-m-d H:i:s', strtotime(Timestamps::now()) + 1));
+                }
+
+                return parent::connection();
+            }
+        };
+        $class = get_class($this->conn);
+        $previous = $class::$MAX_BIND_PARAMS;
+
+        try {
+            // five rows in one statement, then in three (two rows of four columns each)
+            foreach ([[100, $previous], [200, 8]] as [$first_id, $max_bind_params]) {
+                $class::$MAX_BIND_PARAMS = $max_bind_params;
+                $ids = range($first_id, $first_id + 4);
+                $rows = array_map(fn(int $id): array => ['author_id' => $id, 'name' => "T$id"], $ids);
+
+                Timestamps::freeze(self::FROZEN);
+                $table->ticking = true;
+                Query::for_table($table)->upsert($rows, 'author_id', ['name']);
+                $table->ticking = false;
+
+                // the probe was live: the clock moved on while the rows were stamped
+                $this->assert_not_same(self::FROZEN, Timestamps::now());
+
+                $stamps = array_map($this->stamps(...), $ids);
+                $this->assert_not_null($stamps[0]['created_at']);
+                $this->assert_same($stamps[0]['created_at'], $stamps[0]['updated_at']);
+                $this->assert_same(array_fill(0, 5, $stamps[0]), $stamps);
+            }
+        } finally {
+            $class::$MAX_BIND_PARAMS = $previous;
+        }
     }
 
     public function test_upsert_on_a_conflict_sets_updated_at_to_the_clock_and_keeps_created_at(): void

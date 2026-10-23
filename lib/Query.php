@@ -273,7 +273,7 @@ class Query
      * several and the connection is not in one already.
      *
      * The timestamps are those of Timestamps, for the class the table was loaded for: every row gets
-     * the created_at and updated_at it lacks, all set to the one time of the statement, and updated_at
+     * the created_at and updated_at it lacks, all set to the one time of the call, and updated_at
      * is overwritten on a conflict besides, unless $update is empty. While the class is suspended
      * (Model::without_timestamps()) the rows go as they are and updated_at is not added to the
      * columns a conflict overwrites: a timestamp the caller puts in a row, or in $update, is the
@@ -323,7 +323,7 @@ class Query
             }
         }
 
-        // The timestamps the rows lack, all at the one time of the statement (see Timestamps)
+        // The timestamps the rows lack, all at the one time of the call (see Timestamps)
         $class = $table->class->getName();
         $now = Timestamps::now();
         $values = array_map(fn(array $row): array => Timestamps::apply_to_insert($table, $class, $row, $now), $values);
@@ -338,7 +338,9 @@ class Query
             $update = array_values(array_filter($columns, fn($c) => $c !== $timestamps['created_at']));
         }
         // updated_at is overwritten on a conflict as an UPDATE sets it, unless the class is suspended
-        if ($update !== [] && null !== $timestamps['updated_at'] && !Timestamps::suspended($class) && !in_array($timestamps['updated_at'], $update, true)) {
+        $stamps_updated_at = null !== $timestamps['updated_at'] && !Timestamps::suspended($class);
+        $conflict_lacks_updated_at = $update !== [] && !in_array($timestamps['updated_at'], $update, true);
+        if ($stamps_updated_at && $conflict_lacks_updated_at) {
             $update[] = $timestamps['updated_at'];
         }
 

@@ -545,8 +545,8 @@ class Table
 
     /**
      * Bulk insert-or-update, through the Query engine: it hands its arguments to Query::upsert(), which
-     * holds the logic, and returns the affected rows that counts. The last statement sent is left in
-     * $last_sql. The rows get the created_at and updated_at they lack, set to the current time (see
+     * holds the logic, and returns that call's count of affected rows. The last statement sent is left
+     * in $last_sql. The rows get the created_at and updated_at they lack, set to the current time (see
      * Timestamps), and updated_at is overwritten on a conflict too; a class whose timestamps are
      * suspended gets neither, see Model::without_timestamps().
      *
