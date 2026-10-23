@@ -459,6 +459,58 @@ public function test_update_all_empty_set_throws_without_warning(): void
 - [ ] **Step 4:** Run the tests (PASS). Re-record **only** the four listed golden entries. Run the golden suite (PASS: `save_update`, `model_delete`, `update_all_string_set` and the `delete_all_*` shapes are untouched).
 - [ ] **Step 5: Commit:** `git commit -m "refactor: updates and deletes run through the Query engine; update_all touches updated_at (spec §6.2.1-2,5)"`.
 
+### Task 8b: An alias named like a column is a configuration error (§6.2 change 6, #144)
+
+Added 2026-10-23 by the maintainer's decision on #144. The spec (§6.2.6) is the authority.
+
+**Files:**
+- Modify: `lib/Table.php` (`__construct`, right after `get_meta_data()`), `lib/Model.php` (the `$alias_attribute` docblock), `README.md` (alias and "Hash conditions" text)
+- Modify: `test/models/AliasedPkAuthor.php` and every test that loads it (`grep -rn AliasedPkAuthor test/`)
+- Test: `test/AliasShadowingTest.php` (new), plus new test models as needed
+
+**Interfaces:**
+- Consumes: `Connection::column_name_key(string $name): string` (Task 8 fix round 1), the database-style name key; `Table::$columns` (keyed by attribute name; `Column::$name` is the real name, `Column::$inflected_name` the attribute name).
+- Produces: loading a table whose model declares an alias key equal to one of the table's columns throws `ActiveRecord\ConfigException` with the message `"<Model>::$alias_attribute: the alias '<alias>' has the same name as the column '<real column>' of table <table>; rename the alias"`. Nothing else changes for valid models.
+
+- [ ] **Step 1: Write the failing tests** (on all four connections; branch on `column_names_are_case_sensitive()`, never skip):
+  - `AliasedPkAuthor` (`'author_id' => 'name'` on `authors`): the first use (`AliasedPkAuthor::table()`, `find(1)`, `count()`, `update_all(...)`) throws `ConfigException` with the exact message, before any data query.
+  - A key that differs from a column only in case (`'Author_Id' => 'name'`): it throws on mysql, mariadb and sqlite. On pgsql the model loads and the alias resolves.
+  - A key equal to a column's attribute name but not its real name (a model on `odd_columns` aliasing the attribute of a column with a space, #92): it throws.
+  - Valid aliases keep working everywhere (`Venue`'s `marquee`/`mycity` in find, count, exists, update_all and delete_all).
+- [ ] **Step 2:** Run them: they fail.
+- [ ] **Step 3: Implement** the check in `Table::__construct`. Use the database-style key of each alias key and of every column's real and attribute names. Keep `'mapped_names' => []` on the pk hashes as defense in depth: a stale metadata cache can still hide a shadowing column (spec §6.2.6). Say so in a comment.
+- [ ] **Step 4: Rewrite the pins** that needed a loadable shadowing alias (`AliasedPkAuthor`). Each becomes a load-error pin or is removed; list every removed test in the report with the reason.
+- [ ] **Step 5: Docs.** Update the README and the `$alias_attribute` docblock: aliases resolve in every hash condition; an alias may not share a column's name (`ConfigException` at load); state the residual (a column added after load, SQLite generated columns).
+- [ ] **Step 6: Verify.** Golden assert mode on the four connections (no entry changes), full suites on the four, `composer run analyse`, `composer run cs`.
+- [ ] **Step 7: Commit:** `fix: an alias named like a column of its table is a configuration error (#144, spec §6.2.6)`
+
+### Task 8c: Relationship conditions resolve aliases (§6.2 change 7, #144)
+
+Added 2026-10-23 by the maintainer's decision on #144. The spec (§6.2.7) is the authority. Depends on Task 8b: an alias never shadows a column.
+
+**Files:**
+- Modify: `lib/Relationship.php` (`to_positional_conditions()` and its callers: the lazy `create_conditions_from_keys()` and the eager conditions merge), `README.md` (relationship conditions)
+- Test: `test/RelationshipAliasConditionsTest.php` (new), plus test models and relationships as needed
+
+**Interfaces:**
+- Consumes: the associated model's `Table::map_names()` (alias map plus #92 real names), as its finders use it.
+- Produces: the keys of a declared hash `conditions` are mapped to the associated model's real columns before `Expressions` renders them. Qualified keys (`'table.col'`), positional conditions and strings pass through untouched. #129's rule holds: an alias key and its target column's key in one hash are both kept and ANDed.
+
+- [ ] **Step 1: Write the failing tests** (four connections). Each relationship declares hash `conditions` keyed by an alias of the associated model, and the lazy load and the eager `include` must return the same rows per owner:
+  - `has_many`;
+  - `has_one`;
+  - `belongs_to`;
+  - `has_many … through`.
+
+  Also pin:
+  - the #129 both-kept rule;
+  - byte-identical SQL for declared conditions without aliases (the existing relationship tests and the golden corpus).
+- [ ] **Step 2:** Run them: they fail with `Unknown column` today.
+- [ ] **Step 3: Implement** the mapping in `Relationship`, through the associated class's table. Keep #120's parentheses and #116's one bind per placeholder.
+- [ ] **Step 4: Docs.** README: relationship `conditions` accept the associated model's aliases.
+- [ ] **Step 5: Verify.** Golden assert mode on the four connections, full suites on the four, analyse, cs.
+- [ ] **Step 6: Commit:** `fix: relationship conditions resolve the associated model's aliases (#144, spec §6.2.7)`
+
 ### Task 9: Upsert through the engine
 
 **Files:**

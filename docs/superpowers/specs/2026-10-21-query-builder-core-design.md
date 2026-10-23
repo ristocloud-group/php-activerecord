@@ -401,8 +401,8 @@ reads and writes alike. Golden tests prove it (§7).
 These were explicitly approved by the maintainer on 2026-10-21, and all go in the release notes.
 
 1. **Aliases are resolved in `count`, `exists`, `update_all` and `delete_all`** as in `find`. Those calls fail
-   today with `Unknown column`. Edge case: an alias that has the same name as a real column would now follow the
-   alias in those four methods too, as `find()` already does (verified in the plan, §10).
+   today with `Unknown column`. An alias can no longer have the same name as a real column (change 6), so the
+   mapping is never ambiguous.
 2. **Breaking:** `update_all` with a hash `set` sets `updated_at` (157 monolith calls). Opt-out:
    `Model::without_timestamps()`.
 3. INSERTs that bypass the model (`Table::insert()` called directly, `->insert()`) fill `created_at` / `updated_at`.
@@ -411,6 +411,27 @@ These were explicitly approved by the maintainer on 2026-10-21, and all go in th
    Those calls fail today.
 5. The PHP warning before `update_all`'s "Updating requires a hash or string." disappears. The exception is
    unchanged.
+
+Approved by the maintainer on 2026-10-23 (issue #144):
+
+6. **Breaking:** an `$alias_attribute` key that names a column of the model's own table, by its real name or by its
+   attribute name (#92), is a configuration error. Loading the table throws `ConfigException`, naming the model,
+   the alias and the column. Names are compared the way the database compares column names: case-insensitively,
+   except on Postgres. Every other alias resolves in every hash condition: `find`, `count`, `exists`, `update_all`,
+   `delete_all` and relationship conditions (change 7).
+   - The mapping is static. It never depends on a schema read after the table was loaded, so a schema change at
+     runtime cannot change which rows a write touches. That is #144's requirement, and the reason the
+     "column wins" rule of #129 was dropped.
+   - Residual, documented: some shadowing columns are not seen at load. One is a column added after the table was
+     loaded (a long-running process, a stale metadata cache). Another is a SQLite generated column, which
+     `PRAGMA table_info` omits. In both cases the alias keeps winning, and the error appears at the next load with
+     fresh metadata.
+   - Monolith: on 2026-10-23, the development databases of two tenants were checked for the 22 models and
+     42 aliases. No alias names a column.
+7. **Relationship `conditions` resolve aliases (#144).** A hash in a relationship's declared `conditions` maps the
+   associated model's `$alias_attribute` keys and attribute names (#92) to real columns, in lazy and eager loads.
+   - #129's rule is kept: an alias key and its target column's key in the same hash are both kept and ANDed.
+   - Those keys fail today with `Unknown column`. Every other declared condition renders byte-identical SQL.
 
 ### 6.3 Unchanged on purpose
 
@@ -493,8 +514,12 @@ Add them to the GitHub draft release when the code merges, never before (the cha
   `Model::without_timestamps()`, `MultipleRecordsFound`.
 - **Breaking:** `update_all` with a hash `set` sets `updated_at`. INSERTs that bypass the model fill the
   timestamps.
-- Fixes: aliases in `count` / `exists` / `update_all` / `delete_all`. Legacy hash keys with joins are no longer
-  wrongly qualified.
+- Fixes: aliases in `count` / `exists` / `update_all` / `delete_all` and in relationship `conditions` (#144).
+  Legacy hash keys with joins are no longer wrongly qualified.
+- **Breaking:** an `$alias_attribute` key named like a column of its own table throws `ConfigException` when the
+  table loads (#144).
+- On MySQL/MariaDB, `update_all()` with a hash `set` returns the matched rows even when no other value changes,
+  because `updated_at` changes too.
 - **Dates** (the maintainer asked for this item explicitly): the builder binds a DateTime in the format of its
   column's type, which fixes DATE comparisons on SQLite. Legacy positional binds are unchanged.
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
@@ -533,7 +558,7 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 These are concrete checks to run during planning, not open design questions:
 
 - **Alias edge case:** for the 22 monolith models with `$alias_attribute`, confirm that no alias shadows a real
-  column (§6.2.1).
+  column (§6.2.1). Done 2026-10-23 on the development databases of two tenants: none (§6.2.6).
 - **`raw_type` strings:** record the exact `raw_type` each adapter reports for float/double/real/decimal/numeric
   (§5.4).
 - **Golden corpus:** define the list and the timestamp masking on master (§7.1).
