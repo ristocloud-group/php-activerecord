@@ -357,7 +357,7 @@ work (§9). The engine preserves whatever #145 ships.
 |---|---|---|
 | INSERT (`save()` of a new record, `->insert()`, `Table::insert()`) | missing → now | missing → now |
 | UPDATE (`save()`, `->update()`, `update_all` with a hash `set`) | — | missing → now |
-| UPSERT | the INSERT part: missing → now | missing → now; it is also updated on conflict when the update list is not empty (today's behavior) |
+| UPSERT | the INSERT part: missing → now | missing → now; it is also updated on conflict when the update list is not empty (today's behavior). A suspended class gets no `updated_at` in the conflict clause, because assigning it there would overwrite the existing row's value with NULL |
 | raw SQL (`update_all` with a string `set`) | untouched | untouched |
 
 - A timestamp column is a column whose attribute name is `created_at` / `updated_at`. This is the single rule;
@@ -406,7 +406,9 @@ These were explicitly approved by the maintainer on 2026-10-21, and all go in th
 2. **Breaking:** `update_all` with a hash `set` sets `updated_at` (157 monolith calls). Opt-out:
    `Model::without_timestamps()`.
 3. INSERTs that bypass the model (`Table::insert()` called directly, `->insert()`) fill `created_at` / `updated_at`.
-   The monolith never calls `Table::insert()` directly.
+   The monolith never calls `Table::insert()` directly. `upsert` follows the same rule (§5.6), so it recognizes a
+   timestamp column by its attribute name: a table whose timestamp columns have odd names (#92: `"created at"`,
+   `UPDATED_AT`) now gets them filled by `upsert` too. The monolith never calls `upsert`.
 4. With joins, legacy hash keys that are not model columns are no longer qualified with the model's table.
    Those calls fail today.
 5. The PHP warning before `update_all`'s "Updating requires a hash or string." disappears. The exception is
