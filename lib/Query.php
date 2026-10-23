@@ -6,6 +6,8 @@
 
 namespace ActiveRecord;
 
+use Closure;
+
 /**
  * One query on one model class, and the engine that turns it into SQL.
  *
@@ -17,6 +19,14 @@ namespace ActiveRecord;
  *
  * @template TModel of Model
  * @package ActiveRecord
+ * @phpstan-import-type Where from QueryState
+ * @phpstan-import-type WhereBasic from QueryState
+ * @phpstan-import-type WhereColumn from QueryState
+ * @phpstan-import-type WhereRaw from QueryState
+ * @phpstan-import-type WhereIn from QueryState
+ * @phpstan-import-type WhereBetween from QueryState
+ * @phpstan-import-type WhereBetweenColumns from QueryState
+ * @phpstan-import-type WhereLike from QueryState
  */
 class Query
 {
@@ -43,9 +53,64 @@ class Query
         'distinct',
         'from',
         'from_raw',
+        'where',
+        'or_where',
+        'where_not',
+        'or_where_not',
+        'where_column',
+        'or_where_column',
+        'where_raw',
+        'or_where_raw',
+        'where_in',
+        'or_where_in',
+        'where_not_in',
+        'or_where_not_in',
+        'where_null',
+        'or_where_null',
+        'where_not_null',
+        'or_where_not_null',
+        'where_between',
+        'or_where_between',
+        'where_not_between',
+        'or_where_not_between',
+        'where_between_columns',
+        'or_where_between_columns',
+        'where_not_between_columns',
+        'or_where_not_between_columns',
+        'where_like',
+        'or_where_like',
+        'where_not_like',
+        'or_where_not_like',
+        'where_all',
+        'or_where_all',
+        'where_any',
+        'or_where_any',
+        'where_none',
+        'or_where_none',
+        'where_key',
+        'where_key_not',
         'to_sql',
         'get_bindings',
     ];
+
+    /**
+     * The operators a condition takes: Laravel 13's, in lower case. They are matched in any case and
+     * written in upper case; any other is refused (spec §5.2), where Laravel takes it for the value.
+     *
+     * @var list<string>
+     */
+    private const array OPERATORS = [
+        '=', '<', '>', '<=', '>=', '<>', '!=', '<=>', 'like', 'like binary', 'not like', 'ilike',
+        '&', '|', '^', '<<', '>>', '&~', 'is', 'is not', 'rlike', 'not rlike', 'regexp', 'not regexp',
+        '~', '~*', '!~', '!~*', 'similar to', 'not similar to', 'not ilike', '~~*', '!~~*',
+    ];
+
+    /**
+     * The operators that compare with null: = and <=> as IS NULL, != and <> as IS NOT NULL.
+     *
+     * @var list<string>
+     */
+    private const array NULL_OPERATORS = ['=', '<=>', '!=', '<>'];
 
     private QueryState $state;
 
@@ -243,6 +308,482 @@ class Query
     }
 
     /**
+     * Adds a condition to the WHERE, ANDed with the conditions before it. Its forms:
+     * - where('name', 'Tito'): the column equals the value;
+     * - where('author_id', '>', 2): the column compared with the value by an operator, one of Laravel's
+     *   in any case (=, <, >, <=, >=, <>, !=, <=>, like, not like, ilike, ...: see OPERATORS);
+     * - where('parent_author_id', null): IS NULL, and with != or <> IS NOT NULL;
+     * - where(['name' => 'Tito', 'author_id' => [1, 2]]): a hash of conditions, read as the legacy
+     *   finders read one: a list is IN, an empty list 1=0, a null in it IS NULL;
+     * - where([['author_id', '>', 2], ['name', 'Tito']]): a list of conditions in the forms above,
+     *   which can share the array with a hash;
+     * - where(fn (Query $q) => $q->where(...)->or_where(...)): a group in parentheses of the conditions
+     *   the closure adds to the query it is passed, a new query on the same model. A group without
+     *   conditions is left out.
+     *
+     * The conditions of an array are ANDed one by one; or_where() and where_not() make them a group.
+     * Every column is named by the one rule of the builder (see QueryCompiler::column()), and every
+     * value is prepared for its column: a DateTime in the format of the column's type (DATE or DATETIME).
+     *
+     * <code>
+     * Author::where('name', 'Tito')->where('author_id', '>', 1)->get();
+     * </code>
+     *
+     * @param (Closure(self<TModel>): mixed)|string|array<mixed> $column
+     * @return $this
+     * @throws ActiveRecordException at the call, and the query is left as it was, for an unknown operator,
+     *   a null compared by another operator than =, !=, <> and <=>, an array as the value, no value, an
+     *   empty column name, a condition of a list in no known form, or a group that holds anything but
+     *   where clauses
+     */
+    public function where(Closure|string|array $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->wheres(__FUNCTION__, 'AND', false, $column, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds a condition as where() does, ORed with the conditions before it.
+     *
+     * @param (Closure(self<TModel>): mixed)|string|array<mixed> $column
+     * @return $this
+     * @throws ActiveRecordException as where() does
+     */
+    public function or_where(Closure|string|array $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->wheres(__FUNCTION__, 'OR', false, $column, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds the negation of a condition in where()'s forms, ANDed: NOT (condition).
+     *
+     * <code>
+     * Author::where_not('name', 'Tito')->get();
+     * </code>
+     *
+     * @param (Closure(self<TModel>): mixed)|string|array<mixed> $column
+     * @return $this
+     * @throws ActiveRecordException as where() does
+     */
+    public function where_not(Closure|string|array $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->wheres(__FUNCTION__, 'AND', true, $column, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds the negation of a condition in where()'s forms, ORed: NOT (condition).
+     *
+     * @param (Closure(self<TModel>): mixed)|string|array<mixed> $column
+     * @return $this
+     * @throws ActiveRecordException as where() does
+     */
+    public function or_where_not(Closure|string|array $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->wheres(__FUNCTION__, 'OR', true, $column, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds a comparison of two columns, ANDed: where_column('author_id', 'parent_author_id') is
+     * author_id = parent_author_id, and where_column('author_id', '>', 'parent_author_id') takes an
+     * operator as where() does. Both names follow the rule of the builder (see QueryCompiler::column()).
+     *
+     * @return $this
+     * @throws ActiveRecordException for an unknown operator, an empty column name, or no second column
+     */
+    public function where_column(string $first, ?string $operator = null, ?string $second = null): static
+    {
+        return $this->add_wheres([$this->column_where(__FUNCTION__, 'AND', $first, $operator, $second, func_num_args() - 1)]);
+    }
+
+    /**
+     * Adds a comparison of two columns as where_column() does, ORed.
+     *
+     * @return $this
+     * @throws ActiveRecordException as where_column() does
+     */
+    public function or_where_column(string $first, ?string $operator = null, ?string $second = null): static
+    {
+        return $this->add_wheres([$this->column_where(__FUNCTION__, 'OR', $first, $operator, $second, func_num_args() - 1)]);
+    }
+
+    /**
+     * Adds a condition written in SQL, ANDed: sent as written, in parentheses when another condition is
+     * beside it, with the values of its bind markers. As in a legacy positional condition, a value that
+     * is a list is spread over its marker: where_raw('author_id IN(?)', [[1, 2]]) is author_id IN(?,?).
+     *
+     * <code>
+     * Author::where_raw('LENGTH(name) > ?', [3])->get();
+     * </code>
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function where_raw(string $sql, array $bindings = []): static
+    {
+        return $this->add_wheres([$this->raw_where('AND', $sql, $bindings)]);
+    }
+
+    /**
+     * Adds a condition written in SQL as where_raw() does, ORed.
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function or_where_raw(string $sql, array $bindings = []): static
+    {
+        return $this->add_wheres([$this->raw_where('OR', $sql, $bindings)]);
+    }
+
+    /**
+     * Adds column IN (values), ANDed, by the rules of a hash of conditions (spec §5.2): an empty list is
+     * 1=0, which matches no row, and a null in the list is compared with IS NULL, (column IN(...) OR
+     * column IS NULL). The keys of the list are not read.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     */
+    public function where_in(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->in_where(__FUNCTION__, 'AND', $column, $values, false)]);
+    }
+
+    /**
+     * Adds column IN (values) as where_in() does, ORed.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     */
+    public function or_where_in(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->in_where(__FUNCTION__, 'OR', $column, $values, false)]);
+    }
+
+    /**
+     * Adds column NOT IN (values), ANDed: an empty list is 1=1, which matches every row, and a null in the
+     * list makes the column IS NOT NULL too, (column NOT IN(...) AND column IS NOT NULL), or with nulls
+     * only, column IS NOT NULL.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     */
+    public function where_not_in(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->in_where(__FUNCTION__, 'AND', $column, $values, true)]);
+    }
+
+    /**
+     * Adds column NOT IN (values) as where_not_in() does, ORed.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     */
+    public function or_where_not_in(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->in_where(__FUNCTION__, 'OR', $column, $values, true)]);
+    }
+
+    /**
+     * Adds column IS NULL for a column, or for each column of a list, ANDed.
+     *
+     * @param string|array<mixed> $columns
+     * @return $this
+     */
+    public function where_null(string|array $columns): static
+    {
+        return $this->add_wheres($this->null_wheres(__FUNCTION__, 'AND', $columns, false));
+    }
+
+    /**
+     * Adds column IS NULL for a column, or for each column of a list, ORed.
+     *
+     * @param string|array<mixed> $columns
+     * @return $this
+     */
+    public function or_where_null(string|array $columns): static
+    {
+        return $this->add_wheres($this->null_wheres(__FUNCTION__, 'OR', $columns, false));
+    }
+
+    /**
+     * Adds column IS NOT NULL for a column, or for each column of a list, ANDed.
+     *
+     * @param string|array<mixed> $columns
+     * @return $this
+     */
+    public function where_not_null(string|array $columns): static
+    {
+        return $this->add_wheres($this->null_wheres(__FUNCTION__, 'AND', $columns, true));
+    }
+
+    /**
+     * Adds column IS NOT NULL for a column, or for each column of a list, ORed.
+     *
+     * @param string|array<mixed> $columns
+     * @return $this
+     */
+    public function or_where_not_null(string|array $columns): static
+    {
+        return $this->add_wheres($this->null_wheres(__FUNCTION__, 'OR', $columns, true));
+    }
+
+    /**
+     * Adds column BETWEEN ? AND ?, ANDed, with the two values of the list, whose keys are not read.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     * @throws ActiveRecordException for a list that does not hold two values
+     */
+    public function where_between(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->between_where(__FUNCTION__, 'AND', $column, $values, false)]);
+    }
+
+    /**
+     * Adds column BETWEEN ? AND ? as where_between() does, ORed.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     * @throws ActiveRecordException as where_between() does
+     */
+    public function or_where_between(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->between_where(__FUNCTION__, 'OR', $column, $values, false)]);
+    }
+
+    /**
+     * Adds column NOT BETWEEN ? AND ?, ANDed, with the two values of the list.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     * @throws ActiveRecordException as where_between() does
+     */
+    public function where_not_between(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->between_where(__FUNCTION__, 'AND', $column, $values, true)]);
+    }
+
+    /**
+     * Adds column NOT BETWEEN ? AND ?, ORed, with the two values of the list.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     * @throws ActiveRecordException as where_between() does
+     */
+    public function or_where_not_between(string $column, array $values): static
+    {
+        return $this->add_wheres([$this->between_where(__FUNCTION__, 'OR', $column, $values, true)]);
+    }
+
+    /**
+     * Adds column BETWEEN first AND second, ANDed, with the two columns of the list.
+     *
+     * <code>
+     * Author::where_between_columns('author_id', ['parent_author_id', 'author_id'])->get();
+     * </code>
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException for a list that does not hold two column names
+     */
+    public function where_between_columns(string $column, array $columns): static
+    {
+        return $this->add_wheres([$this->between_columns_where(__FUNCTION__, 'AND', $column, $columns, false)]);
+    }
+
+    /**
+     * Adds column BETWEEN first AND second as where_between_columns() does, ORed.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_between_columns() does
+     */
+    public function or_where_between_columns(string $column, array $columns): static
+    {
+        return $this->add_wheres([$this->between_columns_where(__FUNCTION__, 'OR', $column, $columns, false)]);
+    }
+
+    /**
+     * Adds column NOT BETWEEN first AND second, ANDed, with the two columns of the list.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_between_columns() does
+     */
+    public function where_not_between_columns(string $column, array $columns): static
+    {
+        return $this->add_wheres([$this->between_columns_where(__FUNCTION__, 'AND', $column, $columns, true)]);
+    }
+
+    /**
+     * Adds column NOT BETWEEN first AND second, ORed, with the two columns of the list.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_between_columns() does
+     */
+    public function or_where_not_between_columns(string $column, array $columns): static
+    {
+        return $this->add_wheres([$this->between_columns_where(__FUNCTION__, 'OR', $column, $columns, true)]);
+    }
+
+    /**
+     * Adds column LIKE pattern, ANDed. The pattern takes the wildcards % (any characters) and _ (one
+     * character), and every other character is itself. By default it matches in any case, as the
+     * adapter can: LIKE on MySQL and MariaDB as the column's collation decides, ILIKE on Postgres,
+     * LIKE on SQLite (ASCII letters only). With $case_sensitive it matches in the case given: LIKE
+     * CAST(? AS BINARY) on MySQL and MariaDB, a byte comparison; LIKE on Postgres; GLOB on SQLite, with
+     * the pattern translated (see Connection::like_condition() and like_pattern()).
+     *
+     * <code>
+     * Author::where_like('name', 't%')->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException at the call, for a case-sensitive LIKE the adapter does not write
+     */
+    public function where_like(string $column, string $value, bool $case_sensitive = false): static
+    {
+        return $this->add_wheres([$this->like_where(__FUNCTION__, 'AND', $column, $value, $case_sensitive, false)]);
+    }
+
+    /**
+     * Adds column LIKE pattern as where_like() does, ORed.
+     *
+     * @return $this
+     * @throws ActiveRecordException as where_like() does
+     */
+    public function or_where_like(string $column, string $value, bool $case_sensitive = false): static
+    {
+        return $this->add_wheres([$this->like_where(__FUNCTION__, 'OR', $column, $value, $case_sensitive, false)]);
+    }
+
+    /**
+     * Adds column NOT LIKE pattern, ANDed, the pattern as where_like() takes it.
+     *
+     * @return $this
+     * @throws ActiveRecordException as where_like() does
+     */
+    public function where_not_like(string $column, string $value, bool $case_sensitive = false): static
+    {
+        return $this->add_wheres([$this->like_where(__FUNCTION__, 'AND', $column, $value, $case_sensitive, true)]);
+    }
+
+    /**
+     * Adds column NOT LIKE pattern, ORed, the pattern as where_like() takes it.
+     *
+     * @return $this
+     * @throws ActiveRecordException as where_like() does
+     */
+    public function or_where_not_like(string $column, string $value, bool $case_sensitive = false): static
+    {
+        return $this->add_wheres([$this->like_where(__FUNCTION__, 'OR', $column, $value, $case_sensitive, true)]);
+    }
+
+    /**
+     * Adds a group in parentheses, ANDed, of the same comparison on each column, in where()'s forms,
+     * joined with AND: where_all(['name', 'some_text'], 'like', 'T%') is (name LIKE ? AND some_text
+     * LIKE ?). As in Laravel, a list of no column adds no condition.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where() does, and for a column name that is not a string
+     */
+    public function where_all(array $columns, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->columns_wheres(__FUNCTION__, 'AND', 'AND', false, $columns, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds a group as where_all() does, ORed.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_all() does
+     */
+    public function or_where_all(array $columns, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->columns_wheres(__FUNCTION__, 'OR', 'AND', false, $columns, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds a group in parentheses, ANDed, of the same comparison on each column, joined with OR:
+     * where_any(['name', 'some_text'], 'Tito') is (name = ? OR some_text = ?).
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_all() does
+     */
+    public function where_any(array $columns, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->columns_wheres(__FUNCTION__, 'AND', 'OR', false, $columns, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds a group as where_any() does, ORed.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_all() does
+     */
+    public function or_where_any(array $columns, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->columns_wheres(__FUNCTION__, 'OR', 'OR', false, $columns, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds the negation of where_any()'s group, ANDed: where_none(['name', 'some_text'], 'Tito') is
+     * NOT (name = ? OR some_text = ?).
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_all() does
+     */
+    public function where_none(array $columns, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->columns_wheres(__FUNCTION__, 'AND', 'OR', true, $columns, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds the negation of where_any()'s group, ORed.
+     *
+     * @param array<mixed> $columns
+     * @return $this
+     * @throws ActiveRecordException as where_all() does
+     */
+    public function or_where_none(array $columns, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_wheres($this->columns_wheres(__FUNCTION__, 'OR', 'OR', true, $columns, $operator, $value, func_num_args() - 1));
+    }
+
+    /**
+     * Adds a condition on the primary key, ANDed: pk = id, or for a list pk IN (ids), by the rules of
+     * where_in(). The primary key is named by its column, never through an alias, as the legacy finders
+     * name it (spec §6.2.6), and with joins it gets the model's table.
+     *
+     * <code>
+     * Author::where_key([1, 2])->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException for a model whose primary key is not one column
+     */
+    public function where_key(mixed $id): static
+    {
+        return $this->add_wheres([$this->key_where(__FUNCTION__, $id, false)]);
+    }
+
+    /**
+     * Adds the opposite condition on the primary key, ANDed: pk != id, or for a list pk NOT IN (ids), by
+     * the rules of where_not_in().
+     *
+     * @return $this
+     * @throws ActiveRecordException as where_key() does
+     */
+    public function where_key_not(mixed $id): static
+    {
+        return $this->add_wheres([$this->key_where(__FUNCTION__, $id, true)]);
+    }
+
+    /**
      * The SELECT the query sends, with its bind markers (see get_bindings()).
      */
     public function to_sql(): string
@@ -252,8 +793,9 @@ class Query
 
     /**
      * The values the query binds to the markers of its SELECT, in the order of the clauses: those of the
-     * select, of the FROM, then of the WHERE. They are as they were given: the query prepares them
-     * when it runs (a DateTime is sent as a string).
+     * select, of the FROM, then of the WHERE. A value compared with a column is prepared for it (a
+     * DateTime in the format of the column's type); the others, those of the *_raw() methods, are as they
+     * were given, and the query prepares them when it runs (a DateTime is sent as a date and time).
      *
      * @return list<mixed>
      */
@@ -624,5 +1166,409 @@ class Query
         }
 
         return $selects;
+    }
+
+    /**
+     * Adds conditions to the WHERE, after those it holds.
+     *
+     * @param list<Where> $wheres
+     * @return $this
+     */
+    private function add_wheres(array $wheres): static
+    {
+        $this->state->wheres = [...$this->state->wheres, ...$wheres];
+
+        return $this;
+    }
+
+    /**
+     * The conditions of a call of $method, where() or one of its or_ and not forms (see where()),
+     * joined to those before them by $boolean, and negated with $not. $count is the number of the
+     * arguments given after the column.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param Closure|string|array<mixed> $column
+     * @return list<Where>
+     * @throws ActiveRecordException
+     */
+    private function wheres(string $method, string $boolean, bool $not, Closure|string|array $column, mixed $operator, mixed $value, int $count): array
+    {
+        if ($column instanceof Closure) {
+            return $this->group($boolean, $not, $this->closure_wheres($method, $column));
+        }
+
+        if (is_array($column)) {
+            $wheres = $this->array_wheres($method, $column);
+
+            // ANDed, they are as many conditions ANDed; with an OR or a NOT, one group
+            return 'AND' === $boolean && !$not ? $wheres : $this->group($boolean, $not, $wheres);
+        }
+
+        $where = $this->basic_where($method, $boolean, $column, $operator, $value, $count);
+
+        return $not ? $this->group($boolean, true, [$where]) : [$where];
+    }
+
+    /**
+     * A group of conditions in parentheses, joined to those before it by $boolean and negated with
+     * $not, as the one condition of a list; none for no conditions, since an empty group is left out.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param list<Where> $wheres
+     * @return list<Where>
+     */
+    private function group(string $boolean, bool $not, array $wheres): array
+    {
+        if ([] === $wheres) {
+            return [];
+        }
+
+        $group = new QueryState();
+        $group->wheres = $wheres;
+
+        return [['type' => 'group', 'boolean' => $boolean, 'not' => $not, 'group' => $group]];
+    }
+
+    /**
+     * The conditions a closure given to $method adds to the query it is passed: a new query on the
+     * same model, which may hold nothing but where clauses (spec §5.2). They are taken when the closure
+     * returns: a later change to that query changes nothing here.
+     *
+     * @return list<Where>
+     * @throws ActiveRecordException for a query that holds another clause
+     */
+    private function closure_wheres(string $method, Closure $callback): array
+    {
+        $query = new self($this->model_class);
+        $query->table = $this->table;
+        $callback($query);
+
+        $new = get_object_vars(new QueryState());
+        $held = [];
+
+        foreach (get_object_vars($query->state) as $field => $value) {
+            if ('wheres' !== $field && $value !== $new[$field]) {
+                $held[] = $field;
+            }
+        }
+
+        if ([] !== $held) {
+            throw new ActiveRecordException(sprintf('A where() group can only hold where clauses: the one given to %s() on %s also holds %s', $method, $this->model_class, implode(', ', $held)));
+        }
+
+        return $query->state->wheres;
+    }
+
+    /**
+     * The conditions of an array given to $method: an entry with a string key is a condition of a hash,
+     * column => value, which the compiler renders as the legacy finders render one (Expressions); any
+     * other entry is a condition of a list, an array of where()'s arguments: [column, value] or [column,
+     * operator, value], where the column may be a closure or a list too. They are ANDed.
+     *
+     * @param array<mixed> $conditions
+     * @return list<Where>
+     * @throws ActiveRecordException for an entry in no such form, or a condition that where() refuses
+     */
+    private function array_wheres(string $method, array $conditions): array
+    {
+        $wheres = [];
+
+        foreach ($conditions as $key => $condition) {
+            if (is_string($key)) {
+                $wheres[] = ['type' => 'hash', 'boolean' => 'AND', 'column' => $this->column_name($method, $key), 'value' => $condition];
+                continue;
+            }
+
+            if (!is_array($condition) || [] === $condition || count($condition) > 3) {
+                throw new ActiveRecordException(sprintf(
+                    'A condition of the list given to %s() on %s is [column, value] or [column, operator, value], not %s',
+                    $method,
+                    $this->model_class,
+                    is_array($condition) ? sprintf('an array of %d', count($condition)) : get_debug_type($condition),
+                ));
+            }
+
+            $condition = array_values($condition);
+            $column = $condition[0];
+
+            if (!$column instanceof Closure && !is_string($column) && !is_array($column)) {
+                throw new ActiveRecordException(sprintf('A column name must be a string, not %s, in %s() on %s', get_debug_type($column), $method, $this->model_class));
+            }
+
+            $wheres = [...$wheres, ...$this->wheres($method, 'AND', false, $column, $condition[1] ?? null, $condition[2] ?? null, count($condition) - 1)];
+        }
+
+        return $wheres;
+    }
+
+    /**
+     * A comparison of a column with a value (see where()).
+     *
+     * @param 'AND'|'OR' $boolean
+     * @return WhereBasic
+     * @throws ActiveRecordException as comparison() does, and for an empty column name
+     */
+    private function basic_where(string $method, string $boolean, string $column, mixed $operator, mixed $value, int $count): array
+    {
+        $column = $this->column_name($method, $column);
+        [$operator, $value] = $this->comparison($method, $column, $operator, $value, $count);
+
+        return ['type' => 'basic', 'boolean' => $boolean, 'column' => $column, 'operator' => $operator, 'value' => $value];
+    }
+
+    /**
+     * The operator, in upper case, and the value of a comparison of $column, from the arguments given
+     * after the column, $count of them: one is the value, compared with =; two are an operator, where
+     * null is =, and the value.
+     *
+     * @return array{string, mixed}
+     * @throws ActiveRecordException for no value, an unknown operator, a null compared by another operator
+     *   than =, !=, <> and <=>, or an array as the value
+     */
+    private function comparison(string $method, string $column, mixed $operator, mixed $value, int $count): array
+    {
+        if ($count < 1) {
+            throw new ActiveRecordException(sprintf("No value given for '%s' in %s() on %s", $column, $method, $this->model_class));
+        }
+
+        if (1 === $count) {
+            [$operator, $value] = ['=', $operator];
+        }
+
+        $given = $operator ?? '=';
+        $operator = $this->operator($method, $operator);
+
+        if (null === $value && !in_array($operator, self::NULL_OPERATORS, true)) {
+            throw new ActiveRecordException(sprintf("Illegal operator and value combination: '%s' with null in %s() on %s", $given, $method, $this->model_class));
+        }
+
+        if (is_array($value)) {
+            throw new ActiveRecordException(sprintf("An array is no value for '%s' in %s() on %s: a list of values goes to where_in() or where_not_in()", $given, $method, $this->model_class));
+        }
+
+        return [$operator, $value];
+    }
+
+    /**
+     * An operator of a condition, matched in any case against OPERATORS and returned in upper case; null
+     * is =.
+     *
+     * @throws ActiveRecordException for any other
+     */
+    private function operator(string $method, mixed $operator): string
+    {
+        $operator ??= '=';
+
+        if (!is_string($operator) || !in_array(strtolower($operator), self::OPERATORS, true)) {
+            throw new ActiveRecordException(sprintf('Unknown operator %s in %s() on %s', is_string($operator) ? "'$operator'" : get_debug_type($operator), $method, $this->model_class));
+        }
+
+        return strtoupper($operator);
+    }
+
+    /**
+     * A comparison of two columns (see where_column()), from the arguments given after the first column,
+     * $count of them: one is the second column, compared with =.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @return WhereColumn
+     * @throws ActiveRecordException for an unknown operator, an empty column name, or no second column
+     */
+    private function column_where(string $method, string $boolean, string $first, ?string $operator, ?string $second, int $count): array
+    {
+        $first = $this->column_name($method, $first);
+
+        if (1 === $count) {
+            [$operator, $second] = ['=', $operator];
+        }
+
+        $operator = $this->operator($method, $operator);
+
+        if (null === $second) {
+            throw new ActiveRecordException(sprintf("No second column for '%s' in %s() on %s", $first, $method, $this->model_class));
+        }
+
+        return ['type' => 'column', 'boolean' => $boolean, 'first' => $first, 'operator' => $operator, 'second' => $this->column_name($method, $second)];
+    }
+
+    /**
+     * A condition written in SQL (see where_raw()), its list values spread over their markers now (see
+     * QueryCompiler::raw_condition()).
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param array<mixed> $bindings
+     * @return WhereRaw
+     */
+    private function raw_where(string $boolean, string $sql, array $bindings): array
+    {
+        [$sql, $bindings] = $this->compiler()->raw_condition($sql, array_values($bindings));
+
+        return ['type' => 'raw', 'boolean' => $boolean, 'sql' => $sql, 'bindings' => $bindings];
+    }
+
+    /**
+     * column IN (values), or with $not NOT IN (see where_in() and where_not_in()).
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param array<mixed> $values
+     * @return WhereIn
+     */
+    private function in_where(string $method, string $boolean, string $column, array $values, bool $not): array
+    {
+        return ['type' => 'in', 'boolean' => $boolean, 'column' => $this->column_name($method, $column), 'values' => array_values($values), 'not' => $not];
+    }
+
+    /**
+     * column IS NULL, or with $not IS NOT NULL, for a column or each column of a list.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param string|array<mixed> $columns
+     * @return list<Where>
+     */
+    private function null_wheres(string $method, string $boolean, string|array $columns, bool $not): array
+    {
+        $wheres = [];
+
+        foreach ($this->column_list($method, is_array($columns) ? $columns : [$columns]) as $column) {
+            $wheres[] = ['type' => 'null', 'boolean' => $boolean, 'column' => $column, 'not' => $not];
+        }
+
+        return $wheres;
+    }
+
+    /**
+     * column BETWEEN two values, or with $not NOT BETWEEN.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param array<mixed> $values
+     * @return WhereBetween
+     * @throws ActiveRecordException for a list that does not hold two values
+     */
+    private function between_where(string $method, string $boolean, string $column, array $values, bool $not): array
+    {
+        $column = $this->column_name($method, $column);
+        $values = array_values($values);
+
+        if (2 !== count($values)) {
+            throw new ActiveRecordException(sprintf('%s() needs two values, not %d, on %s', $method, count($values), $this->model_class));
+        }
+
+        return ['type' => 'between', 'boolean' => $boolean, 'column' => $column, 'values' => [$values[0], $values[1]], 'not' => $not];
+    }
+
+    /**
+     * column BETWEEN two columns, or with $not NOT BETWEEN.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param array<mixed> $columns
+     * @return WhereBetweenColumns
+     * @throws ActiveRecordException for a list that does not hold two column names
+     */
+    private function between_columns_where(string $method, string $boolean, string $column, array $columns, bool $not): array
+    {
+        $column = $this->column_name($method, $column);
+
+        if (2 !== count($columns)) {
+            throw new ActiveRecordException(sprintf('%s() needs two values, not %d, on %s', $method, count($columns), $this->model_class));
+        }
+
+        [$first, $second] = $this->column_list($method, $columns);
+
+        return ['type' => 'between_columns', 'boolean' => $boolean, 'column' => $column, 'columns' => [$first, $second], 'not' => $not];
+    }
+
+    /**
+     * column LIKE pattern, or with $not NOT LIKE (see where_like()).
+     *
+     * @param 'AND'|'OR' $boolean
+     * @return WhereLike
+     * @throws ActiveRecordException for an empty column name, or a case-sensitive LIKE the adapter does not write
+     */
+    private function like_where(string $method, string $boolean, string $column, string $value, bool $case_sensitive, bool $not): array
+    {
+        $column = $this->column_name($method, $column);
+        // the adapter refuses a LIKE it cannot write at the call (spec §5.7), not when the statement is compiled
+        $this->table()->connection()->like_condition($column, $case_sensitive, $not);
+
+        return ['type' => 'like', 'boolean' => $boolean, 'column' => $column, 'value' => $value, 'case_sensitive' => $case_sensitive, 'not' => $not];
+    }
+
+    /**
+     * The group of where_all(), where_any() or where_none(): the same comparison (see where()) on each
+     * column, joined with $glue, joined to the conditions before it by $boolean, and negated with $not.
+     *
+     * @param 'AND'|'OR' $boolean
+     * @param 'AND'|'OR' $glue
+     * @param array<mixed> $columns
+     * @return list<Where>
+     * @throws ActiveRecordException as comparison() does, and for a column name that is not a string, or empty
+     */
+    private function columns_wheres(string $method, string $boolean, string $glue, bool $not, array $columns, mixed $operator, mixed $value, int $count): array
+    {
+        $columns = $this->column_list($method, $columns);
+        [$operator, $value] = $this->comparison($method, implode(', ', $columns), $operator, $value, $count);
+        $wheres = [];
+
+        foreach ($columns as $column) {
+            $wheres[] = ['type' => 'basic', 'boolean' => $glue, 'column' => $column, 'operator' => $operator, 'value' => $value];
+        }
+
+        return $this->group($boolean, $not, $wheres);
+    }
+
+    /**
+     * pk = id or pk IN (ids), or with $not != and NOT IN, ANDed. The pk is pre-quoted: the column itself,
+     * which no alias names, and with joins the model's (see QueryCompiler::column()).
+     *
+     * @return WhereBasic|WhereIn
+     * @throws ActiveRecordException for a model whose primary key is not one column
+     */
+    private function key_where(string $method, mixed $id, bool $not): array
+    {
+        $table = $this->table();
+
+        if (1 !== count($table->pk)) {
+            throw new ActiveRecordException(sprintf('%s() needs a single-column primary key; %s has %s', $method, $this->model_class, [] === $table->pk ? 'none' : 'a composite one'));
+        }
+
+        $column = $table->connection()->quote_name($table->real_column_name($table->pk[0]));
+
+        if (is_array($id)) {
+            return ['type' => 'in', 'boolean' => 'AND', 'column' => $column, 'values' => array_values($id), 'not' => $not];
+        }
+
+        return ['type' => 'basic', 'boolean' => 'AND', 'column' => $column, 'operator' => $not ? '!=' : '=', 'value' => $id];
+    }
+
+    /**
+     * A column name given to $method (see QueryCompiler::column_name()).
+     *
+     * @throws ActiveRecordException for an empty name
+     */
+    private function column_name(string $method, string $name): string
+    {
+        return $this->compiler()->column_name($name, $method);
+    }
+
+    /**
+     * The column names of a list given to $method.
+     *
+     * @param array<mixed> $columns
+     * @return list<string>
+     * @throws ActiveRecordException for a name that is not a string, or an empty one
+     */
+    private function column_list(string $method, array $columns): array
+    {
+        $names = [];
+
+        foreach ($columns as $column) {
+            if (!is_string($column)) {
+                throw new ActiveRecordException(sprintf('A column name must be a string, not %s, in %s() on %s', get_debug_type($column), $method, $this->model_class));
+            }
+
+            $names[] = $this->column_name($method, $column);
+        }
+
+        return $names;
     }
 }

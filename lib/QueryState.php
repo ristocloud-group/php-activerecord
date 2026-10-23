@@ -13,8 +13,23 @@ namespace ActiveRecord;
  * A state holds legacy options or the builder's clauses: QueryCompiler compiles the legacy
  * options when there are any, and the clauses otherwise.
  *
+ * The conditions of the WHERE ($wheres) are recorded as they were given, each joined to the one
+ * before it by its boolean (that of the first is dropped): a column is read by
+ * QueryCompiler::column(), and a value prepared for its column, when the statement is compiled.
+ *
  * @internal Serves the Query engine; not a supported API.
  * @package ActiveRecord
+ * @phpstan-type WhereBasic array{type: 'basic', boolean: 'AND'|'OR', column: string, operator: string, value: mixed}
+ * @phpstan-type WhereColumn array{type: 'column', boolean: 'AND'|'OR', first: string, operator: string, second: string}
+ * @phpstan-type WhereRaw array{type: 'raw', boolean: 'AND'|'OR', sql: string, bindings: list<mixed>}
+ * @phpstan-type WhereIn array{type: 'in', boolean: 'AND'|'OR', column: string, values: list<mixed>, not: bool}
+ * @phpstan-type WhereNull array{type: 'null', boolean: 'AND'|'OR', column: string, not: bool}
+ * @phpstan-type WhereBetween array{type: 'between', boolean: 'AND'|'OR', column: string, values: array{mixed, mixed}, not: bool}
+ * @phpstan-type WhereBetweenColumns array{type: 'between_columns', boolean: 'AND'|'OR', column: string, columns: array{string, string}, not: bool}
+ * @phpstan-type WhereLike array{type: 'like', boolean: 'AND'|'OR', column: string, value: string, case_sensitive: bool, not: bool}
+ * @phpstan-type WhereHash array{type: 'hash', boolean: 'AND'|'OR', column: string, value: mixed}
+ * @phpstan-type WhereGroup array{type: 'group', boolean: 'AND'|'OR', not: bool, group: QueryState}
+ * @phpstan-type Where WhereBasic|WhereColumn|WhereRaw|WhereIn|WhereNull|WhereBetween|WhereBetweenColumns|WhereLike|WhereHash|WhereGroup
  */
 final class QueryState
 {
@@ -64,4 +79,17 @@ final class QueryState
      * @var list<string>
      */
     public array $joins = [];
+
+    /**
+     * The conditions of the builder's WHERE, in order (Query::where() and its family). Each has a
+     * type: a comparison of a column with a value ('basic') or with a column ('column'), SQL
+     * ('raw'), IN ('in'), IS NULL ('null'), BETWEEN two values ('between') or two columns
+     * ('between_columns'), LIKE ('like'), an entry of a hash of conditions ('hash'), or a group
+     * in parentheses ('group'), whose conditions are those of a state of their own. 'not' is the
+     * negated form of the type: NOT IN, IS NOT NULL, NOT BETWEEN, NOT LIKE, or NOT (...) for a
+     * group.
+     *
+     * @var list<Where>
+     */
+    public array $wheres = [];
 }

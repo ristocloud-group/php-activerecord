@@ -658,6 +658,35 @@ abstract class Connection
     }
 
     /**
+     * The condition of a LIKE on a column, $column_sql as the query names it, with one bind marker
+     * for the pattern (see like_pattern()); with $not, its negation. A pattern takes the wildcards %
+     * (any characters) and _ (one character). By default the condition is "column LIKE ?", which
+     * matches in the case the database's LIKE does (as the column's collation decides on MySQL and
+     * MariaDB, ASCII letters in any case on SQLite). An adapter that can match in the case given
+     * writes the case-sensitive condition its own way; this one cannot.
+     *
+     * @throws ActiveRecordException for a case-sensitive LIKE
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if ($case_sensitive) {
+            throw new ActiveRecordException(sprintf('%s has no case-sensitive LIKE', static::class));
+        }
+
+        return $column_sql . ($not ? ' NOT LIKE ?' : ' LIKE ?');
+    }
+
+    /**
+     * The value bound to the marker of like_condition(), from a pattern with the wildcards % and _:
+     * the pattern as it is by default. An adapter whose case-sensitive condition reads another
+     * syntax translates it.
+     */
+    public function like_pattern(string $pattern, bool $case_sensitive): string
+    {
+        return $pattern;
+    }
+
+    /**
      * Return a date time formatted into the database's date format.
      *
      * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)

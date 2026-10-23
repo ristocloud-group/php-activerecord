@@ -125,6 +125,21 @@ class MysqlAdapter extends Connection
     }
 
     /**
+     * A case-sensitive LIKE compares bytes: "column LIKE CAST(? AS BINARY)". LIKE BINARY ? would
+     * too, but MySQL deprecates the BINARY operator (warning 1287); MySQL and MariaDB read the CAST
+     * without a warning. A case-insensitive one is the default "column LIKE ?", which the column's
+     * collation decides.
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if (!$case_sensitive) {
+            return parent::like_condition($column_sql, false, $not);
+        }
+
+        return $column_sql . ($not ? ' NOT LIKE' : ' LIKE') . ' CAST(? AS BINARY)';
+    }
+
+    /**
      * @return array<string, string|array{name: string, length?: int}>
      */
     public function native_database_types()

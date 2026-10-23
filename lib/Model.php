@@ -84,6 +84,42 @@ use Closure;
  * @method static Query<static> distinct(bool $value = true) A new query on this class that selects each row once
  * @method static Query<static> from(string $table, ?string $as = null) A new query on this class that reads the rows from this table
  * @method static Query<static> from_raw(string $sql, array<mixed> $bindings = []) A new query on this class that reads the rows from this SQL FROM
+ * @method static Query<static> where(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition
+ * @method static Query<static> or_where(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition
+ * @method static Query<static> where_not(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with the negation of this condition
+ * @method static Query<static> or_where_not(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with the negation of this condition
+ * @method static Query<static> where_column(string $first, ?string $operator = null, ?string $second = null) A new query on this class that compares these columns
+ * @method static Query<static> or_where_column(string $first, ?string $operator = null, ?string $second = null) A new query on this class that compares these columns
+ * @method static Query<static> where_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition
+ * @method static Query<static> or_where_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition
+ * @method static Query<static> where_in(string $column, array<mixed> $values) A new query on this class with column IN (values)
+ * @method static Query<static> or_where_in(string $column, array<mixed> $values) A new query on this class with column IN (values)
+ * @method static Query<static> where_not_in(string $column, array<mixed> $values) A new query on this class with column NOT IN (values)
+ * @method static Query<static> or_where_not_in(string $column, array<mixed> $values) A new query on this class with column NOT IN (values)
+ * @method static Query<static> where_null(string|array<mixed> $columns) A new query on this class with these columns IS NULL
+ * @method static Query<static> or_where_null(string|array<mixed> $columns) A new query on this class with these columns IS NULL
+ * @method static Query<static> where_not_null(string|array<mixed> $columns) A new query on this class with these columns IS NOT NULL
+ * @method static Query<static> or_where_not_null(string|array<mixed> $columns) A new query on this class with these columns IS NOT NULL
+ * @method static Query<static> where_between(string $column, array<mixed> $values) A new query on this class with column BETWEEN two values
+ * @method static Query<static> or_where_between(string $column, array<mixed> $values) A new query on this class with column BETWEEN two values
+ * @method static Query<static> where_not_between(string $column, array<mixed> $values) A new query on this class with column NOT BETWEEN two values
+ * @method static Query<static> or_where_not_between(string $column, array<mixed> $values) A new query on this class with column NOT BETWEEN two values
+ * @method static Query<static> where_between_columns(string $column, array<mixed> $columns) A new query on this class with column BETWEEN two columns
+ * @method static Query<static> or_where_between_columns(string $column, array<mixed> $columns) A new query on this class with column BETWEEN two columns
+ * @method static Query<static> where_not_between_columns(string $column, array<mixed> $columns) A new query on this class with column NOT BETWEEN two columns
+ * @method static Query<static> or_where_not_between_columns(string $column, array<mixed> $columns) A new query on this class with column NOT BETWEEN two columns
+ * @method static Query<static> where_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column LIKE the pattern
+ * @method static Query<static> or_where_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column LIKE the pattern
+ * @method static Query<static> where_not_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column NOT LIKE the pattern
+ * @method static Query<static> or_where_not_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column NOT LIKE the pattern
+ * @method static Query<static> where_all(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on every column
+ * @method static Query<static> or_where_all(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on every column
+ * @method static Query<static> where_any(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on any column
+ * @method static Query<static> or_where_any(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on any column
+ * @method static Query<static> where_none(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on no column
+ * @method static Query<static> or_where_none(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on no column
+ * @method static Query<static> where_key(mixed $id) A new query on this class with this primary key, or these
+ * @method static Query<static> where_key_not(mixed $id) A new query on this class without this primary key, or these
  * @method static string to_sql() The SELECT of a new query on this class
  * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
  * @phpstan-import-type Relationship from AbstractRelationship

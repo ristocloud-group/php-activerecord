@@ -126,6 +126,14 @@ class PgsqlAdapter extends Connection
     }
 
     /**
+     * Postgres's LIKE matches in the case given, and its ILIKE in any case.
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        return $column_sql . ($not ? ' NOT ' : ' ') . ($case_sensitive ? 'LIKE' : 'ILIKE') . ' ?';
+    }
+
+    /**
      * Reads pg_attribute.attidentity, so it needs PostgreSQL 10 or later. A default is
      * classed as an expression (default_is_expression) from its parsed tree: anything
      * but constants and casts of them (#47).

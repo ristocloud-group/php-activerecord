@@ -206,6 +206,22 @@ class SQLBuilder
     }
 
     /**
+     * The WHERE of a query of the builder, as QueryCompiler renders it: the condition, without the
+     * keyword, and the values of its bind markers in order, both taken as they are (no Expressions
+     * pass, no table added to a name). The values are the statement's where values (see
+     * get_where_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function where_condition(string $condition, array $values): static
+    {
+        $this->where = $condition;
+        $this->where_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $order
      * @return $this
      */

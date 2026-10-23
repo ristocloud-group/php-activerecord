@@ -204,6 +204,33 @@ class SqliteAdapter extends Connection
     }
 
     /**
+     * SQLite's LIKE matches ASCII letters in any case, and its GLOB in the case given: a
+     * case-sensitive LIKE is "column GLOB ?", whose pattern like_pattern() translates.
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if (!$case_sensitive) {
+            return parent::like_condition($column_sql, false, $not);
+        }
+
+        return $column_sql . ($not ? ' NOT GLOB ?' : ' GLOB ?');
+    }
+
+    /**
+     * The GLOB pattern of a case-sensitive LIKE pattern: GLOB's own wildcards * and ? and its bracket
+     * [ stand for themselves in a bracket expression ([*], [?], [[]), then LIKE's wildcards become
+     * GLOB's, % the * and _ the ?. One pass, so that no character is translated twice.
+     */
+    public function like_pattern(string $pattern, bool $case_sensitive): string
+    {
+        if (!$case_sensitive) {
+            return $pattern;
+        }
+
+        return strtr($pattern, ['[' => '[[]', '*' => '[*]', '?' => '[?]', '%' => '*', '_' => '?']);
+    }
+
+    /**
      * @return array<string, string|array{name: string, length?: int}>
      */
     public function native_database_types()
