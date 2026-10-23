@@ -802,6 +802,39 @@ abstract class Connection
     }
 
     /**
+     * The name of a column as the database compares column names: in lower case where they are not
+     * case-sensitive (see column_names_are_case_sensitive()), else as it is. The column a query names
+     * is the one whose key equals the key of the reference (see column_reference_key()).
+     *
+     * @internal Serves SQLBuilder and Timestamps; not a supported API.
+     */
+    public function column_name_key(string $name): string
+    {
+        return $this->column_names_are_case_sensitive() ? $name : strtolower($name);
+    }
+
+    /**
+     * The key, as column_name_key() gives one, of the column a query names with $reference (a hash
+     * key, a data key), read as the database reads it: a single pre-quoted identifier by its text
+     * (`a``b` is the identifier a`b), anything else as written. A name of several parts is kept
+     * whole, so it is the key of no column.
+     *
+     * @internal Serves SQLBuilder and Timestamps; not a supported API.
+     */
+    public function column_reference_key(string $reference): string
+    {
+        $q = static::$QUOTE_CHARACTER;
+        $parts = str_contains($reference, $q) ? self::split_name_parts($reference, $q) : null;
+
+        // `a``b` is the identifier a`b
+        if (null !== $parts && 1 === count($parts) && $parts[0][1]) {
+            $reference = str_replace($q . $q, $q, substr($parts[0][0], 1, -1));
+        }
+
+        return $this->column_name_key($reference);
+    }
+
+    /**
      * Columns every table has that schema introspection never lists; with joins a hash key
      * naming one is qualified like a model column (spec §6.1). None by default.
      *

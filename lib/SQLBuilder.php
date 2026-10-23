@@ -52,13 +52,12 @@ class SQLBuilder
 
     /**
      * With joins, the only hash keys that get the table: the model's columns and pseudo-columns,
-     * by name (in lower case where the database matches column names regardless of case). Null:
+     * by the key the database compares their names by (see Connection::column_name_key()). Null:
      * every unqualified key gets it. See qualify_hash_keys().
      *
      * @var array<string, true>|null
      */
     private ?array $model_columns = null;
-    private bool $fold_column_names = false;
 
     // for insert/update
     /** @var array<string, mixed>|null */
@@ -281,10 +280,10 @@ class SQLBuilder
      * $columns, the model's own (its pseudo-columns included): any other key is a column of a
      * joined table, and stays as written. Without this call every unqualified key is prefixed (#35).
      *
-     * A key names a column the way the database matches it: regardless of case where
-     * Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB and SQLite match
-     * 'author_id' to Author_Id), and a single pre-quoted identifier by its text. Like joins(),
-     * this is read when where() applies a hash, so it comes first.
+     * A key names a column the way the database matches it (see Connection::column_reference_key()):
+     * regardless of case where Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB
+     * and SQLite match 'author_id' to Author_Id), and a single pre-quoted identifier by its text.
+     * Like joins(), this is read when where() applies a hash, so it comes first.
      *
      * @internal Serves QueryCompiler; not a supported API.
      * @param list<string> $columns the real names of the model's columns, and the connection's
@@ -292,9 +291,7 @@ class SQLBuilder
      */
     public function qualify_hash_keys(array $columns): static
     {
-        $set = array_fill_keys($columns, true);
-        $this->fold_column_names = !$this->connection->column_names_are_case_sensitive();
-        $this->model_columns = $this->fold_column_names ? array_change_key_case($set) : $set;
+        $this->model_columns = array_fill_keys(array_map($this->connection->column_name_key(...), $columns), true);
 
         return $this;
     }
@@ -671,19 +668,7 @@ class SQLBuilder
      */
     private function names_model_column(string $key): bool
     {
-        if (null === $this->model_columns) {
-            return true;
-        }
-
-        $q = $this->connection::$QUOTE_CHARACTER;
-        $parts = str_contains($key, $q) ? Connection::split_name_parts($key, $q) : null;
-
-        // `a``b` is the identifier a`b
-        if (null !== $parts && 1 === count($parts) && $parts[0][1]) {
-            $key = str_replace($q . $q, $q, substr($parts[0][0], 1, -1));
-        }
-
-        return isset($this->model_columns[$this->fold_column_names ? strtolower($key) : $key]);
+        return null === $this->model_columns || isset($this->model_columns[$this->connection->column_reference_key($key)]);
     }
 
     /**

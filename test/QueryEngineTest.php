@@ -556,6 +556,70 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(self::GIVEN, OddTimestamp::find_by_name('given')->updated_at->format('Y-m-d H:i:s'));
     }
 
+    // Spec §5.6: a value is present when its column is in the data, named as the database names
+    // columns. MySQL, MariaDB and SQLite match column names regardless of case, so 'UPDATED_AT' is the
+    // column updated_at there: its value is kept and the column assigned once (a second assignment
+    // overwrote it). On Postgres the key names another column, which authors does not have, as before
+    public function test_update_all_keeps_an_updated_at_given_in_another_case(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $update = fn() => Author::update_all(['set' => ['name' => 'Cased', 'UPDATED_AT' => self::GIVEN], 'conditions' => ['author_id' => 1]]);
+
+        if ($this->conn->column_names_are_case_sensitive()) {
+            $this->assert_exception_message_contains('UPDATED_AT', $update, ActiveRecord\DatabaseException::class);
+            $this->assert_same('Tito', Author::find(1)->name);
+        } else {
+            $this->assert_same(1, $update());
+            $this->assert_sql_has('UPDATE authors SET name=?, UPDATED_AT=? WHERE author_id=?', Author::table()->last_sql);
+            $this->assert_same(['created_at' => null, 'updated_at' => self::GIVEN], $this->stamps_of('Cased'));
+        }
+    }
+
+    // A key can come pre-quoted, as the keys of a conditions hash can: the database reads it by its
+    // text, so it is the column updated_at on every adapter, assigned once (Postgres refuses two)
+    public function test_update_all_keeps_an_updated_at_given_pre_quoted(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $key = $this->conn->quote_name('updated_at');
+
+        $this->assert_same(1, Author::update_all(['set' => ['name' => 'Quoted', $key => self::GIVEN], 'conditions' => ['author_id' => 1]]));
+
+        $this->assert_sql_has('UPDATE authors SET name=?, updated_at=? WHERE author_id=?', Author::table()->last_sql);
+        $this->assert_same(['created_at' => null, 'updated_at' => self::GIVEN], $this->stamps_of('Quoted'));
+    }
+
+    // The same rule for a row Table::insert() writes, which MySQL refused for naming the column twice
+    // (1110): the value given is kept, and only created_at is added
+    public function test_a_direct_insert_keeps_an_updated_at_given_in_another_case(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $data = ['name' => 'Cased', 'UPDATED_AT' => self::GIVEN];
+        $insert = fn() => Author::table()->insert($data);
+
+        if ($this->conn->column_names_are_case_sensitive()) {
+            // another column on Postgres, which authors does not have
+            $this->assert_exception_message_contains('UPDATED_AT', $insert, ActiveRecord\DatabaseException::class);
+            $this->assert_null(Author::find_by_name('Cased'));
+        } else {
+            $insert();
+            $this->assert_sql_has('INSERT INTO authors(name,UPDATED_AT,created_at) VALUES(?,?,?)', Author::table()->last_sql);
+            $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::GIVEN], $this->stamps_of('Cased'));
+        }
+    }
+
+    // update_all() dropped falsy conditions ('0', '', 0, false, []) and wrote every row. The engine
+    // takes such a value as a condition that renders no WHERE: it writes every row too
+    public function test_update_all_with_falsy_conditions_writes_every_row(): void
+    {
+        foreach (['0', '', 0, false, []] as $i => $conditions) {
+            $parent = 10 + $i;
+
+            $this->assert_same(4, Author::update_all(['set' => ['parent_author_id' => $parent], 'conditions' => $conditions]));
+            $this->assert_sql_doesnt_has('WHERE', Author::table()->last_sql);
+            $this->assert_same(4, (int) Author::count(['conditions' => ['parent_author_id' => $parent]]));
+        }
+    }
+
     // Spec §6.2.5: an empty set is refused before any SQL. The updated_at of the rule must not make a
     // SET of it, which would write every row
     public function test_update_all_with_an_empty_set_sends_no_statement(): void
@@ -689,6 +753,17 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(4, (int) Author::count());
     }
 
+    // ... and null is no condition, as it always was: a DELETE without WHERE, of every row
+    // (Model::delete() always gives a pk hash)
+    public function test_a_direct_table_delete_of_null_has_no_where(): void
+    {
+        $table = Author::table();
+
+        $this->assert_same(4, $table->delete(null)->rowCount());
+        $this->assert_same('DELETE FROM ' . $this->conn->quote_name('authors'), $table->last_sql);
+        $this->assert_same(0, (int) Author::count());
+    }
+
     // Table::update() and Table::delete() send their values as Table prepares them, as they always did:
     // process_data() formats a DateTime of the pk hash by its column, and leaves one inside a list as
     // it is. The bulk writes bind that one as a positional value (#138); these two never did
@@ -741,13 +816,14 @@ class QueryEngineTest extends DatabaseTest
     {
         ConnectionCountingAuthor::table();
 
+        // once each: the engine takes the connection the override returned, and asks for none of its own
         ConnectionCountingAuthor::$connection_calls = 0;
         ConnectionCountingAuthor::update_all(['set' => ['name' => 'Counted'], 'conditions' => ['author_id' => 1]]);
-        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+        $this->assert_same(1, ConnectionCountingAuthor::$connection_calls);
 
         ConnectionCountingAuthor::$connection_calls = 0;
         ConnectionCountingAuthor::delete_all(['conditions' => ['author_id' => 1]]);
-        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+        $this->assert_same(1, ConnectionCountingAuthor::$connection_calls);
     }
 
     // ... and run their statement on the connection it returns: a subclass can route its writes

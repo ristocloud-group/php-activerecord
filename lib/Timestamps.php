@@ -110,8 +110,10 @@ final class Timestamps
      * now() unless the row has a value for that column. A value the row has is the caller's, null
      * included. A suspended class, and a table without the column, get nothing.
      *
-     * The keys of the row are column names or attribute names. The rest of the row is returned as
-     * it was, and a column added is named by its own name (see columns()).
+     * The keys of the row are column names or attribute names; a column name is read as the
+     * database reads it, regardless of case where it matches names that way, or pre-quoted. The
+     * rest of the row is returned as it was, and a column added is named by its own name (see
+     * columns()).
      *
      * A statement of several rows reads the clock once and gives that time as $now to each of them,
      * so that they do not straddle a second: without $now, every call reads now() itself.
@@ -167,15 +169,29 @@ final class Timestamps
         // a key names the column of that name, or the one its attribute name stands for (#92). Where
         // the database matches names regardless of case (MySQL, SQLite) Table does not map an attribute
         // to a column that differs from it by case only ('updated_at' to 'UPDATED_AT'): the inflected
-        // name finds that column. A column the data has must not be added again under its own name:
-        // MySQL refuses an INSERT that names a column twice.
+        // name finds that column. A key also names a column as the database reads it, regardless of
+        // case there and pre-quoted by its text ('UPDATED_AT' and '`updated_at`' are the column
+        // updated_at on MySQL, see Connection::column_reference_key()). A column the data has must not
+        // be added again: MySQL refuses an INSERT that names a column twice, Postgres an UPDATE that
+        // assigns one twice, and where an UPDATE does it the later value overwrites the one given.
         if ([] !== $missing) {
+            $connection = $table->connection();
+            $given = [];
+
             foreach (array_keys($data) as $key) {
                 $key = (string) $key;
                 $column = $table->columns[$table->real_column_name($key)] ?? $table->get_column_by_inflected_name($key);
 
                 if (null !== $column) {
                     unset($missing[$column->inflected_name]);
+                }
+
+                $given[$connection->column_reference_key($key)] = true;
+            }
+
+            foreach ($missing as $attribute => $name) {
+                if (isset($given[$connection->column_name_key($name)])) {
+                    unset($missing[$attribute]);
                 }
             }
         }

@@ -396,10 +396,12 @@ class Table
     }
 
     /**
-     * A conditions hash with its keys named as the columns (see real_column_name()),
-     * split where a column repeats so every condition is kept: hashes to AND in order.
+     * A conditions hash with its keys named as the columns (see real_column_name()), never
+     * through an alias, split where a column repeats so every condition is kept: hashes to AND
+     * in order. It is map_names() with no alias map.
      *
-     * @internal Serves the library's hash conditions; not a supported API.
+     * @internal The library no longer calls it: the Query engine maps the names of its conditions
+     *   through map_names(). Kept because it is public; not a supported API.
      * @param array<string, mixed> $hash
      * @return non-empty-list<array<string, mixed>>
      */
