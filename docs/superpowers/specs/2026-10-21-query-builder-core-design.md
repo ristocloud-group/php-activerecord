@@ -415,7 +415,8 @@ These were explicitly approved by the maintainer on 2026-10-21, and all go in th
 Approved by the maintainer on 2026-10-23 (issue #144):
 
 6. **Breaking:** an `$alias_attribute` key that names a column of the model's own table, by its real name or by its
-   attribute name (#92), is a configuration error. Loading the table throws `ConfigException`, naming the model,
+   attribute name (#92), or a pseudo-column of the connection (`_rowid`, `rowid`/`oid`/`_rowid_`,
+   `ctid`/`xmin`/…, which hash keys already treat like columns), is a configuration error. Loading the table throws `ConfigException`, naming the model,
    the alias and the column. Names are compared the way the database compares column names: case-insensitively,
    except on Postgres. Every other alias resolves in every hash condition: `find`, `count`, `exists`, `update_all`,
    `delete_all` and relationship conditions (change 7).
@@ -427,7 +428,7 @@ Approved by the maintainer on 2026-10-23 (issue #144):
      `PRAGMA table_info` omits. In both cases the alias keeps winning, and the error appears at the next load with
      fresh metadata.
    - Monolith: on 2026-10-23, the development databases of two tenants were checked for the 22 models and
-     42 aliases. No alias names a column.
+     42 aliases. No alias names a column or a pseudo-column.
 7. **Relationship `conditions` resolve aliases (#144).** A hash in a relationship's declared `conditions` maps the
    associated model's `$alias_attribute` keys and attribute names (#92) to real columns, in lazy and eager loads.
    - #129's rule is kept: an alias key and its target column's key in the same hash are both kept and ANDed.
