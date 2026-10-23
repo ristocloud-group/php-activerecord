@@ -25,6 +25,27 @@ final class QueryCompiler
     }
 
     /**
+     * The INSERT of one row: the SQLBuilder calls Table::run_insert() made before the engine took
+     * it over, moved as they were, so that it sends the same SQL. The row is a hash whose keys
+     * are the columns' real names and whose values are prepared (see Query::execute_insert()).
+     * $pk, an attribute or column name, is the column $sequence feeds, and $returning, another,
+     * the one the statement returns (#47). SQLBuilder rejects what is no hash.
+     *
+     * @param array<string, mixed> $row
+     */
+    public function compile_insert(array $row, ?string $pk = null, ?string $sequence = null, ?string $returning = null): SQLBuilder
+    {
+        $sql = new SQLBuilder($this->table->connection(), $this->table->get_fully_qualified_table_name());
+        $sql->insert($row, null === $pk ? $pk : $this->table->real_column_name($pk), $sequence);
+
+        if (null !== $returning) {
+            $sql->returning($this->table->real_column_name($returning));
+        }
+
+        return $sql;
+    }
+
+    /**
      * The SELECT a legacy options array describes: the body Table::options_to_sql() had before
      * the engine took it over, moved as it was (its calls into Table go through $this->table), so
      * that every legacy entry sends the same SQL and the same bind values. Joins come before

@@ -434,9 +434,11 @@
     ],
     "table_insert_direct": [
         {
-            "sql": "INSERT INTO `authors`(`name`) VALUES(?)",
+            "sql": "INSERT INTO `authors`(`name`,`created_at`,`updated_at`) VALUES(?,?,?)",
             "values": [
-                "Direct"
+                "Direct",
+                "<now>",
+                "<now>"
             ]
         }
     ],

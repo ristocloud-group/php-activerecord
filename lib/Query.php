@@ -11,7 +11,8 @@ namespace ActiveRecord;
  *
  * It holds a QueryState, which QueryCompiler renders as a SQLBuilder, and runs that statement
  * through its terminals (get, exists, ...). The legacy entries (find, count, exists, ...) hand it
- * their options array through from_options().
+ * their options array through from_options(). The writes of Table (insert, ...) run through its
+ * execute_*() methods.
  *
  * @template TModel of Model
  * @package ActiveRecord
@@ -125,6 +126,44 @@ class Query
         $row = ($connection ?? $table->connection())->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
 
         return false === $row ? 0 : $row[0];
+    }
+
+    /**
+     * INSERTs one row into the model's table and returns the statement that ran: the body of
+     * Table::run_insert(), moved here. The row's keys are column names or attribute names (#92) and
+     * its values are prepared as the finders prepare theirs (Table::process_data(): a DateTime in
+     * the format of its column). $pk and $sequence are the pk column that the sequence feeds, and
+     * $returning the one the statement returns (RETURNING, #47). The statement is left in
+     * Table::$last_sql.
+     *
+     * With $timestamps, the row gets the created_at and updated_at it lacks, the way Timestamps
+     * fills them for the class the table was loaded for (what Model::without_timestamps() of it
+     * suspends). Without it the row is sent as it is: the INSERT of a model's save(), whose own
+     * set_timestamps() decides the timestamps, so that a model that overrides it keeps saving
+     * without them.
+     *
+     * Anything but a hash (an empty row, a list) gets no timestamps and goes to SQLBuilder, which
+     * rejects it: they would otherwise make a row of an empty one.
+     *
+     * @internal Serves Table's inserts; not a supported API.
+     * @param array<string, mixed> $row
+     */
+    public function execute_insert(array $row, ?string $pk = null, ?string $sequence = null, ?string $returning = null, bool $timestamps = true): \PDOStatement
+    {
+        $table = $this->table();
+
+        // the statement names the columns (#92) and binds each value as the finders do, a DateTime in
+        // the format of its column: what Table::process_data() prepares
+        $row = $table->real_column_keys($table->process_data($row));
+
+        if ($timestamps && is_hash($row)) {
+            $row = Timestamps::apply_to_insert($table, $table->class->getName(), $row);
+        }
+
+        $sql = (new QueryCompiler($table))->compile_insert($row, $pk, $sequence, $returning);
+        $values = array_values($row);
+
+        return $table->connection()->query(($table->last_sql = $sql->to_s()), $values);
     }
 
     private function table(): Table

@@ -229,7 +229,8 @@ class GoldenSqlTest extends DatabaseTest
                 $author->save();
             }, null],
             'model_delete' => [fn() => Author::find(4)->delete(), null],
-            // Table::insert() takes its data by reference (changes in Task 7)
+            // a row that bypasses the model: Table::insert() takes its data by reference, and since the engine runs it
+            // (spec §6.2.3) it also fills created_at and updated_at, which master's INSERT left out
             'table_insert_direct' => [function (): void {
                 $data = ['name' => 'Direct'];
                 Author::table()->insert($data);

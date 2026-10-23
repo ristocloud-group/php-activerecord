@@ -2,14 +2,19 @@
 
 use ActiveRecord\Query;
 use ActiveRecord\Table;
+use ActiveRecord\Timestamps;
 
 /**
  * The Query engine behind the legacy entries: Table::options_to_sql() builds its SELECT through
- * Query::from_options(), and find(), exists() and count() run it there. The statements every
- * entry sends are pinned in GoldenSqlTest.
+ * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs of Table.
+ * The statements every entry sends are pinned in GoldenSqlTest.
  */
 class QueryEngineTest extends DatabaseTest
 {
+    private const string FROZEN = '2026-10-21 10:00:00';
+
+    private const string GIVEN = '2001-02-03 04:05:06';
+
     public function test_options_to_sql_is_served_by_the_engine(): void
     {
         $options = ['conditions' => ['name' => 'Tito'], 'order' => 'name', 'limit' => 1];
@@ -238,5 +243,246 @@ class QueryEngineTest extends DatabaseTest
         ]);
 
         $this->assert_sql_has('WHERE authors.parent_author_id=? AND authors.name=?', $sql->to_s());
+    }
+
+    // -- inserts (spec §6.2.3)
+
+    /**
+     * The timestamps of the authors row named $name, as strings (null where the column is).
+     *
+     * @return array{created_at: ?string, updated_at: ?string}
+     */
+    private function stamps_of(string $name): array
+    {
+        $author = Author::find_by_name($name);
+
+        return [
+            'created_at' => $author->created_at?->format('Y-m-d H:i:s'),
+            'updated_at' => $author->updated_at?->format('Y-m-d H:i:s'),
+        ];
+    }
+
+    public function test_direct_table_insert_fills_timestamps(): void
+    {
+        Timestamps::freeze('2026-10-21 10:00:00');
+        $data = ['name' => 'Direct'];
+        Author::table()->insert($data);
+        $row = Author::find_by_name('Direct');
+        $this->assert_equals('2026-10-21 10:00:00', $row->created_at->format('Y-m-d H:i:s'));
+        $this->assert_equals('2026-10-21 10:00:00', $row->updated_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_insert_rows_renders_multi_values(): void
+    {
+        $sql = (new ActiveRecord\SQLBuilder(Author::connection(), 'authors'))->insert_rows(['name', 'parent_author_id'], 2);
+        $this->assert_sql_has('INSERT INTO authors (name, parent_author_id) VALUES (?, ?), (?, ?)', $sql->to_s());
+    }
+
+    public function test_insert_rows_quotes_the_columns_and_renders_as_many_rows_as_it_is_given(): void
+    {
+        $conn = Author::connection();
+        $columns = '(' . $conn->quote_name('name') . ', ' . $conn->quote_name('parent_author_id') . ')';
+
+        $this->assert_same("INSERT INTO authors $columns VALUES (?, ?)", (new ActiveRecord\SQLBuilder($conn, 'authors'))->insert_rows(['name', 'parent_author_id'], 1)->to_s());
+        $this->assert_same("INSERT INTO authors $columns VALUES (?, ?), (?, ?), (?, ?)", (new ActiveRecord\SQLBuilder($conn, 'authors'))->insert_rows(['name', 'parent_author_id'], 3)->to_s());
+    }
+
+    // the VALUES list of an upsert is the one of a multi-row insert: the upsert only ends with its conflict clause
+    public function test_an_upsert_starts_with_the_statement_of_a_multi_row_insert(): void
+    {
+        $conn = Author::connection();
+        $insert = (new ActiveRecord\SQLBuilder($conn, 'authors'))->insert_rows(['author_id', 'name'], 2)->to_s();
+        $upsert = (new ActiveRecord\SQLBuilder($conn, 'authors'))->upsert(['author_id', 'name'], 2, ['author_id'], ['name'])->to_s();
+
+        $this->assert_same($insert . ' ' . $conn->upsert_conflict_clause(['author_id'], ['name']), $upsert);
+    }
+
+    public function test_execute_insert_applies_the_timestamp_rule_unless_it_is_told_not_to(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $query = Query::from_options(Author::table(), []);
+
+        $query->execute_insert(['name' => 'Ruled']);
+        $query->execute_insert(['name' => 'Unruled'], timestamps: false);
+
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps_of('Ruled'));
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Unruled'));
+    }
+
+    // The engine prepares the values of its row itself, as the finders prepare their conditions: a
+    // caller of the engine does not come through Table::run_insert(), which formats $data for its own caller
+    public function test_execute_insert_formats_the_dates_of_its_row(): void
+    {
+        $when = new DateTime(self::GIVEN);
+
+        Query::from_options(Author::table(), [])->execute_insert(['name' => 'Dated', 'created_at' => $when], timestamps: false);
+
+        $this->assert_same(self::GIVEN, Author::find_by_name('Dated')->created_at->format('Y-m-d H:i:s'));
+    }
+
+    // The pk column a sequence feeds and the column an INSERT returns are named as the columns (#92):
+    // space_name is the column "space name", and some_day is "some day", on every adapter
+    public function test_compile_insert_names_the_pk_and_the_returned_column_as_the_columns(): void
+    {
+        $sql = (new ActiveRecord\QueryCompiler(OddColumn::table()))->compile_insert(['dash-name' => 'x'], 'space_name', 'an_id_seq', 'some_day')->to_s();
+
+        $this->assert_sql_has('INSERT INTO odd_columns(dash-name,space name) VALUES(?,', $sql);
+        $this->assert_sql_has(' RETURNING some day', $sql);
+    }
+
+    public function test_a_direct_insert_returns_its_statement_and_leaves_it_in_last_sql(): void
+    {
+        $table = Author::table();
+        $data = ['name' => 'Statement'];
+
+        $statement = $table->insert($data);
+
+        $this->assert_instance_of(PDOStatement::class, $statement);
+        $this->assert_same(1, $statement->rowCount());
+        // created_at before updated_at, after the row's own columns
+        $this->assert_sql_has('INSERT INTO authors(name,created_at,updated_at) VALUES(?,?,?)', $table->last_sql);
+    }
+
+    public function test_a_direct_insert_keeps_the_timestamps_the_row_gives(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        $given = ['name' => 'Given', 'created_at' => self::GIVEN];
+        Author::table()->insert($given);
+        // a null the caller gave is a value too
+        $nulled = ['name' => 'Nulled', 'updated_at' => null];
+        Author::table()->insert($nulled);
+
+        $this->assert_same(['created_at' => self::GIVEN, 'updated_at' => self::FROZEN], $this->stamps_of('Given'));
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => null], $this->stamps_of('Nulled'));
+    }
+
+    public function test_a_direct_insert_into_a_table_without_timestamps_sends_what_it_always_did(): void
+    {
+        $table = Book::table();
+        $data = ['name' => 'Plain'];
+
+        $table->insert($data);
+
+        $this->assert_sql_has('INSERT INTO books(name) VALUES(?)', $table->last_sql);
+    }
+
+    // Table::insert() takes its data by reference. The caller's array comes back as it always did: the
+    // values as they were sent (a DateTime as the string the database takes), under the names it gave.
+    // The timestamps the engine adds go to the statement, not to the array.
+    public function test_a_direct_insert_leaves_the_callers_data_as_it_was_sent(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $when = new DateTime(self::GIVEN);
+        $data = ['name' => 'By ref', 'created_at' => $when];
+
+        Author::table()->insert($data);
+
+        $this->assert_same(['name' => 'By ref', 'created_at' => $this->conn->datetime_to_string($when)], $data);
+        $this->assert_same(['created_at' => self::GIVEN, 'updated_at' => self::FROZEN], $this->stamps_of('By ref'));
+    }
+
+    // Anything but a hash is refused as it always was, and an empty row is not turned into one by the
+    // timestamps it would get
+    public function test_a_direct_insert_of_something_that_is_no_hash_is_refused(): void
+    {
+        foreach ([[], [1, 2], null] as $data) {
+            $this->assert_exception_message_contains('Inserting requires a hash.', function () use ($data): void {
+                Author::table()->insert($data);
+            }, ActiveRecord\ActiveRecordException::class);
+        }
+
+        $this->assert_exception_message_contains('Inserting requires a hash.', fn() => Query::from_options(Author::table(), [])->execute_insert([]), ActiveRecord\ActiveRecordException::class);
+        $this->assert_same(4, (int) Author::count());
+    }
+
+    // #92: the timestamp columns are found by their attribute names ("created at" is created_at), and
+    // a row that names one by its attribute name does not get it twice
+    public function test_a_direct_insert_names_the_timestamp_columns_of_an_odd_table(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $table = OddTimestamp::table();
+
+        $plain = ['name' => 'plain'];
+        $table->insert($plain);
+        $named = ['name' => 'named', 'created_at' => self::GIVEN, 'updated_at' => self::GIVEN];
+        $table->insert($named);
+
+        $odd = OddTimestamp::find_by_name('plain');
+        $this->assert_same([self::FROZEN, self::FROZEN], [$odd->created_at->format('Y-m-d H:i:s'), $odd->updated_at->format('Y-m-d H:i:s')]);
+        $odd = OddTimestamp::find_by_name('named');
+        $this->assert_same([self::GIVEN, self::GIVEN], [$odd->created_at->format('Y-m-d H:i:s'), $odd->updated_at->format('Y-m-d H:i:s')]);
+    }
+
+    // like the terminals that read, an insert runs through the Table its query was given
+    public function test_an_insert_runs_through_the_table_the_query_was_given(): void
+    {
+        $given = Table::load('\\Author');
+        $this->assert_not_same(Author::table(), $given);
+        $data = ['name' => 'Given'];
+
+        $given->insert($data);
+
+        $this->assert_sql_has('INSERT INTO authors', $given->last_sql);
+        $this->assert_null(Author::table()->last_sql);
+    }
+
+    // A save() sets its timestamps through the model's set_timestamps(), which a model can override
+    // to opt out: it keeps saving without them. The rule of the engine is for the rows that bypass the
+    // model, so a direct insert into the same table gets them.
+    public function test_a_save_leaves_its_timestamps_to_the_model_and_a_direct_insert_gets_them(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        $quiet = OptOutAuthor::create(['name' => 'Quiet']);
+        $data = ['name' => 'Direct'];
+        OptOutAuthor::table()->insert($data);
+
+        $saved = Author::find($quiet->author_id);
+        $this->assert_same([null, null], [$saved->created_at, $saved->updated_at]);
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps_of('Direct'));
+    }
+
+    public function test_insert_for_save_leaves_the_timestamps_to_the_model(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $table = Author::table();
+        $data = ['name' => 'Saved'];
+
+        $table->insert_for_save($data);
+
+        $this->assert_sql_has('INSERT INTO authors(name) VALUES(?)', $table->last_sql);
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Saved'));
+    }
+
+    // A save() keeps the columns it always sent, in the order the model sets them
+    public function test_a_save_sends_the_timestamps_of_the_model(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::create(['name' => 'Saved']);
+
+        $this->assert_sql_has('INSERT INTO authors(name,updated_at,created_at) VALUES(?,?,?)', Author::table()->last_sql);
+    }
+
+    // The rule is that of the class a table was loaded for, not of a name its caller gives: Author's
+    // suspension covers a direct insert through its table, whichever way the table was loaded ('\Author'
+    // is another instance of it), and leaves another model of the same table alone
+    public function test_a_direct_insert_follows_the_suspension_of_the_class_of_its_table(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        Author::without_timestamps(function (): void {
+            $quiet = ['name' => 'Quiet'];
+            Author::table()->insert($quiet);
+            $quiet_too = ['name' => 'Quiet too'];
+            Table::load('\\Author')->insert($quiet_too);
+            $loud = ['name' => 'Loud'];
+            JoinAuthor::table()->insert($loud);
+        });
+
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Quiet'));
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps_of('Quiet too'));
+        $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::FROZEN], $this->stamps_of('Loud'));
     }
 }

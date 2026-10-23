@@ -973,6 +973,8 @@ class Model
         $read_back = false;
         $returned_pk = null;
 
+        // a save() sends the timestamps its model set (set_timestamps(), which a model can override):
+        // unlike Table::insert(), insert_for_save() and insert_returning_pk() add none of their own
         if ($table->reads_back_pk() && !isset($attributes[$pk])) {
             // the database fills the pk (a sequence, an IDENTITY, a uuid default…): the
             // INSERT omits it and returns the stored value (#47, #153)
@@ -985,10 +987,10 @@ class Model
                 unset($attributes[$pk]);
             }
 
-            $table->insert($attributes, $pk, $table->sequence);
+            $table->insert_for_save($attributes, $pk, $table->sequence);
             $use_sequence = true;
         } else {
-            $table->insert($attributes);
+            $table->insert_for_save($attributes);
         }
 
         // the row is stored under the pk values this INSERT sent or reads back below; one
@@ -1551,7 +1553,8 @@ class Model
 
     /**
      * Runs $fn without this model class's timestamps, and returns what $fn returns: while it runs,
-     * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at.
+     * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at,
+     * and a row that Table::insert() writes straight to this class's table gets neither.
      *
      * <code>
      * $author = Author::without_timestamps(fn() => Author::create(['name' => 'Tito']));

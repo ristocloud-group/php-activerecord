@@ -49,6 +49,9 @@ abstract class DatabaseTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     public function tear_down()
     {
+        // the clock is process-wide state: whatever a test asserted, it leaves it running
+        ActiveRecord\Timestamps::freeze(null);
+
         if ($this->original_default_connection) {
             ActiveRecord\Config::instance()->set_default_connection($this->original_default_connection);
         }

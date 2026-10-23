@@ -70,11 +70,12 @@ class SQLBuilder
     /** The column an INSERT returns (RETURNING), if any (#47). */
     private ?string $returning = null;
 
-    // for upsert
+    // for a multi-row insert, and for an upsert, which is one
     /** @var list<string>|null */
-    private ?array $upsert_columns = null;
-    private ?int $upsert_row_count = null;
+    private ?array $rows_columns = null;
+    private ?int $rows_count = null;
 
+    // for upsert
     /** @var list<string>|null */
     private ?array $upsert_unique_by = null;
 
@@ -323,12 +324,31 @@ class SQLBuilder
     /**
      * End the INSERT with RETURNING $column, the column's real name (#47).
      *
-     * @internal Serves Table::insert_returning_pk(); not a supported API.
+     * @internal Serves Table::insert_returning_pk(), through the Query engine; not a supported API.
      * @return $this
      */
     public function returning(string $column): static
     {
         $this->returning = $column;
+        return $this;
+    }
+
+    /**
+     * A multi-row INSERT: $row_count rows of one bind marker per column, as in
+     * "INSERT INTO t (c1, c2) VALUES (?, ?), (?, ?)". The statement holds no values: the caller
+     * binds them, row after row, each in the order of $columns. (insert() renders the INSERT of
+     * one row from a hash, which is another statement.)
+     *
+     * @internal Serves the Query engine; not a supported API.
+     * @param list<string> $columns The real names of the columns, unquoted
+     * @param int $row_count How many rows the statement inserts: at least one
+     */
+    public function insert_rows(array $columns, int $row_count): static
+    {
+        $this->operation = 'INSERT_ROWS';
+        $this->rows_columns = $columns;
+        $this->rows_count = $row_count;
+
         return $this;
     }
 
@@ -341,8 +361,8 @@ class SQLBuilder
     public function upsert(array $columns, int $row_count, array $unique_by, array $update)
     {
         $this->operation = 'UPSERT';
-        $this->upsert_columns = $columns;
-        $this->upsert_row_count = $row_count;
+        $this->rows_columns = $columns;
+        $this->rows_count = $row_count;
         $this->upsert_unique_by = $unique_by;
         $this->upsert_update = $update;
 
@@ -768,19 +788,39 @@ class SQLBuilder
         return $e->to_s();
     }
 
+    private function build_insert_rows(): string
+    {
+        if (null === $this->rows_columns || null === $this->rows_count) {
+            throw new ActiveRecordException('SQLBuilder: insert_rows() must be called before building an INSERT statement');
+        }
+
+        return $this->rows_insert($this->rows_columns, $this->rows_count);
+    }
+
+    /**
+     * The INSERT of a statement of several rows: all that insert_rows() renders, and what an
+     * upsert goes on from, with its conflict clause.
+     *
+     * @param list<string> $columns
+     */
+    private function rows_insert(array $columns, int $row_count): string
+    {
+        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $columns));
+
+        $one_row = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $rows = implode(', ', array_fill(0, $row_count, $one_row));
+
+        return "INSERT INTO $this->table ($keys) VALUES $rows";
+    }
+
     private function build_upsert(): string
     {
-        if (null === $this->upsert_columns || null === $this->upsert_row_count
+        if (null === $this->rows_columns || null === $this->rows_count
             || null === $this->upsert_unique_by || null === $this->upsert_update) {
             throw new ActiveRecordException('SQLBuilder: upsert() must be called before building an UPSERT statement');
         }
 
-        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $this->upsert_columns));
-
-        $one_row = '(' . implode(', ', array_fill(0, count($this->upsert_columns), '?')) . ')';
-        $rows = implode(', ', array_fill(0, $this->upsert_row_count, $one_row));
-
-        $sql = "INSERT INTO $this->table ($keys) VALUES $rows";
+        $sql = $this->rows_insert($this->rows_columns, $this->rows_count);
 
         if (!empty($this->upsert_update)) {
             $sql .= ' ' . $this->connection->upsert_conflict_clause($this->upsert_unique_by, $this->upsert_update);

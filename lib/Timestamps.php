@@ -113,34 +113,40 @@ final class Timestamps
      * The keys of the row are column names or attribute names. The rest of the row is returned as
      * it was, and a column added is named by its own name (see columns()).
      *
+     * A statement of several rows reads the clock once and gives that time as $now to each of them,
+     * so that they do not straddle a second: without $now, every call reads now() itself.
+     *
      * @param array<string, mixed> $row
+     * @param string|null $now The time to fill in, as now() returns it. Null: now() is read
      * @return array<string, mixed>
      */
-    public static function apply_to_insert(Table $table, string $class, array $row): array
+    public static function apply_to_insert(Table $table, string $class, array $row, ?string $now = null): array
     {
-        return self::fill($table, $class, $row, true);
+        return self::fill($table, $class, $row, true, $now);
     }
 
     /**
      * The SET of an UPDATE, with updated_at when it lacks one: set to now() unless the data has a
      * value for that column. created_at is never added, since only an INSERT stores it. A
-     * suspended class, and a table without the column, get nothing. The keys are read, and a
-     * column added is named, as apply_to_insert() does.
+     * suspended class, and a table without the column, get nothing. The keys are read, a column
+     * added is named, and a given $now is taken, as apply_to_insert() does.
      *
      * @param array<string, mixed> $set
+     * @param string|null $now The time to fill in, as now() returns it. Null: now() is read
      * @return array<string, mixed>
      */
-    public static function apply_to_update(Table $table, string $class, array $set): array
+    public static function apply_to_update(Table $table, string $class, array $set, ?string $now = null): array
     {
-        return self::fill($table, $class, $set, false);
+        return self::fill($table, $class, $set, false, $now);
     }
 
     /**
      * @param array<string, mixed> $data
      * @param bool $created_at Whether created_at is filled too: for an INSERT
+     * @param string|null $now The time to fill in; null reads now(), and only when a column is missing
      * @return array<string, mixed>
      */
-    private static function fill(Table $table, string $class, array $data, bool $created_at): array
+    private static function fill(Table $table, string $class, array $data, bool $created_at, ?string $now): array
     {
         if (self::suspended($class)) {
             return $data;
@@ -175,7 +181,7 @@ final class Timestamps
         }
 
         if ([] !== $missing) {
-            $now = self::now();
+            $now ??= self::now();
 
             foreach ($missing as $name) {
                 $data[$name] = $now;

@@ -1,5 +1,6 @@
 <?php
 
+use ActiveRecord\Query;
 use ActiveRecord\Timestamps;
 
 /**
@@ -12,14 +13,6 @@ class TimestampsTest extends DatabaseTest
     private const string FROZEN = '2026-10-21 10:00:00';
 
     private const string GIVEN = '2001-02-03 04:05:06';
-
-    public function tear_down()
-    {
-        // the clock is process-wide state: no test leaves it frozen
-        Timestamps::freeze(null);
-
-        parent::tear_down();
-    }
 
     /**
      * The timestamps an authors row holds, as strings (null where the column is).
@@ -37,14 +30,14 @@ class TimestampsTest extends DatabaseTest
     }
 
     /**
-     * Inserts $row into odd_timestamps as Table::insert() sends it, and returns the stored row.
+     * Inserts $row into odd_timestamps exactly as it is, and returns the stored row. The engine's own
+     * timestamps are off: a row that apply_to_insert() got wrong must not be put right on the way in.
      *
      * @param array<string, mixed> $row
      */
     private function store_odd_timestamp(array $row): OddTimestamp
     {
-        $table = OddTimestamp::table();
-        $table->insert($row);
+        Query::from_options(OddTimestamp::table(), [])->execute_insert($row, timestamps: false);
 
         return OddTimestamp::first();
     }
@@ -70,6 +63,17 @@ class TimestampsTest extends DatabaseTest
 
         Timestamps::freeze(null);
         $this->assert_true($before <= Timestamps::now());
+    }
+
+    // The clock is process-wide state. Every DatabaseTest releases it when it ends, so that a test
+    // whose assertion fails before it unfreezes the clock cannot leave it frozen for the next ones.
+    public function test_the_base_tear_down_releases_a_frozen_clock(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        $this->tear_down();
+
+        $this->assert_not_same(self::FROZEN, Timestamps::now());
     }
 
     // -- the suspension behind Model::without_timestamps()
@@ -161,6 +165,62 @@ class TimestampsTest extends DatabaseTest
 
         $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps($inner));
         $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps($outer));
+    }
+
+    // Two models nested: each call ends only its own suspension
+    public function test_nested_calls_on_two_models_restore_one_class_at_a_time(): void
+    {
+        Author::without_timestamps(function (): void {
+            OddTimestamp::without_timestamps(function (): void {
+                $this->assert_true(Timestamps::suspended(Author::class));
+                $this->assert_true(Timestamps::suspended(OddTimestamp::class));
+            });
+
+            // the inner call returned: only the outer one is still running
+            $this->assert_true(Timestamps::suspended(Author::class));
+            $this->assert_false(Timestamps::suspended(OddTimestamp::class));
+        });
+
+        $this->assert_false(Timestamps::suspended(Author::class));
+        $this->assert_false(Timestamps::suspended(OddTimestamp::class));
+    }
+
+    public function test_nested_calls_on_two_models_save_without_timestamps_while_they_run(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        [$both, $outer_only] = Author::without_timestamps(function (): array {
+            $both = OddTimestamp::without_timestamps(fn() => [Author::create(['name' => 'Both']), OddTimestamp::create(['name' => 'Both'])]);
+            $outer_only = [Author::create(['name' => 'Outer']), OddTimestamp::create(['name' => 'Outer'])];
+
+            return [$both, $outer_only];
+        });
+
+        // inside the inner call both models save without timestamps
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps($both[0]->author_id));
+        $this->assert_null(OddTimestamp::find($both[1]->id)->updated_at);
+
+        // after it only the outer model does
+        $this->assert_same(['created_at' => null, 'updated_at' => null], $this->stamps($outer_only[0]->author_id));
+        $this->assert_same(self::FROZEN, OddTimestamp::find($outer_only[1]->id)->updated_at->format('Y-m-d H:i:s'));
+    }
+
+    // The inner call throws and the outer one catches it: the inner suspension is over, the outer is not
+    public function test_a_throwing_inner_call_on_another_model_leaves_the_outer_suspension_running(): void
+    {
+        Author::without_timestamps(function (): void {
+            try {
+                OddTimestamp::without_timestamps(function (): void {
+                    throw new RuntimeException('boom');
+                });
+            } catch (RuntimeException) {
+            }
+
+            $this->assert_true(Timestamps::suspended(Author::class));
+            $this->assert_false(Timestamps::suspended(OddTimestamp::class));
+        });
+
+        $this->assert_false(Timestamps::suspended(Author::class));
     }
 
     public function test_the_suspension_of_a_class_leaves_another_model_of_its_table_saving_timestamps(): void
@@ -407,5 +467,82 @@ class TimestampsTest extends DatabaseTest
         $odd = OddTimestamp::find($odd->id);
         $this->assert_same('after', $odd->name);
         $this->assert_same(self::FROZEN, $odd->updated_at->format('Y-m-d H:i:s'));
+    }
+
+    // -- the time of a statement: a statement of several rows reads the clock once, and gives it to each
+
+    public function test_apply_to_insert_takes_the_time_it_is_given(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        $row = Timestamps::apply_to_insert(Author::table(), Author::class, ['name' => 'x'], self::GIVEN);
+
+        $this->assert_same(['name' => 'x', 'created_at' => self::GIVEN, 'updated_at' => self::GIVEN], $row);
+    }
+
+    public function test_apply_to_insert_reads_the_clock_when_it_is_given_no_time(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $expected = ['name' => 'x', 'created_at' => self::FROZEN, 'updated_at' => self::FROZEN];
+
+        $this->assert_same($expected, Timestamps::apply_to_insert(Author::table(), Author::class, ['name' => 'x']));
+        $this->assert_same($expected, Timestamps::apply_to_insert(Author::table(), Author::class, ['name' => 'x'], null));
+    }
+
+    public function test_apply_to_insert_with_a_time_keeps_what_the_row_has_and_the_suspension(): void
+    {
+        $other = '2030-01-02 03:04:05';
+
+        $this->assert_same(
+            ['created_at' => self::FROZEN, 'name' => 'x', 'updated_at' => $other],
+            Timestamps::apply_to_insert(Author::table(), Author::class, ['created_at' => self::FROZEN, 'name' => 'x'], $other)
+        );
+        $this->assert_same(
+            ['created_at' => null, 'updated_at' => $other],
+            Timestamps::apply_to_insert(Author::table(), Author::class, ['created_at' => null], $other)
+        );
+        // a table without the columns, and a suspended class, get nothing whatever the time
+        $this->assert_same(['name' => 'x'], Timestamps::apply_to_insert(Book::table(), Book::class, ['name' => 'x'], $other));
+        Author::without_timestamps(function () use ($other): void {
+            $this->assert_same(['name' => 'x'], Timestamps::apply_to_insert(Author::table(), Author::class, ['name' => 'x'], $other));
+        });
+    }
+
+    // the use of the time: a statement computes it once, and every row of it takes that one,
+    // even where the clock has moved on between two of them
+    public function test_the_rows_of_a_statement_take_the_one_time_they_are_given(): void
+    {
+        Timestamps::freeze(self::GIVEN);
+        $now = Timestamps::now();
+        Timestamps::freeze(self::FROZEN);
+
+        $rows = array_map(
+            fn(array $row): array => Timestamps::apply_to_insert(Author::table(), Author::class, $row, $now),
+            [['name' => 'a'], ['name' => 'b']]
+        );
+
+        $this->assert_same(
+            [['name' => 'a', 'created_at' => self::GIVEN, 'updated_at' => self::GIVEN], ['name' => 'b', 'created_at' => self::GIVEN, 'updated_at' => self::GIVEN]],
+            $rows
+        );
+    }
+
+    public function test_apply_to_update_takes_the_time_it_is_given(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+
+        $this->assert_same(['name' => 'x', 'updated_at' => self::GIVEN], Timestamps::apply_to_update(Author::table(), Author::class, ['name' => 'x'], self::GIVEN));
+        $this->assert_same(['name' => 'x', 'updated_at' => self::FROZEN], Timestamps::apply_to_update(Author::table(), Author::class, ['name' => 'x'], null));
+    }
+
+    public function test_apply_to_update_with_a_time_keeps_what_the_set_has_and_the_suspension(): void
+    {
+        $other = '2030-01-02 03:04:05';
+
+        $this->assert_same(['updated_at' => self::GIVEN], Timestamps::apply_to_update(Author::table(), Author::class, ['updated_at' => self::GIVEN], $other));
+        $this->assert_same(['name' => 'x'], Timestamps::apply_to_update(Book::table(), Book::class, ['name' => 'x'], $other));
+        Author::without_timestamps(function () use ($other): void {
+            $this->assert_same(['name' => 'x'], Timestamps::apply_to_update(Author::table(), Author::class, ['name' => 'x'], $other));
+        });
     }
 }

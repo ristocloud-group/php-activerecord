@@ -459,6 +459,15 @@ class Table
     }
 
     /**
+     * INSERTs $data, a row that does not come from a model, through the Query engine, and returns
+     * the statement. The row gets the created_at and updated_at it lacks, set to the current time
+     * (see Timestamps): a table without those columns gets nothing, and neither does a class whose
+     * timestamps are suspended, see Model::without_timestamps(). The save() of a model does not
+     * come through here: its own set_timestamps() decides its timestamps (see insert_for_save()).
+     *
+     * $data is taken by reference and comes back under the names it was given, its DateTime values
+     * formatted for the database. The timestamps are added to the statement, not to $data.
+     *
      * @param array<string, mixed> $data
      * @param string|null $pk
      * @param string|null $sequence_name
@@ -466,7 +475,20 @@ class Table
      */
     public function insert(&$data, $pk = null, $sequence_name = null)
     {
-        return $this->run_insert($data, $pk, $sequence_name, null);
+        return $this->run_insert($data, $pk, $sequence_name, null, true);
+    }
+
+    /**
+     * INSERTs $data as the save() of a new record sends it: insert() without the engine's
+     * timestamps. The model has set its own (set_timestamps(), which a model can override to opt
+     * out), and the statement must carry exactly those.
+     *
+     * @internal Serves Model::insert(); not a supported API.
+     * @param array<string, mixed> $data
+     */
+    public function insert_for_save(array &$data, ?string $pk = null, ?string $sequence_name = null): \PDOStatement
+    {
+        return $this->run_insert($data, $pk, $sequence_name, null, false);
     }
 
     /**
@@ -483,14 +505,15 @@ class Table
     /**
      * INSERT $data (which omits the pk) ending with RETURNING the pk, and return the pk
      * the database stored, cast by its column like find() reads it (#47); null when no
-     * row was stored (a BEFORE INSERT trigger returned NULL).
+     * row was stored (a BEFORE INSERT trigger returned NULL). Like insert_for_save(), it adds
+     * no timestamps of its own: it is the save() of a new record.
      *
      * @internal Serves Model::insert(); not a supported API.
      * @param array<string, mixed> $data
      */
     public function insert_returning_pk(array &$data, string $pk): mixed
     {
-        $value = $this->run_insert($data, null, null, $pk)->fetchColumn();
+        $value = $this->run_insert($data, null, null, $pk, false)->fetchColumn();
         $column = $this->get_column_by_inflected_name($pk);
 
         // no row came back (a BEFORE INSERT trigger skipped it): the pk stays null
@@ -502,26 +525,19 @@ class Table
     }
 
     /**
-     * The body of insert(), whose $data keeps its untyped contract (#47).
+     * The body of insert(), whose $data keeps its untyped contract (#47): the Query engine runs
+     * the statement. $timestamps is whether it fills the timestamps the row lacks (see
+     * Query::execute_insert()).
      *
      * @param array<string, mixed> $data
      */
-    private function run_insert(&$data, ?string $pk, ?string $sequence_name, ?string $returning): mixed
+    private function run_insert(&$data, ?string $pk, ?string $sequence_name, ?string $returning, bool $timestamps): \PDOStatement
     {
+        // $data keeps its attribute names for the caller (#92), its values as the statement binds them
         $data = $this->process_data($data);
 
-        // the statement names the columns; $data keeps its attribute names for the caller (#92).
-        // Anything but a hash (null, a list) goes to SQLBuilder as before, which rejects it.
-        $row = is_hash($data) ? $this->real_column_keys($data) : $data;
-        $sql = new SQLBuilder($this->connection(), $this->get_fully_qualified_table_name());
-        $sql->insert($row, null === $pk ? $pk : $this->real_column_name($pk), $sequence_name);
-
-        if (null !== $returning) {
-            $sql->returning($this->real_column_name($returning));
-        }
-
-        $values = array_values($row);
-        return $this->connection()->query(($this->last_sql = $sql->to_s()), $values);
+        // null (no row) is an empty row, which the engine rejects as it rejects anything but a hash
+        return Query::from_options($this, [])->execute_insert($data ?: [], $pk, $sequence_name, $returning, $timestamps);
     }
 
     /**
