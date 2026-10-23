@@ -434,8 +434,10 @@ Approved by the maintainer on 2026-10-23 (issue #144):
    - #129's rule is kept: an alias key and its target column's key in the same hash are both kept and ANDed.
    - Those keys fail today with `Unknown column`. Every other declared condition renders byte-identical SQL.
    - One exception, as in finders with joins: in a `has_many … through`, an unqualified key that names a column of
-     the middle table and is also an alias or attribute name of the target now names the target's column. Keys of
-     the middle table should be qualified (`'events.title'`). Monolith, checked 2026-10-23: of 126 declared
+     the middle table and is also an alias or attribute name of the target now names the target's column. In a
+     `through` load every key the mapping changed is written with the target table (`` `venues`.`name` ``), so it is
+     never ambiguous with a middle-table column. Keys of the middle table should be written qualified
+     (`'events.title'`). Monolith, checked 2026-10-23: of 126 declared
      relationship conditions, 1 is a hash (on one model), and it maps to itself.
 
 ### 6.3 Unchanged on purpose
