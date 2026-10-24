@@ -134,15 +134,18 @@ class PgsqlAdapter extends Connection
     }
 
     /**
-     * The operators Laravel's Postgres grammar adds (ranges, arrays, JSON, networks, text search,
-     * IS [NOT] DISTINCT FROM), less those with a ?: ?, ?|, ?& and @? would read as bind markers,
-     * since the library binds positionally.
+     * The operators Laravel's Postgres grammar adds that compare (ranges, arrays, JSON, networks, text
+     * search, IS [NOT] DISTINCT FROM). Left out of its list, and so refused at the call:
+     * - those with a ? (?, ?|, ?&, @?), which would read as bind markers, since the library binds
+     *   positionally;
+     * - those that cannot be the boolean of "column OP ?": BETWEEN, which needs AND (where_between()
+     *   writes it), and ||, -, # and #-, which compute a value.
      *
      * @return list<string>
      */
     public function extra_operators(): array
     {
-        return ['between', '#', '<<=', '>>=', '&&', '@>', '<@', '||', '-', '@@', '#-', 'is distinct from', 'is not distinct from'];
+        return ['<<=', '>>=', '&&', '@>', '<@', '@@', 'is distinct from', 'is not distinct from'];
     }
 
     /**

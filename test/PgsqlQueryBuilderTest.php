@@ -28,11 +28,12 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(3, count(Author::where_not_like('name', 't%')->get()));
     }
 
-    // Spec §5.2: the operators Laravel's Postgres grammar adds, in any case and written in upper case, less those
-    // with a ?, which would read as bind markers; MySQL's are refused
+    // Spec §5.2: the operators Laravel's Postgres grammar adds that compare, in any case and written in upper case.
+    // Refused at the call: those with a ?, which would read as bind markers; those that cannot be the boolean of
+    // column OP ? (BETWEEN needs AND, ||, -, # and #- compute a value); MySQL's.
     public function test_the_adapters_own_operators(): void
     {
-        $this->assert_same(['between', '#', '<<=', '>>=', '&&', '@>', '<@', '||', '-', '@@', '#-', 'is distinct from', 'is not distinct from'], $this->conn->extra_operators());
+        $this->assert_same(['<<=', '>>=', '&&', '@>', '<@', '@@', 'is distinct from', 'is not distinct from'], $this->conn->extra_operators());
         $this->assert_same('SELECT * FROM "authors" WHERE "name" IS DISTINCT FROM ?', Author::where('name', 'Is Distinct From', 'Tito')->to_sql());
         $this->assert_same('SELECT * FROM "authors" WHERE "name" @> ?', Author::where('name', '@>', 'x')->to_sql());
 
@@ -42,7 +43,7 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         // text search: the words of the name match those of the value
         $this->assert_same(['Uncle Bob'], $names(Author::where('name', '@@', 'bob')));
 
-        foreach (['sounds like', '?', '?|', '?&', '@?'] as $operator) {
+        foreach (['sounds like', 'between', '||', '-', '#', '#-', '?', '?|', '?&', '@?'] as $operator) {
             $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecord\ActiveRecordException::class);
         }
     }

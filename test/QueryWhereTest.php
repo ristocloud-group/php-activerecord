@@ -142,10 +142,11 @@ class QueryWhereTest extends DatabaseTest
     }
 
     // Spec §5.2: an operator that is not on the list throws at the call, where Laravel would take it as the value.
-    // None of these is an adapter's own either (see test_each_adapter_takes_its_own_operators_and_no_others).
+    // None of these is an adapter's own either (see test_each_adapter_takes_its_own_operators_and_no_others): Laravel's
+    // Postgres grammar lists between, ||, -, # and #-, but none can be the boolean of column OP ?.
     public function test_an_unknown_operator_is_refused_at_the_call(): void
     {
-        foreach (['equals', '==', 'in', 'not in', 'like ', ' like', 'not  like', '', '=>', 'glob'] as $operator) {
+        foreach (['equals', '==', 'in', 'not in', 'like ', ' like', 'not  like', '', '=>', 'glob', 'between', '||', '-', '#', '#-'] as $operator) {
             $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecordException::class);
         }
 
@@ -161,7 +162,7 @@ class QueryWhereTest extends DatabaseTest
     public function test_each_adapter_takes_its_own_operators_and_no_others(): void
     {
         $mysql = ['sounds like'];
-        $pgsql = ['is distinct from', '@>', '&&', 'between'];
+        $pgsql = ['is distinct from', '@>', '&&'];
         [$own, $others] = match (true) {
             $this->conn instanceof MysqlAdapter => [$mysql, $pgsql],
             $this->conn instanceof PgsqlAdapter => [$pgsql, $mysql],

@@ -133,9 +133,12 @@ class MysqlAdapter extends Connection
      * pattern, and _ is one byte of an accented letter. LIKE BINARY ? draws MySQL's deprecation
      * warning 1287.
      *
-     * Known limit, measured on MySQL 9.7 but not MariaDB: on a connection whose character set
-     * set_encoding() made latin1 (a charset=latin1 connection), with PDO's emulated prepares, MySQL
-     * misreads a non-ASCII pattern (warning 1300) and matches nothing.
+     * It assumes the connection's character set is the encoding of the data the application sends;
+     * utf8mb4 is recommended. Known limit, measured on MySQL 8.4 and 9.7, not on MariaDB: a connection
+     * that set_encoding() made latin1 (charset=latin1 in the connection URL, applied with SET NAMES,
+     * which PDO's emulated prepares do not know of) misreads a non-ASCII pattern, latin1-encoded though
+     * it is, and matches nothing (warning 1300). The same character set given to PDO itself, or
+     * server-side prepares, read it right.
      *
      * A case-insensitive LIKE is the default "column LIKE ?", which the column's collation decides.
      */
