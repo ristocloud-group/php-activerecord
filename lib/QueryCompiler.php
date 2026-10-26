@@ -14,6 +14,8 @@ use Closure;
  * @internal Serves the Query engine; not a supported API.
  * @package ActiveRecord
  * @phpstan-import-type Where from QueryState
+ * @phpstan-import-type GroupBy from QueryState
+ * @phpstan-import-type OrderBy from QueryState
  */
 final class QueryCompiler
 {
@@ -143,15 +145,18 @@ final class QueryCompiler
      *
      * What the subquery selects:
      * - 1, only where the state's select provably cannot matter: no column is counted, no DISTINCT tells
-     *   the rows apart by the select, no HAVING may name an alias of it, and it holds plain columns without
-     *   an alias only (see plain_columns()), or nothing. A plain column carries no alias another
+     *   the rows apart by the select, no HAVING may name an alias of it, no SQL written by hand in the GROUP
+     *   BY, nor in the ORDER BY the subquery keeps (a window's), may name it by position or expression
+     *   (GROUP BY 1 would group by the constant; see has_raw()), and it holds plain columns without an
+     *   alias only (see plain_columns()), or nothing. A plain column carries no alias another
      *   clause could name, and no aggregate that collapses the rows. Such a select is still not kept, for
      *   one that gives two result columns one name (a joined table's name beside the model's) is refused in
      *   a derived table by MySQL and MariaDB (1060), and one of every column beside a GROUP BY by Postgres
      *   and by MySQL's ONLY_FULL_GROUP_BY.
      * - Otherwise the state's own select, since a clause or the rows may depend on it: a GROUP BY and an
-     *   ORDER BY can name an alias of it, on every database, a HAVING too on MySQL, MariaDB and SQLite, and
-     *   an aggregate (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects every
+     *   ORDER BY can name an alias of it, on every database, a HAVING too on MySQL, MariaDB and SQLite, SQL
+     *   of a GROUP BY or a kept ORDER BY can name a column of it by position, and an aggregate
+     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects every
      *   column under DISTINCT, and otherwise the counted column, or 1 beside a HAVING.
      *
      * A counted column is read as t's column of its name (see result_name()), which the subquery must
@@ -178,7 +183,7 @@ final class QueryCompiler
             return $this->compile_select($rows);
         }
 
-        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects)) {
+        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !self::has_raw($state->groups) && !self::has_raw($rows->orders)) {
             // the state's select provably cannot matter
             $rows->selects = [['raw' => '1', 'bindings' => []]];
         } elseif ([] === $state->selects && !$state->distinct) {
@@ -757,6 +762,23 @@ final class QueryCompiler
         $legacy = ['legacy' => true];
 
         return array_diff_key(get_object_vars($state), $legacy) !== array_diff_key(get_object_vars(new QueryState()), $legacy);
+    }
+
+    /**
+     * Whether $clauses, the groups or the orders of a state, hold SQL written by hand (group_by_raw(),
+     * order_by_raw()), which can name the select by position or expression.
+     *
+     * @param list<GroupBy>|list<OrderBy> $clauses
+     */
+    private static function has_raw(array $clauses): bool
+    {
+        foreach ($clauses as $clause) {
+            if ('raw' === $clause['type']) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

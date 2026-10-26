@@ -1597,9 +1597,10 @@ class Query
      * left out. Any other is counted as a subquery, SELECT COUNT(*) FROM (…) AS t, so that a grouped query
      * counts its groups, a distinct one its distinct rows, and limit() and offset() the rows of their
      * window. The subquery keeps the query's select wherever a clause or the rows may depend on it (an alias
-     * that a GROUP BY or an ORDER BY names, an aggregate that makes one row of the rows), and counting rows
-     * of plain columns without an alias selects 1 instead (see QueryCompiler::compile_count()). The
-     * statement that ran is left in Table::$last_sql.
+     * that a GROUP BY or an ORDER BY names, a column that SQL of group_by_raw() or of a window's
+     * order_by_raw() names by position, an aggregate that makes one row of the rows), and counting rows of
+     * plain columns without an alias selects 1 instead (see QueryCompiler::compile_count()). The statement
+     * that ran is left in Table::$last_sql.
      *
      * On a grouped query, a counted $column must be grouped, or be what the query's own select gives:
      * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY.

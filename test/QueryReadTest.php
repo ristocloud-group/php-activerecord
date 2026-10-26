@@ -455,6 +455,34 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(2, Author::select('name as nm')->limit(2)->count());
     }
 
+    // Spec §5.3: SQL written by hand in a GROUP BY, or in an ORDER BY the count keeps (a window's), can name the select
+    // by position or expression, so a wrapped count() keeps even a plain select there. With 1 in its place, GROUP BY 1
+    // groups by the constant and counts one group, and ORDER BY 2 passes the one column. An order the count leaves
+    // out, without a window, is no reason to keep it. The counts are those of get().
+    public function test_a_raw_group_or_kept_raw_order_keeps_the_select_of_a_count(): void
+    {
+        Author::table();
+
+        $by_position = fn(): Query => Author::select('parent_author_id')->group_by_raw('1');
+        $this->assert_same(3, count($by_position()->get()));
+        $this->assert_same(3, $by_position()->count());
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (SELECT `parent_author_id` FROM `authors` GROUP BY 1) AS t'), 'values' => []]],
+            GoldenStatements::capture(fn() => $by_position()->count())
+        );
+
+        $ordered_by_position = fn(): Query => Author::select('name', 'author_id')->order_by_raw('2')->limit(2);
+        $this->assert_same(2, count($ordered_by_position()->get()));
+        $this->assert_same(2, $ordered_by_position()->count());
+
+        // without a window the order is left out, and so is the select
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (SELECT 1 FROM `authors` GROUP BY `name`) AS t'), 'values' => []]],
+            GoldenStatements::capture(fn() => Author::select('name')->group_by('name')->order_by_raw('1')->count())
+        );
+        $this->assert_same(4, Author::select('name')->group_by('name')->order_by_raw('1')->count());
+    }
+
     // Spec §5.3: exists() and doesnt_exist() leave out the order, the limit and the offset, and their values with
     // them, and without a GROUP BY and a HAVING select 1, as the legacy exists does: the caller's select could be an
     // aggregate, whose one row exists for no row. A GROUP BY or a HAVING, which may name an alias of it, keeps the
