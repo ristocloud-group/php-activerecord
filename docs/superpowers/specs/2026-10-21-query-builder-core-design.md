@@ -242,6 +242,29 @@ All names are snake_case, with the `or_` variants Eloquent has.
 
 ---
 
+Details settled while building the utilities (Task 16):
+
+- **`readonly($value = true)`** is a `Query` method, but it is **not forwardable**: `Model` has an instance
+  `readonly()`, so a static `Author::readonly()` is PHP's own Error. Use `Author::new_query()->readonly()`.
+- **`with(...)`** takes names, dot paths (`'author.books'`) and arrays. They merge into the include tree exactly as
+  the `include` option takes it.
+  - An undeclared relation is refused at the call (`RelationshipException`).
+  - `without()` removes by path, so the parent stays as `name => []`, and does not look names up (Eloquent parity).
+  - `with_only()` replaces the tree.
+- **`when()` / `unless()`.**
+  - A Closure value is evaluated first.
+  - The callback receives `($query, $value)`. A Query on the same model that it returns is handed back; any other
+    return is ignored. Eloquent returns any non-null result.
+  - `tap()` calls back and returns the query.
+- **`clone()`** is a deep copy: where groups, `JoinClause`s and includes. Mutating the clone never touches the
+  original.
+- **`to_raw_sql()`** is a debug aid, never for execution.
+  - It replaces the markers in order with the binds.
+  - Values become literals: strings escaped, numbers as written, `null` as `NULL`, bools quoted `'1'`/`'0'` (Postgres
+    accepts those for a boolean, not a bare `1`), DateTimes formatted as the builder binds them.
+  - A marker/bind count mismatch throws.
+- **`with()` and `readonly()` count as builder clauses.** Writes refuse them (§5.5), and so does a where group.
+
 ## 5. Semantics
 
 ### 5.1 Column references
