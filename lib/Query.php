@@ -819,7 +819,8 @@ class Query
 
     /**
      * Adds a RIGHT JOIN of $table, as join() adds an INNER JOIN: the rows of the joined table without a match
-     * are kept, with nulls for the model's columns.
+     * are kept, with nulls for the model's columns. SQLite needs version 3.39 or later for a RIGHT JOIN: an
+     * older one fails at the database.
      *
      * @param (Closure(JoinClause): mixed)|string $first
      * @return $this
@@ -853,6 +854,18 @@ class Query
      * as that option does: hand-written JOIN fragments. When two relationships of one call join the same
      * table, the second and later get their relationship's name as alias. See Table::create_joins().
      *
+     * Warning: an entry that holds "JOIN " (in any case) is sent to the database as raw SQL, and must never
+     * come from user input. left_joins() takes relationship names only, and refuses a fragment.
+     *
+     * The join of a relationship is the legacy join SQL, unchanged, so it has the limits of the legacy
+     * 'joins' option, and the database refuses the first three:
+     * - it names the model's table, so it does not follow a from() alias;
+     * - that alias is given among the relationships of one call only, so two relationships to the same table
+     *   in separate calls are not aliased;
+     * - a has_many relationship declared with 'through' is joined without its middle table;
+     * - the declared 'conditions' of a relationship are not added to the ON clause, so the join pairs a row
+     *   with the related rows that they would exclude (see left_joins()).
+     *
      * <code>
      * Book::joins('author')->where('authors.name', 'Tito')->get();
      * Book::joins(['author', 'LEFT JOIN authors s ON(s.author_id = books.secondary_author_id)'])->get();
@@ -871,8 +884,16 @@ class Query
 
     /**
      * Joins the relationships of the model named in $relationships as joins() does, each with a LEFT JOIN:
-     * the rows of the model without a related row are kept. It takes relationships only, and a JOIN fragment
-     * goes to joins().
+     * the rows of the model without a related row are kept. It takes relationship names only: a JOIN
+     * fragment belongs in joins(), and is refused here.
+     *
+     * Its joins are the legacy join SQL, unchanged, so they have the limits that joins() lists: they name the
+     * model's table, so they do not follow a from() alias; two relationships to the same table in separate
+     * calls are not aliased; and a has_many relationship declared with 'through' is joined without its middle
+     * table. The database refuses each of these. The declared 'conditions' of a relationship are not added to
+     * the ON clause either, which here changes which rows are kept: a row whose related rows they would all
+     * exclude is joined to them, not kept without a match, so a where_null() on the joined table, to find the
+     * rows without a match, keeps fewer rows.
      *
      * <code>
      * Event::left_joins('venue')->get();
@@ -889,8 +910,13 @@ class Query
         $names = $this->relationship_names(__FUNCTION__, $relationships);
         $table = $this->table();
 
-        // each a declared relationship, which a JOIN fragment never is
+        // each a declared relationship, which a JOIN fragment never is: it is refused with a message that
+        // points to joins()
         foreach ($names as $name) {
+            if (false !== stripos($name, 'JOIN ')) {
+                throw new RelationshipException(sprintf("left_joins() on %s takes relationship names only, and '%s' is a JOIN fragment: a fragment belongs in joins()", $this->model_class, $name));
+            }
+
             $table->get_relationship($name, true);
         }
 
@@ -1329,7 +1355,8 @@ class Query
 
     /**
      * Adds the joins of these relationships and JOIN fragments, of the type $type (see
-     * Table::create_joins_of_type()), as their SQL; none for no names.
+     * Table::create_joins_of_type()), as their SQL: the legacy join SQL, unchanged, with the limits that
+     * joins() states; none for no names.
      *
      * @param list<string> $names
      * @param 'INNER'|'LEFT' $type

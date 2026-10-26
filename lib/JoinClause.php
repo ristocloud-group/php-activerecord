@@ -40,8 +40,9 @@ final class JoinClause
     /**
      * @param string $type The type of the join: INNER, LEFT or RIGHT
      * @param string $table The table of the join, as the join method was given it
-     * @param Conditions|null $conditions The reader of the conditions on the query's model, which the query
-     *   gives the JoinClause it passes to the closure: one made without it takes no condition
+     * @param Conditions|null $conditions @internal Serves Query; not a supported API. The reader of the
+     *   conditions on the query's model, which the query gives the JoinClause it passes to the closure: a
+     *   JoinClause made by hand, without it, throws on its first condition
      */
     public function __construct(public readonly string $type, public readonly string $table, private readonly ?Conditions $conditions = null) {}
 

@@ -377,7 +377,8 @@ class QueryJoinTest extends DatabaseTest
     }
 
     // Spec §5.7: a name that is no relationship of the model is refused at the call with today's
-    // RelationshipException, and so is a JOIN fragment given to left_joins(), which joins relationships only
+    // RelationshipException, and so is a JOIN fragment given to left_joins(), which joins relationships only,
+    // with a message that sends the fragment to joins()
     public function test_what_names_no_relationship_is_refused_at_the_call(): void
     {
         $query = Book::new_query();
@@ -387,7 +388,7 @@ class QueryJoinTest extends DatabaseTest
             ['Relationship named nope has not been declared for class: Book', fn() => $query->joins('nope')],
             ['Relationship named nope has not been declared for class: Book', fn() => $query->joins(['author', 'nope'])],
             ['Relationship named nope has not been declared for class: Book', fn() => $query->left_joins(['author', 'nope'])],
-            ["Relationship named $fragment has not been declared for class: Book", fn() => $query->left_joins($fragment)],
+            ["left_joins() on Book takes relationship names only, and '$fragment' is a JOIN fragment: a fragment belongs in joins()", fn() => $query->left_joins($fragment)],
         ] as [$message, $call]) {
             $this->assert_exception_message_contains($message, $call, RelationshipException::class);
         }
