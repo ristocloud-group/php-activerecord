@@ -142,16 +142,22 @@ final class QueryCompiler
      * the rows.
      *
      * What the subquery selects:
-     * - Counting rows, it selects 1, unless the state's own select is needed: DISTINCT tells the rows apart
-     *   by it, and a HAVING may name an alias of it (MySQL, MariaDB and SQLite read one there). Then it keeps
-     *   that select, or with nothing of its own, every column under DISTINCT and 1 otherwise. The select is
-     *   not kept otherwise: one that gives two result columns one name (a joined table's name beside the
-     *   model's) is refused in a derived table by MySQL and MariaDB (1060), and one of every column beside a
-     *   GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY.
-     * - Counting a column, it keeps the state's own select, which must give that column under its name; or
-     *   with nothing of its own, every column under DISTINCT and the column otherwise. The count reads t's
-     *   column of that name (see result_name()). Beside a GROUP BY, the column must be grouped (or be what
-     *   the state's select gives): MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other.
+     * - 1, only where the state's select provably cannot matter: no column is counted, no DISTINCT tells
+     *   the rows apart by the select, no HAVING may name an alias of it, and it holds plain columns without
+     *   an alias only (see plain_columns()), or nothing. A plain column carries no alias another
+     *   clause could name, and no aggregate that collapses the rows. Such a select is still not kept, for
+     *   one that gives two result columns one name (a joined table's name beside the model's) is refused in
+     *   a derived table by MySQL and MariaDB (1060), and one of every column beside a GROUP BY by Postgres
+     *   and by MySQL's ONLY_FULL_GROUP_BY.
+     * - Otherwise the state's own select, since a clause or the rows may depend on it: a GROUP BY and an
+     *   ORDER BY can name an alias of it, on every database, a HAVING too on MySQL, MariaDB and SQLite, and
+     *   an aggregate (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects every
+     *   column under DISTINCT, and otherwise the counted column, or 1 beside a HAVING.
+     *
+     * A counted column is read as t's column of its name (see result_name()), which the subquery must
+     * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives): MySQL's
+     * ONLY_FULL_GROUP_BY and Postgres refuse any other. With the state's select kept, two result columns of
+     * one name still meet MySQL's and MariaDB's 1060.
      *
      * @internal Serves Query::count(); not a supported API.
      * @throws ActiveRecordException for a state of legacy options (see compile_select())
@@ -172,11 +178,10 @@ final class QueryCompiler
             return $this->compile_select($rows);
         }
 
-        // the state's own select is kept where the count needs it: for DISTINCT, for a HAVING, and for the
-        // column it counts
-        $keeps_select = !$all || $state->distinct || [] !== $state->havings;
-
-        if (!$keeps_select || ([] === $state->selects && !$state->distinct)) {
+        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects)) {
+            // the state's select provably cannot matter
+            $rows->selects = [['raw' => '1', 'bindings' => []]];
+        } elseif ([] === $state->selects && !$state->distinct) {
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }
 
@@ -191,12 +196,18 @@ final class QueryCompiler
     /**
      * The SELECT whose rows Query::exists() asks for. That of a state of legacy options is its own:
      * Model::exists() takes out of them what the legacy exists leaves out. The builder's leaves out its
-     * order, its limit and its offset, and their values, as the legacy exists does (spec §5.3), and selects
-     * 1, as the legacy exists does, whatever the state selects: an aggregate (COUNT(*) AS n) selects one row
-     * when no row matches, which would exist, and a select of every column is refused beside a GROUP BY by
-     * Postgres and by MySQL's ONLY_FULL_GROUP_BY. Only a state with a HAVING keeps its own select, since the
-     * HAVING may name an alias of it (MySQL, MariaDB and SQLite read one there), or selects 1 when it has
-     * none. Eloquent's exists() keeps the select.
+     * order, its limit and its offset, and their values, as the legacy exists does (spec §5.3).
+     *
+     * Without a GROUP BY and a HAVING it selects 1, as the legacy exists does, whatever the state selects:
+     * an aggregate (COUNT(*) AS n) selects one row when no row matches, which would exist. No other clause
+     * names an alias of the select there: the order is left out, and a WHERE cannot name one, except on
+     * SQLite, which reads one there; such a query, which runs on SQLite alone, fails in exists(). Eloquent's
+     * exists() keeps the select.
+     *
+     * With a GROUP BY or a HAVING, which may name an alias of the select (a GROUP BY on every database, a
+     * HAVING on MySQL, MariaDB and SQLite), it keeps the state's select: grouped, an aggregate selects no row
+     * when no row matches. With nothing of its own it selects 1, since a select of every column is refused
+     * beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY.
      *
      * @internal Serves Query::exists(); not a supported API.
      */
@@ -211,7 +222,7 @@ final class QueryCompiler
         $rows->limit = null;
         $rows->offset = null;
 
-        if ([] === $rows->havings || [] === $rows->selects) {
+        if (([] === $rows->groups && [] === $rows->havings) || [] === $rows->selects) {
             $rows->selects = [['raw' => '1', 'bindings' => []]];
         }
 
@@ -746,6 +757,25 @@ final class QueryCompiler
         $legacy = ['legacy' => true];
 
         return array_diff_key(get_object_vars($state), $legacy) !== array_diff_key(get_object_vars(new QueryState()), $legacy);
+    }
+
+    /**
+     * Whether $selects, what a state selects, holds nothing but plain columns without an alias (as select()
+     * and add_select() record them): no SQL of select_raw(), no "name as alias". Such a column is only ever
+     * identifiers (see column()), so it carries no alias another clause could name, and no aggregate. An
+     * empty select is plain too.
+     *
+     * @param list<array{column: string, alias: string|null}|array{raw: string, bindings: list<mixed>}> $selects
+     */
+    private static function plain_columns(array $selects): bool
+    {
+        foreach ($selects as $select) {
+            if (array_key_exists('raw', $select) || null !== $select['alias']) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

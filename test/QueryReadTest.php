@@ -345,10 +345,11 @@ class QueryReadTest extends DatabaseTest
     // Spec §5.3: count() is the number of the query's rows, and with a column of those in which it is not null.
     // A plain query is counted in place, its order left out: it changes no number, and Postgres refuses it beside
     // COUNT. Grouped, distinct or windowed, the query is counted as a subquery, SELECT COUNT(*) FROM (…) AS t, and a
-    // window keeps the order that picks its rows. Without a column, the subquery selects 1 unless DISTINCT or a
-    // HAVING needs the caller's select: a select of every column is refused beside a GROUP BY (Postgres, MySQL's
-    // ONLY_FULL_GROUP_BY), and one that gives two result columns one name is refused in a derived table by MySQL and
-    // MariaDB (1060), where get() runs. With a column, it selects the caller's select, or else the column.
+    // window keeps the order that picks its rows. The subquery selects 1 for a select of plain columns without an
+    // alias, or none, when no column is counted and neither DISTINCT nor a HAVING needs the select: a select of every
+    // column is refused beside a GROUP BY (Postgres, MySQL's ONLY_FULL_GROUP_BY), and one that gives two result columns
+    // one name in a derived table by MySQL and MariaDB (1060), where get() runs. Otherwise it keeps the caller's select
+    // (see test_count_and_exists_keep_the_select_a_clause_or_the_rows_depend_on), or with none the counted column.
     public function test_count_counts_the_rows_of_the_result(): void
     {
         // loaded first: a table read cold adds its schema read to a capture
@@ -406,10 +407,59 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(2, Author::limit(2)->count('authors.author_id'));
     }
 
+    // Spec §5.3: a wrapped count() and exists() keep the caller's select wherever a clause or the rows depend on it.
+    // A GROUP BY and an ORDER BY can name an alias of it, on every database, and an aggregate in it collapses the rows
+    // to one. So count() selects 1 only with no counted column, no DISTINCT, no HAVING, and a select of plain columns
+    // without an alias (or none), and exists() only without a GROUP BY and a HAVING. The counts are those of get().
+    public function test_count_and_exists_keep_the_select_a_clause_or_the_rows_depend_on(): void
+    {
+        Author::table();
+
+        $by_alias = fn(): Query => Author::select_raw('parent_author_id AS p')->select_raw('COUNT(*) AS n')->group_by('p');
+        $this->assert_same(3, count($by_alias()->get()));
+        $this->assert_same(3, $by_alias()->count());
+        $this->assert_true($by_alias()->exists());
+        // grouped, an aggregate selects no row when no row matches
+        $this->assert_false($by_alias()->where('name', 'Nobody')->exists());
+        $this->assert_true($by_alias()->where('name', 'Nobody')->doesnt_exist());
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (SELECT parent_author_id AS p, COUNT(*) AS n FROM `authors` GROUP BY `p`) AS t'), 'values' => []]],
+            GoldenStatements::capture(fn() => $by_alias()->count())
+        );
+        $this->assert_same(
+            [$this->conn->exists_sql($this->sql('SELECT parent_author_id AS p, COUNT(*) AS n FROM `authors` GROUP BY `p`'))],
+            array_column(GoldenStatements::capture(fn() => $by_alias()->exists()), 'sql')
+        );
+
+        $ordered_by_alias = fn(): Query => Author::select('parent_author_id')->select_raw('COUNT(*) AS n')->group_by('parent_author_id')->order_by('n', 'desc')->limit(2);
+        $this->assert_same(2, count($ordered_by_alias()->get()));
+        $this->assert_same(2, $ordered_by_alias()->count());
+
+        $shortest = fn(): Query => Author::select_raw('LENGTH(name) AS len')->order_by('len')->limit(2);
+        $this->assert_same(2, count($shortest()->get()));
+        $this->assert_same(2, $shortest()->count());
+
+        // an aggregate collapses the rows to one, as get() returns it
+        $none = fn(): Query => Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->limit(5);
+        $this->assert_same(1, count($none()->get()));
+        $this->assert_same(1, $none()->count());
+        $highest = fn(): Query => Author::select_raw('MAX(author_id) AS m')->limit(5);
+        $this->assert_same(1, count($highest()->get()));
+        $this->assert_same(1, $highest()->count());
+
+        // a plain column selects 1 in the subquery; the same column under an alias keeps the select
+        $window = $this->conn->limit($this->sql('SELECT 1 FROM `authors`'), null, 2);
+        $this->assert_same([$this->sql('SELECT COUNT(*) FROM (') . $window . ') AS t'], array_column(GoldenStatements::capture(fn() => Author::select('name')->limit(2)->count()), 'sql'));
+        $window = $this->conn->limit($this->sql('SELECT `name` AS `nm` FROM `authors`'), null, 2);
+        $this->assert_same([$this->sql('SELECT COUNT(*) FROM (') . $window . ') AS t'], array_column(GoldenStatements::capture(fn() => Author::select('name as nm')->limit(2)->count()), 'sql'));
+        $this->assert_same(2, Author::select('name as nm')->limit(2)->count());
+    }
+
     // Spec §5.3: exists() and doesnt_exist() leave out the order, the limit and the offset, and their values with
-    // them, and select 1, as the legacy exists does: the caller's select could be an aggregate, whose one row
-    // exists for no row, and a select of every column is refused beside a GROUP BY (Postgres, MySQL's
-    // ONLY_FULL_GROUP_BY). Only a HAVING, which may name an alias of it, keeps the caller's select.
+    // them, and without a GROUP BY and a HAVING select 1, as the legacy exists does: the caller's select could be an
+    // aggregate, whose one row exists for no row. A GROUP BY or a HAVING, which may name an alias of it, keeps the
+    // caller's select (grouped, an aggregate selects no row for no row); with none, it selects 1, since a select of
+    // every column is refused beside a GROUP BY (Postgres, MySQL's ONLY_FULL_GROUP_BY).
     public function test_exists_leaves_out_the_order_and_the_window(): void
     {
         $this->assert_true(Author::order_by('name')->limit(0)->exists());

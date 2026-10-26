@@ -110,6 +110,13 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_true($parents(1)->exists());
         $this->assert_false($parents(2)->exists());
         $this->assert_true($parents(2)->doesnt_exist());
+
+        // a HAVING without a GROUP BY: the aggregate makes one row of the rows, and the HAVING names its alias
+        $everyone = fn(int $authors): ActiveRecord\Query => Author::select_raw('COUNT(*) AS n')->having('n', '>', $authors);
+        $this->assert_same(1, count($everyone(3)->get()));
+        $this->assert_same(1, $everyone(3)->count());
+        $this->assert_true($everyone(3)->exists());
+        $this->assert_false($everyone(4)->exists());
     }
 
     // MySQL has no OFFSET without LIMIT: the window of the builder is the adapter's own, an offset alone going with

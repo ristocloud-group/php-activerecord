@@ -1564,10 +1564,10 @@ class Query
     /**
      * Whether the query selects any row, without counting: the adapter's EXISTS() over its SELECT, which
      * stops at the first row. A query of the builder leaves its order, its limit and its offset out, as the
-     * legacy exists does (spec §5.3), so a limit of 0 does not make it false. It selects 1 there, as the
-     * legacy exists does, unless it has a HAVING, which may name an alias of its select: so a select of an
-     * aggregate, one row even when no row matches, does not make it true (see
-     * QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
+     * legacy exists does (spec §5.3), so a limit of 0 does not make it false. Without a GROUP BY and a
+     * HAVING it selects 1 there, as the legacy exists does, so a select of an aggregate, one row even when
+     * no row matches, does not make it true; with one, which may name an alias of the select, the select
+     * stays (see QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
      *
      * Model::exists() is the legacy exists, which Author::exists(...) calls.
      */
@@ -1596,8 +1596,10 @@ class Query
      * COUNT(column) counts. A query neither grouped, distinct nor windowed is counted in place, its order
      * left out. Any other is counted as a subquery, SELECT COUNT(*) FROM (…) AS t, so that a grouped query
      * counts its groups, a distinct one its distinct rows, and limit() and offset() the rows of their
-     * window. Counting rows, the subquery selects 1, unless DISTINCT or a HAVING needs the query's select
-     * (see QueryCompiler::compile_count()). The statement that ran is left in Table::$last_sql.
+     * window. The subquery keeps the query's select wherever a clause or the rows may depend on it (an alias
+     * that a GROUP BY or an ORDER BY names, an aggregate that makes one row of the rows), and counting rows
+     * of plain columns without an alias selects 1 instead (see QueryCompiler::compile_count()). The
+     * statement that ran is left in Table::$last_sql.
      *
      * On a grouped query, a counted $column must be grouped, or be what the query's own select gives:
      * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY.
