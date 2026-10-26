@@ -302,7 +302,7 @@ More builder rules:
 | `find_or_fail($id)` / `find_many($ids)` / `find_or($id, $cb)` | `RecordNotFound` with the legacy message if any is missing / a list / the callback | — |
 | `value($col)` / `sole_value($col)` | the column of the first record, **cast like a model attribute** (`Column::cast`, exact BIGINT as in #44, and today's DECIMAL → float of #146) | same |
 | `pluck($col, $key = null)` | the values, or a key ⇒ value map, cast as `value()` does, without hydrating models | same |
-| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does | same |
+| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does; the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
 | `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` is unchanged |
 | `min` / `max` / `sum` / `avg` | see §5.4 | Laravel casts `sum` |
 
@@ -310,12 +310,18 @@ Details settled while building the terminals (Task 15):
 
 - **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
 - **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
-- **`exists()`** drops order, limit and offset, and selects `1` unless the query has a HAVING, which may name a select
-  alias. An aggregate select such as `COUNT(*)` would otherwise make it true with no matching row. Eloquent has that
-  trap; this is a deliberate deviation.
-- **A wrapped `count()`** with no column selects `1` in the subquery unless the query has DISTINCT or a HAVING. On
-  MySQL/MariaDB the caller's select could hold two columns with the same name, and a derived table rejects that
-  (error 1060).
+- **`exists()`** drops order, limit and offset. It selects `1` unless the query has a GROUP BY or a HAVING, which
+  may name select aliases.
+  - Without that, an aggregate select such as `COUNT(*)` would make it true with no matching row. Eloquent has that
+    trap, so this is a deliberate deviation.
+  - With a GROUP BY, an aggregate produces no row when nothing matches.
+- **A wrapped `count()`** selects `1` in the subquery only when it provably cannot matter: no counted column, no
+  DISTINCT, no HAVING, and a select that is empty or holds only plain column references without an alias. Otherwise
+  it keeps the caller's select, because aliases named by GROUP BY or ORDER BY, and aggregates that collapse the rows,
+  need it.
+  - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
+    `authors.name`.
+  - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.
 - **`count($column)`** counts the column's non-null values. After `distinct()` with no select, it counts distinct rows.
 - **Qualified names.** `value()` / `pluck()` given a qualified name (`'authors.name'`) return the driver's value uncast, because casting needs a model column.
 - **`pluck($col, $key)` keys** are the driver's values. A `null` key becomes `''`, because PHP 8.5 deprecates null array keys.
