@@ -322,6 +322,10 @@ Details settled while building the terminals (Task 15):
   - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
     `authors.name`.
   - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.
+  - Residual, as in Eloquent: a `count()` that is not wrapped (no group, having, distinct, limit or offset) counts the
+    source rows, even when the select is a lone aggregate whose `get()` returns one row.
+  - Residual, SQLite only: SQLite accepts a select alias in WHERE; such a query's `exists()` fails there, because its
+    select becomes `1`. The other databases refuse the alias in `get()` already.
 - **`count($column)`** counts the column's non-null values. After `distinct()` with no select, it counts distinct rows.
 - **Qualified names.** `value()` / `pluck()` given a qualified name (`'authors.name'`) return the driver's value uncast, because casting needs a model column.
 - **`pluck($col, $key)` keys** are the driver's values. A `null` key becomes `''`, because PHP 8.5 deprecates null array keys.
