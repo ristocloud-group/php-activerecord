@@ -260,8 +260,10 @@ aggregates and join conditions.
 | Rule | Example | vs Eloquent |
 |---|---|---|
 | Operators are whitelisted: Laravel's list plus the adapter-specific ones (Laravel 13's grammars: MySQL/MariaDB `sounds like`; Postgres's list without the operators that contain `?`, which collide with PDO's positional markers, and without those that are not a boolean in `col OP ?`: `between`, `||`, `-`, `#`, `#-`). **An unknown operator throws `ActiveRecordException`** at the call | `where('a', 'like', 'x%')` | Laravel takes it as the value with `=` |
-| `null` with `=` → `IS NULL`; with `!=`/`<>` → `IS NOT NULL`; with any other operator → exception | `where('a', null)` | same |
+| `null` with `=` or `<=>` → `IS NULL`; with `!=`/`<>` → `IS NOT NULL`; with any other operator → exception | `where('a', null)` | same |
 | The hash form follows **the legacy hash rules** (`Expressions`): array → `IN`, empty array → `1=0`, `null` → `IS NULL`, `null` inside a list → `(… IN(?) OR … IS NULL)` | `where(['a' => [1, null]])` | Laravel binds the null, which never matches |
+| A hash's entries are ANDed, also inside `or_where(hash)`, which renders `OR (a = ? AND b = ?)`, as the legacy hash rule does | `or_where(['a' => 1, 'b' => 2])` | Eloquent's `orWhere(array)` ORs the entries |
+| `where_all` / `where_any` / `where_none` (and `or_`) with an empty column list throw `ActiveRecordException` at the call; `where_key` / `where_key_not` on a composite pk throw too, and a nested array in `where_in` / `where_between` / `where_key` is refused | `where_any([], 'x')` | Laravel's `whereAny([])` adds nothing and matches every row |
 | Laravel's list form is accepted | `where([['a', '>', 1], ['b', 2]])` | same |
 | `where_in` / `where_not_in` with an empty array → `1=0` / `1=1`; a `null` in the list is handled as in the hash | `where_in('id', [])` | same, except the null |
 | A closure is a parenthesized group, and an empty group is omitted. The closure gets a new `Query` on the same model; setting anything but wheres on it throws | `where(fn ($q) => $q->where(...)->or_where(...))` | Eloquent ignores the rest |
@@ -379,7 +381,8 @@ the model and the offending input.
 |---|---|
 | unknown operator, `null` with a disallowed operator, invalid direction or negative limit/offset | `ActiveRecordException` |
 | static `Order::update(...)` / `Order::delete()`, an unsupported clause on a write, empty update values | `ActiveRecordException` |
-| `find` / `find_or_fail` on a composite pk | `ActiveRecordException` |
+| `find` / `find_or_fail` / `where_key` / `where_key_not` on a composite pk | `ActiveRecordException` |
+| an empty column list in `where_all` / `where_any` / `where_none`, a nested array in `where_in` / `where_between` / `where_key`, an empty column name or alias | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
 | an unknown method through `__callStatic` | `ActiveRecordException("Call to undefined method: …")`, today's message |
@@ -533,7 +536,8 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 - On MySQL/MariaDB, `update_all()` with a hash `set` returns the matched rows even when no other value changes,
   because `updated_at` changes too.
 - **Dates** (the maintainer asked for this item explicitly): the builder binds a DateTime in the format of its
-  column's type, which fixes DATE comparisons on SQLite. Legacy positional binds are unchanged.
+  column's type, which fixes DATE comparisons on SQLite. Legacy positional and legacy hash binds are unchanged
+  (they keep the datetime format).
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
 
 ### 8.4 Notes for the monolith team
