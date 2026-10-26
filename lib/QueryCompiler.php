@@ -11,7 +11,6 @@ namespace ActiveRecord;
  *
  * @internal Serves the Query engine; not a supported API.
  * @package ActiveRecord
- * @phpstan-import-type Where from QueryState
  */
 final class QueryCompiler
 {
@@ -104,42 +103,16 @@ final class QueryCompiler
     }
 
     /**
-     * A column as a where clause of the builder takes it: the name, read by column() when the
-     * statement is compiled.
+     * Refuses an empty column name given to a condition of the builder (see Conditions), as select() and
+     * from() refuse theirs. The name itself is read by column() when the statement is compiled.
      *
-     * @internal Serves Query; not a supported API.
+     * @internal Serves Conditions; not a supported API.
      * @param string $method The builder method the name was given to, for the message of the exception
      * @throws ActiveRecordException for an empty name
      */
-    public function column_name(string $name, string $method): string
+    public function refuse_empty_column_name(string $name, string $method): void
     {
         $this->refuse_empty('column name', $name, $name, $method);
-
-        return $name;
-    }
-
-    /**
-     * A condition written in SQL and the values of its bind markers, read as a legacy positional
-     * condition is (SQLBuilder::where()): a value that is a list is spread over its marker by
-     * Expressions, IN(?) with [1, 2] being IN(?,?) and with [] IN(NULL). Without one, both are
-     * returned as given.
-     *
-     * @internal Serves Query; not a supported API.
-     * @param list<mixed> $values
-     * @return array{string, list<mixed>}
-     * @throws ExpressionsException for more bind markers than values, when one is a list
-     */
-    public function raw_condition(string $sql, array $values): array
-    {
-        if ([] === array_filter($values, is_array(...))) {
-            return [$sql, $values];
-        }
-
-        require_once __DIR__ . '/Expressions.php';
-        $expressions = new Expressions($this->connection(), $sql);
-        $expressions->bind_values($values);
-
-        return [$expressions->to_s(), array_flatten($expressions->values())];
     }
 
     /**
@@ -156,7 +129,7 @@ final class QueryCompiler
      */
     public function where_clause(QueryState $state, array $conditions = []): ?array
     {
-        $own = [] === $state->wheres ? null : $this->wheres_sql($state->wheres, $state);
+        $own = [] === $state->wheres ? null : $this->conditions($state)->compile($state->wheres);
 
         if ([] === $conditions) {
             return $own;
@@ -370,163 +343,12 @@ final class QueryCompiler
     }
 
     /**
-     * The conditions of one level of the builder's WHERE, each joined to the one before it by its AND
-     * or OR (that of the first is dropped), and their values in order.
-     *
-     * @param list<Where> $wheres
-     * @return array{sql: string, values: list<mixed>}
+     * The compiler of the builder's conditions (see ConditionCompiler), which names their columns by the one
+     * rule (see column()) as the statement of $state reads them.
      */
-    private function wheres_sql(array $wheres, QueryState $state): array
+    private function conditions(QueryState $state): ConditionCompiler
     {
-        $sql = '';
-        $values = [];
-        // SQL written by hand goes in parentheses beside another condition, which its OR could escape into
-        $beside = count($wheres) > 1;
-
-        foreach ($wheres as $i => $where) {
-            [$condition, $condition_values] = $this->where_sql($where, $state, $beside);
-            $sql .= (0 === $i ? '' : " {$where['boolean']} ") . $condition;
-            $values = [...$values, ...$condition_values];
-        }
-
-        return ['sql' => $sql, 'values' => $values];
-    }
-
-    /**
-     * One condition of the builder's WHERE (see QueryState::$wheres) and its values, each prepared for
-     * the column it is compared with (see value()). Its columns are named by column(). $beside: another
-     * condition shares its level.
-     *
-     * @param Where $where
-     * @return array{string, list<mixed>}
-     */
-    private function where_sql(array $where, QueryState $state, bool $beside): array
-    {
-        return match ($where['type']) {
-            'basic' => $this->comparison_sql($where['column'], $where['operator'], $where['value'], $state),
-            'column' => [$this->column($where['first'], $state) . " {$where['operator']} " . $this->column($where['second'], $state), []],
-            'raw' => [$beside ? "({$where['sql']})" : $where['sql'], $where['bindings']],
-            'in' => $this->in_sql($where['column'], $where['values'], $where['not'], $state),
-            'null' => [$this->column($where['column'], $state) . ($where['not'] ? ' IS NOT NULL' : ' IS NULL'), []],
-            'between' => $this->between_sql($where['column'], $where['values'][0], $where['values'][1], $where['not'], $state),
-            'between_columns' => [
-                $this->column($where['column'], $state) . ($where['not'] ? ' NOT BETWEEN ' : ' BETWEEN ')
-                    . $this->column($where['columns'][0], $state) . ' AND ' . $this->column($where['columns'][1], $state),
-                [],
-            ],
-            'like' => [
-                $this->connection()->like_condition($this->column($where['column'], $state), $where['case_sensitive'], $where['not']),
-                [$this->connection()->like_pattern($where['value'], $where['case_sensitive'])],
-            ],
-            'hash' => $this->hash_sql($where['column'], $where['value'], $state),
-            'group' => $this->group_sql($where['group'], $where['not'], $state),
-        };
-    }
-
-    /**
-     * A column compared with a value by an operator, or with null: IS NULL by = and <=>, IS NOT NULL by
-     * != and <> (Query refuses any other operator with null).
-     *
-     * @return array{string, list<mixed>}
-     */
-    private function comparison_sql(string $name, string $operator, mixed $value, QueryState $state): array
-    {
-        $column = $this->column_reference($name, $state);
-
-        if (null === $value) {
-            return [$column['sql'] . (in_array($operator, ['!=', '<>'], true) ? ' IS NOT NULL' : ' IS NULL'), []];
-        }
-
-        return ["{$column['sql']} $operator ?", [$this->value($column['column'], $value)]];
-    }
-
-    /**
-     * A column IN a list of values, or with $not NOT IN, by the rules of a hash of conditions (spec §5.2):
-     * an empty list matches no row (1=0), or with $not every row (1=1); a null in the list is compared
-     * with IS NULL ORed, or IS NOT NULL ANDed, and nulls only are that comparison alone.
-     *
-     * @param list<mixed> $values
-     * @return array{string, list<mixed>}
-     */
-    private function in_sql(string $name, array $values, bool $not, QueryState $state): array
-    {
-        if ([] === $values) {
-            return [$not ? '1=1' : '1=0', []];
-        }
-
-        $column = $this->column_reference($name, $state);
-        $listed = array_values(array_filter($values, fn(mixed $value): bool => null !== $value));
-        $null = $column['sql'] . ($not ? ' IS NOT NULL' : ' IS NULL');
-
-        if ([] === $listed) {
-            return [$null, []];
-        }
-
-        $in = $column['sql'] . ($not ? ' NOT IN(' : ' IN(') . implode(',', array_fill(0, count($listed), '?')) . ')';
-        $prepared = array_map(fn(mixed $value): mixed => $this->value($column['column'], $value), $listed);
-
-        if (count($listed) === count($values)) {
-            return [$in, $prepared];
-        }
-
-        return [$not ? "($in AND $null)" : "($in OR $null)", $prepared];
-    }
-
-    /**
-     * A column BETWEEN two values, or with $not NOT BETWEEN.
-     *
-     * @return array{string, list<mixed>}
-     */
-    private function between_sql(string $name, mixed $low, mixed $high, bool $not, QueryState $state): array
-    {
-        $column = $this->column_reference($name, $state);
-
-        return [
-            $column['sql'] . ($not ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?'),
-            [$this->value($column['column'], $low), $this->value($column['column'], $high)],
-        ];
-    }
-
-    /**
-     * A column => value entry of a hash of conditions, rendered by Expressions as an entry of a legacy
-     * conditions hash is (spec §5.2): a list is IN, an empty one 1=0, a null in it IS NULL ORed, and
-     * a null IS NULL. The column is named by column(), and its values prepared for it.
-     *
-     * @return array{string, list<mixed>}
-     */
-    private function hash_sql(string $name, mixed $value, QueryState $state): array
-    {
-        require_once __DIR__ . '/Expressions.php';
-        $column = $this->column_reference($name, $state);
-        $value = is_array($value)
-            ? array_map(fn(mixed $element): mixed => $this->value($column['column'], $element), $value)
-            : $this->value($column['column'], $value);
-        $expressions = new Expressions($this->connection(), [$column['sql'] => $value]);
-
-        return [$expressions->to_s(), array_flatten($expressions->values())];
-    }
-
-    /**
-     * A group of conditions in parentheses, or with $not its negation, NOT (...).
-     *
-     * @return array{string, list<mixed>}
-     */
-    private function group_sql(QueryState $group, bool $not, QueryState $state): array
-    {
-        $wheres = $this->wheres_sql($group->wheres, $state);
-
-        return [($not ? 'NOT (' : '(') . $wheres['sql'] . ')', $wheres['values']];
-    }
-
-    /**
-     * A value compared with a column of the builder, as the database receives it: prepared by
-     * Table::process_data() for $column, so that a DateTime takes the format of the column's type, a
-     * date for a DATE column (spec §5.2). A name that is no column of the model gets the format of a
-     * positional value, a date and time.
-     */
-    private function value(string $column, mixed $value): mixed
-    {
-        return $this->table->process_data([$column => $value])[$column];
+        return new ConditionCompiler($this->table, $this->connection(), fn(string $name): array => $this->column_reference($name, $state));
     }
 
     /**
