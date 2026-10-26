@@ -27,6 +27,21 @@ class ValuestoreValidations extends ActiveRecord\Model
     public static $validates_uniqueness_of = [];
 }
 
+// composite primary key (owner, code); the database fills `code` when it is not sent
+class CodedItemValidations extends ActiveRecord\Model
+{
+    public static $table_name = 'coded_items';
+    public static $validates_uniqueness_of = [['name']];
+}
+
+// composite primary key declared on nullable columns with no default
+class CompositeItemValidations extends ActiveRecord\Model
+{
+    public static $table_name = 'composite_items';
+    public static $primary_key = ['author_ref', 'parent_ref'];
+    public static $validates_uniqueness_of = [['title']];
+}
+
 class ValidationsTest extends DatabaseTest
 {
     public function set_up($connection_name = null)
@@ -160,6 +175,209 @@ class ValidationsTest extends DatabaseTest
 
         $quoted_key = ValuestoreValidations::connection()->quote_name('key');
         $this->assert_equals(1, ValuestoreValidations::count(['conditions' => "{$quoted_key}='GA_KEY'"]));
+    }
+
+    public function test_validates_uniqueness_of_distinct_value_is_valid_and_bound()
+    {
+        $book = new BookValidations(['name' => 'a name nobody has']);
+        $this->assert_true($book->is_valid());
+        $this->assert_sql_has('book_id IS NOT NULL AND name=?', BookValidations::table()->last_sql);
+    }
+
+    public function test_validates_uniqueness_of_custom_message()
+    {
+        BookValidations::$validates_uniqueness_of = [['name', 'message' => 'is taken']];
+        $book = new BookValidations(['name' => 'Another Book']);
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name is taken'], $book->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_null_is_a_duplicate_of_null()
+    {
+        BookValidations::$validates_presence_of = [];
+        Book::create(['name' => null]);
+
+        $book = new BookValidations(['name' => null]);
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name must be unique'], $book->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_null_is_compared_with_is_null()
+    {
+        BookValidations::$validates_presence_of = [];
+        $book = new BookValidations(['name' => null]);
+        $this->assert_true($book->is_valid());
+
+        // no null is bound: the pk is null too, so no placeholder is left
+        $sql = BookValidations::table()->last_sql;
+        $this->assert_sql_has('book_id IS NOT NULL AND name IS NULL', $sql);
+        $this->assert_equals(0, substr_count($sql, '?'));
+    }
+
+    public function test_validates_uniqueness_of_null_excludes_self()
+    {
+        BookValidations::$validates_presence_of = [];
+        $id = Book::create(['name' => null])->book_id;
+
+        $book = BookValidations::find($id);
+        $this->assert_true($book->is_valid());
+        $this->assert_sql_has('book_id != ? AND name IS NULL', BookValidations::table()->last_sql);
+    }
+
+    public function test_validates_uniqueness_of_allow_null_skips_null_only()
+    {
+        BookValidations::$validates_presence_of = [];
+        BookValidations::$validates_uniqueness_of = [['name', 'allow_null' => true]];
+        Book::create(['name' => null]);
+        Book::create(['name' => '']);
+
+        BookValidations::table()->last_sql = null;
+        $book = new BookValidations(['name' => null]);
+        $this->assert_true($book->is_valid());
+        $this->assert_null(BookValidations::table()->last_sql);
+
+        $book = new BookValidations(['name' => '']);
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name must be unique'], $book->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_allow_blank_skips_blank_and_null()
+    {
+        BookValidations::$validates_presence_of = [];
+        BookValidations::$validates_uniqueness_of = [['name', 'allow_blank' => true]];
+        Book::create(['name' => null]);
+        Book::create(['name' => '']);
+
+        $book = new BookValidations(['name' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book = new BookValidations(['name' => null]);
+        $this->assert_true($book->is_valid());
+
+        $book = new BookValidations(['name' => 'Another Book']);
+        $this->assert_false($book->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_with_multiple_fields_null_is_a_duplicate_of_null()
+    {
+        BookValidations::$validates_presence_of = [];
+        BookValidations::$validates_uniqueness_of = [[['name', 'special']]];
+        Book::create(['name' => 'pair', 'special' => null]);
+        Book::create(['name' => null, 'special' => 5]);
+
+        $book = new BookValidations(['name' => 'pair', 'special' => null]);
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name and special must be unique'], $book->errors->full_messages());
+
+        $book = new BookValidations(['name' => null, 'special' => 5]);
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name and special must be unique'], $book->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_with_multiple_fields_null_part_without_duplicate_is_valid()
+    {
+        BookValidations::$validates_presence_of = [];
+        BookValidations::$validates_uniqueness_of = [[['name', 'special']]];
+        Book::create(['name' => 'pair', 'special' => null]);
+
+        $book = new BookValidations(['name' => 'other', 'special' => null]);
+        $this->assert_true($book->is_valid());
+
+        $book = new BookValidations(['name' => 'pair', 'special' => 5]);
+        $this->assert_true($book->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_with_multiple_fields_allow_null_skips_when_any_field_is_null()
+    {
+        BookValidations::$validates_presence_of = [];
+        BookValidations::$validates_uniqueness_of = [[['name', 'numeric_test'], 'allow_null' => true]];
+        Book::create(['name' => 'pair', 'numeric_test' => null]);
+        Book::create(['name' => 'blank', 'numeric_test' => '']);
+
+        BookValidations::table()->last_sql = null;
+        $book = new BookValidations(['name' => 'pair', 'numeric_test' => null]);
+        $this->assert_true($book->is_valid());
+        $this->assert_null(BookValidations::table()->last_sql);
+
+        // allow_null does not cover a blank string
+        $book = new BookValidations(['name' => 'blank', 'numeric_test' => '']);
+        $this->assert_false($book->is_valid());
+        $this->assert_equals(['Name and numeric test must be unique'], $book->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_with_multiple_fields_allow_blank_skips_when_any_field_is_blank()
+    {
+        BookValidations::$validates_presence_of = [];
+        BookValidations::$validates_uniqueness_of = [[['name', 'numeric_test'], 'allow_blank' => true]];
+        Book::create(['name' => 'pair', 'numeric_test' => null]);
+        Book::create(['name' => 'blank', 'numeric_test' => '']);
+
+        $book = new BookValidations(['name' => 'blank', 'numeric_test' => '']);
+        $this->assert_true($book->is_valid());
+
+        $book = new BookValidations(['name' => 'pair', 'numeric_test' => null]);
+        $this->assert_true($book->is_valid());
+
+        // '0' is not blank: the fixture row (Another Book, numeric_test defaulted to '0') is found
+        $book = new BookValidations(['name' => 'Another Book', 'numeric_test' => '0']);
+        $this->assert_false($book->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_excludes_self_by_the_whole_composite_pk()
+    {
+        // acme/def renamed to the name of acme/abc: same owner, different row
+        $item = CodedItemValidations::first(['conditions' => ['owner' => 'acme', 'code' => 'def']]);
+        $item->name = 'one';
+        $this->assert_false($item->is_valid());
+        $this->assert_equals(['Name must be unique'], $item->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_record_itself_is_valid()
+    {
+        $item = CodedItemValidations::first(['conditions' => ['owner' => 'acme', 'code' => 'abc']]);
+        $this->assert_true($item->is_valid());
+        $this->assert_sql_has('NOT (owner = ? AND code = ?) AND name=?', CodedItemValidations::table()->last_sql);
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_new_record()
+    {
+        $item = new CodedItemValidations(['owner' => 'other', 'code' => 'zzz', 'name' => 'one']);
+        $this->assert_false($item->is_valid());
+
+        $item = new CodedItemValidations(['owner' => 'other', 'code' => 'zzz', 'name' => 'three']);
+        $this->assert_true($item->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_new_record_with_a_database_filled_pk_part()
+    {
+        // `code` is left to the database: the attribute holds the introspected default
+        // expression, so the pk is partly assigned (`NOT (owner = ? AND code = ?)` or, with no
+        // owner, `NOT (owner IS NULL AND code = ?)`) and no existing row is excluded
+        $item = new CodedItemValidations(['owner' => 'acme', 'name' => 'one']);
+        $this->assert_false($item->is_valid());
+        $this->assert_sql_has('NOT (owner = ? AND code = ?) AND name=?', CodedItemValidations::table()->last_sql);
+
+        $item = new CodedItemValidations(['name' => 'one']);
+        $this->assert_false($item->is_valid());
+        $this->assert_sql_has('NOT (owner IS NULL AND code = ?) AND name=?', CodedItemValidations::table()->last_sql);
+
+        $item = new CodedItemValidations(['name' => 'three']);
+        $this->assert_true($item->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_new_record_without_pk_values()
+    {
+        // no pk value at all (the pk columns have no default): nothing to exclude, so the
+        // first pk column keeps the single-pk shape `IS NOT NULL`
+        $item = new CompositeItemValidations(['title' => 'keep']);
+        $this->assert_false($item->is_valid());
+        $this->assert_equals(['Title must be unique'], $item->errors->full_messages());
+        $sql = CompositeItemValidations::table()->last_sql;
+        $this->assert_sql_has('WHERE author_ref IS NOT NULL AND title=?', $sql);
+        $this->assert_equals(1, substr_count($sql, '?'));
+
+        $item = new CompositeItemValidations(['title' => 'new']);
+        $this->assert_true($item->is_valid());
     }
 
     public function test_get_validation_rules()

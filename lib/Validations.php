@@ -660,11 +660,12 @@ class Validations
      * Available options:
      *
      * <ul>
-     * <li><b>with:</b> a regular expression</li>
      * <li><b>message:</b> custom error message</li>
-     * <li><b>allow_blank:</b> allow blank strings</li>
-     * <li><b>allow_null:</b> allow null strings</li>
+     * <li><b>allow_blank:</b> skip the check when any of the fields is blank (null included)</li>
+     * <li><b>allow_null:</b> skip the check when any of the fields is null</li>
      * </ul>
+     *
+     * A null value is compared with IS NULL: without allow_null, a second null is a duplicate.
      *
      * @param list<array<int|string, mixed>> $attrs Validation definition
      * @return void
@@ -693,21 +694,42 @@ class Validations
                 $fields = [$field_config];
             }
 
-            $sql = "";
-            $conditions = [""];
-            $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
-            if ($pk_value === null) {
-                $sql = "{$pk_quoted} IS NOT NULL";
-            } else {
-                $sql = "{$pk_quoted} != ?";
-                array_push($conditions, $pk_value);
-            }
-
+            $values = [];
             foreach ($fields as $field) {
                 $field = $this->model->get_real_attribute_name($field);
+                $values[] = [$field, $this->model->$field];
+            }
+
+            foreach ($values as [, $value]) {
+                if ($this->is_null_with_option($value, $options) || $this->is_blank_with_option($value, $options)) {
+                    continue 2;
+                }
+            }
+
+            $sql = "";
+            $conditions = [""];
+            $exclusion = count($pk) > 1 ? $this->composite_pk_exclusion($pk, $connection, $table) : null;
+            if ($exclusion !== null) {
+                [$sql, $bound] = $exclusion;
+                array_push($conditions, ...$bound);
+            } else {
+                $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
+                if ($pk_value === null) {
+                    $sql = "{$pk_quoted} IS NOT NULL";
+                } else {
+                    $sql = "{$pk_quoted} != ?";
+                    array_push($conditions, $pk_value);
+                }
+            }
+
+            foreach ($values as [$field, $value]) {
                 $quoted_field = $connection->quote_name($table->real_column_name((string) $field));
-                $sql .= " AND {$quoted_field}=?";
-                array_push($conditions, $this->model->$field);
+                if ($value === null) {
+                    $sql .= " AND {$quoted_field} IS NULL";
+                } else {
+                    $sql .= " AND {$quoted_field}=?";
+                    array_push($conditions, $value);
+                }
             }
 
             $conditions[0] = $sql;
@@ -716,6 +738,32 @@ class Validations
                 $this->record->add($add_record, $options['message']);
             }
         }
+    }
+
+    /**
+     * Excludes the record being validated by every column of its composite pk, not the
+     * first one alone (#155): `NOT ({a} = ? AND {b} IS NULL)`, a null part (a new record
+     * with part of its key assigned) compared with IS NULL. Null when no pk value is set.
+     *
+     * @param list<string> $pk
+     * @return array{string, list<mixed>}|null the SQL and its bound values
+     */
+    private function composite_pk_exclusion(array $pk, Connection $connection, Table $table): ?array
+    {
+        $parts = [];
+        $bound = [];
+        foreach ($pk as $column) {
+            $value = $this->model->$column;
+            $quoted = $connection->quote_name($table->real_column_name($column));
+            if ($value === null) {
+                $parts[] = "{$quoted} IS NULL";
+            } else {
+                $parts[] = "{$quoted} = ?";
+                $bound[] = $value;
+            }
+        }
+
+        return [] === $bound ? null : ['NOT (' . implode(' AND ', $parts) . ')', $bound];
     }
 
     /**

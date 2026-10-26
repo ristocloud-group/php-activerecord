@@ -109,3 +109,31 @@ foreach (['9223372036854775806', '9223372036854775807'] as $tracking) {
     out('tracking ' . $tracking . ' valid? '
         . ($shipment->is_valid() ? 'yes' : 'no (' . implode('; ', $shipment->errors->full_messages()) . ')'));
 }
+
+// Uniqueness and null: a null value is compared with IS NULL, so without allow_null a
+// second null is a duplicate (as in Rails); allow_null / allow_blank skip the rule when a
+// field is null / blank. (Before #51 both options were ignored and a null never matched.)
+require_once __DIR__ . '/models/ClubMember.php';
+foreach ([['Ada', null, 'B1'], ['Bo', null, 'B2'], ['Cy', 'cy', null], ['Di', 'cy', null]] as [$name, $nickname, $badge]) {
+    $member = new ClubMember(['name' => $name, 'nickname' => $nickname, 'badge' => $badge]);
+    out(sprintf(
+        'member %s nickname=%s badge=%s saved? %s',
+        $name,
+        var_export($nickname, true),
+        var_export($badge, true),
+        $member->save() ? 'yes' : 'no (' . implode('; ', $member->errors->full_messages()) . ')',
+    ));
+}
+
+// On a composite primary key the record is excluded by all of its columns: Ada already
+// holds seat A/1, so making her the guest of seat A/2 too is a duplicate. (Before #155 only
+// `hall` excluded the record, which also excluded every other seat of hall A, so the
+// duplicate was not found.)
+require_once __DIR__ . '/models/HallSeat.php';
+/** @var HallSeat $seat */
+$seat = HallSeat::first(['conditions' => ['hall' => 'A', 'seat' => '2']]);
+$seat->guest = 'Ada';
+out('seat A/2 guest Ada valid? ' . ($seat->is_valid() ? 'yes' : 'no (' . implode('; ', $seat->errors->full_messages()) . ')'));
+/** @var HallSeat $seat */
+$seat = HallSeat::first(['conditions' => ['hall' => 'A', 'seat' => '1']]);
+out('seat A/1 unchanged valid? ' . ($seat->is_valid() ? 'yes' : 'no'));
