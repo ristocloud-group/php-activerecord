@@ -306,6 +306,15 @@ More builder rules:
 | `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` is unchanged |
 | `min` / `max` / `sum` / `avg` | see §5.4 | Laravel casts `sum` |
 
+Details settled while building the terminals (Task 15):
+
+- **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
+- **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
+- **`exists()`** drops order, limit and offset, and selects `1` when the query has no select of its own.
+- **`count($column)`** counts the column's non-null values. After `distinct()` with no select, it counts distinct rows.
+- **Qualified names.** `value()` / `pluck()` given a qualified name (`'authors.name'`) return the driver's value uncast, because casting needs a model column.
+- **`pluck($col, $key)` keys** are the driver's values. A `null` key becomes `''`, because PHP 8.5 deprecates null array keys.
+
 ### 5.4 Aggregates and exact numerics
 
 The engine knows the aggregated column when the argument is a model column (§5.1). It classifies the column with
