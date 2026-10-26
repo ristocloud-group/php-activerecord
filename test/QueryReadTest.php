@@ -131,7 +131,8 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same('Tito', Author::new_query()->find_or(1, $never)->name);
         $this->assert_same([1, 2], $this->ids(Author::order_by('author_id')->find_or([1, 2], $never)));
 
-        // an id given twice is one id, in any spelling the database compares equal: nothing is missing
+        // an id given twice is one id: ids are told apart by their text in PHP ('1' for 1 and '1'), not by the
+        // database's equality, so nothing is missing here
         $this->assert_same([1, 2], $this->ids(Author::order_by('author_id')->find_or_fail([1, 2, 1])));
         $this->assert_same([1], $this->ids(Author::new_query()->find_or_fail([1, '1'])));
         $this->assert_same([1, 2], $this->ids(Author::order_by('author_id')->find_or([2, 1, 2], fn() => 'missing')));
@@ -343,14 +344,16 @@ class QueryReadTest extends DatabaseTest
 
     // Spec §5.3: count() is the number of the query's rows, and with a column of those in which it is not null.
     // A plain query is counted in place, its order left out: it changes no number, and Postgres refuses it beside
-    // COUNT. Grouped, distinct or windowed, the query is counted as a subquery, SELECT COUNT(*) FROM (…) AS t; there,
-    // without a select of its own nor DISTINCT, it selects 1 (or the counted column), since a select of every column
-    // is refused beside a GROUP BY (Postgres, MySQL's ONLY_FULL_GROUP_BY), and a window keeps the order that picks
-    // its rows.
+    // COUNT. Grouped, distinct or windowed, the query is counted as a subquery, SELECT COUNT(*) FROM (…) AS t, and a
+    // window keeps the order that picks its rows. Without a column, the subquery selects 1 unless DISTINCT or a
+    // HAVING needs the caller's select: a select of every column is refused beside a GROUP BY (Postgres, MySQL's
+    // ONLY_FULL_GROUP_BY), and one that gives two result columns one name is refused in a derived table by MySQL and
+    // MariaDB (1060), where get() runs. With a column, it selects the caller's select, or else the column.
     public function test_count_counts_the_rows_of_the_result(): void
     {
         // loaded first: a table read cold adds its schema read to a capture
         Author::table();
+        Book::table();
 
         $this->assert_same(
             [['sql' => $this->sql('SELECT COUNT(*) FROM `authors` WHERE `name` = ?'), 'values' => ['Tito']]],
@@ -364,6 +367,25 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(1, Author::group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->count());
         $this->assert_same(4, Author::distinct()->count());
         $this->assert_same(2, Book::joins('author')->count());
+
+        // the caller's select gives two columns named name: the windowed count selects 1 instead
+        $books = fn(): Query => Book::joins('author')->select('books.*', 'authors.name')->limit(5);
+        $this->assert_same(2, count($books()->get()));
+        $this->assert_same(2, $books()->count());
+        $this->assert_sql_has('SELECT COUNT(*) FROM (SELECT 1 FROM books INNER JOIN', GoldenStatements::capture(fn() => $books()->count())[0]['sql']);
+        // DISTINCT tells the rows apart by the caller's select, which stays
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (') . $this->conn->limit($this->sql('SELECT DISTINCT `parent_author_id` FROM `authors`'), null, 10) . ') AS t', 'values' => []]],
+            GoldenStatements::capture(fn() => Author::distinct()->select('parent_author_id')->limit(10)->count())
+        );
+        $this->assert_same(3, Author::distinct()->select('parent_author_id')->limit(10)->count());
+        // a HAVING may name an alias of the caller's select, which stays (the alias itself: the adapter files)
+        $having = fn(): Query => Author::select('parent_author_id')->select_raw('COUNT(*) AS n')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1]);
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (SELECT `parent_author_id`, COUNT(*) AS n FROM `authors` GROUP BY `parent_author_id` HAVING COUNT(*) > ?) AS t'), 'values' => [1]]],
+            GoldenStatements::capture(fn() => $having()->count())
+        );
+        $this->assert_same(1, $having()->count());
 
         $this->conn->query("UPDATE authors SET some_text = 'x' WHERE author_id = 4");
         $this->assert_same(1, Author::new_query()->count('some_text'));
@@ -385,8 +407,9 @@ class QueryReadTest extends DatabaseTest
     }
 
     // Spec §5.3: exists() and doesnt_exist() leave out the order, the limit and the offset, and their values with
-    // them, as the legacy exists does; and without a select of its own the query selects 1 there, as the legacy
-    // exists does, which a GROUP BY allows on every database. A select of its own stays: a HAVING can name it.
+    // them, and select 1, as the legacy exists does: the caller's select could be an aggregate, whose one row
+    // exists for no row, and a select of every column is refused beside a GROUP BY (Postgres, MySQL's
+    // ONLY_FULL_GROUP_BY). Only a HAVING, which may name an alias of it, keeps the caller's select.
     public function test_exists_leaves_out_the_order_and_the_window(): void
     {
         $this->assert_true(Author::order_by('name')->limit(0)->exists());
@@ -398,9 +421,24 @@ class QueryReadTest extends DatabaseTest
         $statements = GoldenStatements::capture(fn() => Author::where('author_id', '>', 1)->order_by_raw('CASE WHEN author_id = ? THEN 0 ELSE 1 END', [2])->limit(2)->offset(1)->exists());
         $this->assert_same([['sql' => $this->conn->exists_sql($this->sql('SELECT 1 FROM `authors` WHERE `author_id` > ?')), 'values' => [1]]], $statements);
         $this->assert_same(
-            [$this->conn->exists_sql($this->sql('SELECT `name` FROM `authors`'))],
+            [$this->conn->exists_sql($this->sql('SELECT 1 FROM `authors`'))],
             array_column(GoldenStatements::capture(fn() => Author::select('name')->exists()), 'sql')
         );
+
+        // an aggregate selects one row for no row: the rows are asked for, not it
+        $this->assert_false(Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->exists());
+        $this->assert_true(Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->doesnt_exist());
+        $this->assert_true(Author::select_raw('COUNT(*) AS n')->where('name', 'Tito')->exists());
+
+        // a HAVING keeps the caller's select (an alias of it in the HAVING: the adapter files)
+        $having = fn(int $authors): Query => Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [$authors]);
+        $this->assert_same(
+            [$this->conn->exists_sql($this->sql('SELECT `parent_author_id` FROM `authors` GROUP BY `parent_author_id` HAVING COUNT(*) > ?'))],
+            array_column(GoldenStatements::capture(fn() => $having(1)->exists()), 'sql')
+        );
+        $this->assert_true($having(1)->exists());
+        $this->assert_false($having(2)->exists());
+        $this->assert_true($having(2)->doesnt_exist());
     }
 
     // Spec §5.7: an empty column name is refused at the call, before any statement is sent

@@ -139,10 +139,19 @@ final class QueryCompiler
      * place: SELECT COUNT(*) with its FROM, joins and WHERE, without its order, which changes no number
      * (Postgres refuses an order by a column beside COUNT, besides). Any other is counted as a subquery,
      * SELECT COUNT(*) FROM (…) AS t, which keeps its order only when windowed, since there the order picks
-     * the rows. The subquery selects what the state selects of its own; with nothing of its own, every column
-     * with DISTINCT, the rows DISTINCT tells apart, and otherwise the counted column, or 1: a select of every
-     * column is refused beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY. The counted column
-     * is then t's column of its name (see result_name()), which the subquery must select.
+     * the rows.
+     *
+     * What the subquery selects:
+     * - Counting rows, it selects 1, unless the state's own select is needed: DISTINCT tells the rows apart
+     *   by it, and a HAVING may name an alias of it (MySQL, MariaDB and SQLite read one there). Then it keeps
+     *   that select, or with nothing of its own, every column under DISTINCT and 1 otherwise. The select is
+     *   not kept otherwise: one that gives two result columns one name (a joined table's name beside the
+     *   model's) is refused in a derived table by MySQL and MariaDB (1060), and one of every column beside a
+     *   GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY.
+     * - Counting a column, it keeps the state's own select, which must give that column under its name; or
+     *   with nothing of its own, every column under DISTINCT and the column otherwise. The count reads t's
+     *   column of that name (see result_name()). Beside a GROUP BY, the column must be grouped (or be what
+     *   the state's select gives): MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other.
      *
      * @internal Serves Query::count(); not a supported API.
      * @throws ActiveRecordException for a state of legacy options (see compile_select())
@@ -163,7 +172,11 @@ final class QueryCompiler
             return $this->compile_select($rows);
         }
 
-        if ([] === $state->selects && !$state->distinct) {
+        // the state's own select is kept where the count needs it: for DISTINCT, for a HAVING, and for the
+        // column it counts
+        $keeps_select = !$all || $state->distinct || [] !== $state->havings;
+
+        if (!$keeps_select || ([] === $state->selects && !$state->distinct)) {
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }
 
@@ -179,9 +192,11 @@ final class QueryCompiler
      * The SELECT whose rows Query::exists() asks for. That of a state of legacy options is its own:
      * Model::exists() takes out of them what the legacy exists leaves out. The builder's leaves out its
      * order, its limit and its offset, and their values, as the legacy exists does (spec §5.3), and selects
-     * 1 when the state selects nothing of its own, as the legacy exists does: a select of every column is
-     * refused beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY. A select of its own stays,
-     * which a HAVING can name.
+     * 1, as the legacy exists does, whatever the state selects: an aggregate (COUNT(*) AS n) selects one row
+     * when no row matches, which would exist, and a select of every column is refused beside a GROUP BY by
+     * Postgres and by MySQL's ONLY_FULL_GROUP_BY. Only a state with a HAVING keeps its own select, since the
+     * HAVING may name an alias of it (MySQL, MariaDB and SQLite read one there), or selects 1 when it has
+     * none. Eloquent's exists() keeps the select.
      *
      * @internal Serves Query::exists(); not a supported API.
      */
@@ -196,7 +211,7 @@ final class QueryCompiler
         $rows->limit = null;
         $rows->offset = null;
 
-        if ([] === $rows->selects) {
+        if ([] === $rows->havings || [] === $rows->selects) {
             $rows->selects = [['raw' => '1', 'bindings' => []]];
         }
 

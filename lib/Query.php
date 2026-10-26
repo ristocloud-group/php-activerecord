@@ -1438,7 +1438,11 @@ class Query
      * What find() finds for $id, which must find every id: else a RecordNotFound, with the message of the
      * legacy finders by pk (Model::find_by_pk()): "Couldn't find Author with ID=99" for one id, and for a
      * list of which some are missing "Couldn't find all Author with IDs (1,99) (found 1, but was looking
-     * for 2)". An id given twice is looked for once, and a row that a join repeats is found once.
+     * for 2)". An id given twice is looked for once (ids are told apart by their text in PHP, not by the
+     * database's equality), and a row that a join repeats is found once, by its primary key.
+     *
+     * A select that leaves the primary key out lets the models only be counted: under a join that repeats
+     * a row, the repeats can then make up for a missing id, which goes unnoticed.
      *
      * @return ($id is array ? list<TModel> : TModel)
      * @throws RecordNotFound when an id is missing
@@ -1470,7 +1474,9 @@ class Query
 
     /**
      * What find() finds for $id when it finds every id, as find_or_fail() requires, or else what $callback
-     * returns, called without arguments.
+     * returns, called without arguments. The ids are looked for as find_or_fail() looks for them, with the
+     * same limit: a select that leaves the primary key out, under a join that repeats a row, can let a
+     * missing id go unnoticed.
      *
      * @param callable(): mixed $callback
      * @return mixed The models (a TModel, or for a list of ids a list<TModel>), or what $callback returns
@@ -1558,9 +1564,10 @@ class Query
     /**
      * Whether the query selects any row, without counting: the adapter's EXISTS() over its SELECT, which
      * stops at the first row. A query of the builder leaves its order, its limit and its offset out, as the
-     * legacy exists does (spec §5.3), so a limit of 0 does not make it false, and without a select of its
-     * own it selects 1 (see QueryCompiler::compile_exists()). The statement that ran is left in
-     * Table::$last_sql.
+     * legacy exists does (spec §5.3), so a limit of 0 does not make it false. It selects 1 there, as the
+     * legacy exists does, unless it has a HAVING, which may name an alias of its select: so a select of an
+     * aggregate, one row even when no row matches, does not make it true (see
+     * QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
      *
      * Model::exists() is the legacy exists, which Author::exists(...) calls.
      */
@@ -1589,7 +1596,11 @@ class Query
      * COUNT(column) counts. A query neither grouped, distinct nor windowed is counted in place, its order
      * left out. Any other is counted as a subquery, SELECT COUNT(*) FROM (…) AS t, so that a grouped query
      * counts its groups, a distinct one its distinct rows, and limit() and offset() the rows of their
-     * window (see QueryCompiler::compile_count()). The statement that ran is left in Table::$last_sql.
+     * window. Counting rows, the subquery selects 1, unless DISTINCT or a HAVING needs the query's select
+     * (see QueryCompiler::compile_count()). The statement that ran is left in Table::$last_sql.
+     *
+     * On a grouped query, a counted $column must be grouped, or be what the query's own select gives:
+     * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY.
      *
      * <code>
      * $parents = Author::group_by('parent_author_id')->count();

@@ -274,7 +274,7 @@ class QueryJoinTest extends DatabaseTest
 
     // Spec §3.2: the values of a SELECT come in the order of its clauses, the joins' after those of the select
     // and of the FROM and before those of the WHERE, whatever the order of the calls; and they are the values
-    // get() and exists() send
+    // get() sends, and exists() but for the select's (spec §5.3: it selects 1)
     public function test_the_values_of_the_joins_come_between_those_of_the_from_and_of_the_where(): void
     {
         $query = Book::new_query()
@@ -299,7 +299,7 @@ class QueryJoinTest extends DatabaseTest
         });
 
         $this->assert_true($exists);
-        $this->assert_same([$query->get_bindings()], array_column($statements, 'values'));
+        $this->assert_same([[0, 100, 1]], array_column($statements, 'values'));
 
         $sql = new SQLBuilder($this->conn, 'authors');
         $sql->where('name = ?', 'where')->join_values(['join'])->from_values(['from'])->select_values(['select'])->select('? AS a');

@@ -64,6 +64,20 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same([1, 2, 3, 4], $ids);
     }
 
+    // SQLite reads an alias of the select in a HAVING, so count() and exists() keep the select of a query that has a
+    // HAVING (spec §5.3). Parent 2 is the one of more than one author.
+    public function test_a_having_on_an_alias_of_the_select_is_counted_and_exists(): void
+    {
+        $parents = fn(int $authors): ActiveRecord\Query => Author::select('parent_author_id')->select_raw('COUNT(*) AS n')->group_by('parent_author_id')->having('n', '>', $authors);
+
+        $this->assert_same(1, count($parents(1)->get()));
+        $this->assert_same(1, $parents(1)->count());
+        $this->assert_same(0, $parents(2)->count());
+        $this->assert_true($parents(1)->exists());
+        $this->assert_false($parents(2)->exists());
+        $this->assert_true($parents(2)->doesnt_exist());
+    }
+
     // SQLite needs a LIMIT before an OFFSET: an offset alone goes with an unbounded one, LIMIT -1 (#130)
     public function test_the_window_is_limit_with_an_offset_before_the_count(): void
     {
