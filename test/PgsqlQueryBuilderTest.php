@@ -64,4 +64,40 @@ class PgsqlQueryBuilderTest extends DatabaseTest
             $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecord\ActiveRecordException::class);
         }
     }
+
+    // Spec §5.2: in_random_order() is RANDOM() on Postgres, through the adapter's random_function()
+    public function test_in_random_order_is_random(): void
+    {
+        $this->assert_same('RANDOM()', $this->conn->random_function());
+        $this->assert_same('SELECT * FROM "authors" ORDER BY RANDOM()', Author::in_random_order()->to_sql());
+        $this->assert_same('SELECT * FROM "authors" ORDER BY "name" ASC, RANDOM()', Author::order_by('name')->in_random_order()->to_sql());
+        $this->assert_same([1, 2, 3, 4], array_map(fn(Author $author): int => $author->author_id, Author::order_by('author_id')->get()));
+
+        $ids = array_map(fn(Author $author): int => $author->author_id, Author::in_random_order()->get());
+        sort($ids);
+        $this->assert_same([1, 2, 3, 4], $ids);
+    }
+
+    // The conditions of a HAVING are those of a WHERE (spec §3.2): the LIKE operators compare the column as text,
+    // and no other operator does
+    public function test_the_like_operators_of_having_compare_the_column_as_text(): void
+    {
+        foreach (['like', 'not like', 'ilike', 'not ilike'] as $operator) {
+            $this->assert_same('SELECT * FROM "authors" GROUP BY "name" HAVING "name"::text ' . strtoupper($operator) . ' ?', Author::group_by('name')->having('name', $operator, 'x')->to_sql());
+        }
+
+        $this->assert_same('SELECT * FROM "authors" GROUP BY "name" HAVING "name" = ? OR "name"::text ILIKE ?', Author::group_by('name')->having('name', 'x')->or_having('name', 'ilike', 'x')->to_sql());
+        $this->assert_same(['Tito'], array_map(fn(Author $author): string => $author->name, Author::select('name')->group_by('name')->having('name', 'ilike', 't%')->get()));
+    }
+
+    // Postgres writes its window as LIMIT n OFFSET m, with an offset alone as OFFSET m (#130)
+    public function test_the_window_is_limit_and_offset(): void
+    {
+        $this->assert_same('SELECT * FROM "authors" LIMIT 2 OFFSET 0', Author::limit(2)->to_sql());
+        $this->assert_same('SELECT * FROM "authors" LIMIT 2 OFFSET 1', Author::limit(2)->offset(1)->to_sql());
+        $this->assert_same('SELECT * FROM "authors" OFFSET 1', Author::offset(1)->to_sql());
+        $this->assert_same('SELECT * FROM "authors" LIMIT 2 OFFSET 2', Author::for_page(2, 2)->to_sql());
+        $this->assert_same('SELECT * FROM "authors" LIMIT 0 OFFSET 0', Author::limit(0)->to_sql());
+        $this->assert_same('SELECT * FROM "authors" LIMIT 1 OFFSET 9223372036854775806', Author::for_page(PHP_INT_MAX, 1)->to_sql());
+    }
 }

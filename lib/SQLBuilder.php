@@ -46,6 +46,15 @@ class SQLBuilder
     /** @var list<mixed> */
     private array $join_values = [];
 
+    /** @var list<mixed> */
+    private array $group_values = [];
+
+    /** @var list<mixed> */
+    private array $having_values = [];
+
+    /** @var list<mixed> */
+    private array $order_values = [];
+
     private ?string $joins = null;
     private ?string $order = null;
     private ?int $limit = null;
@@ -165,15 +174,24 @@ class SQLBuilder
 
     /**
      * The bind values of a SELECT, in the order of its clauses: those of the select (see
-     * select_values()), of the FROM (see from_values()), of the joins (see join_values()), then of
-     * the WHERE (see get_where_values()), whatever the order of the calls that gave them. A value
-     * that is an array gives its elements in its place.
+     * select_values()), of the FROM (see from_values()), of the joins (see join_values()), of the
+     * WHERE (see get_where_values()), of the GROUP BY (see group_values()), of the HAVING (see
+     * having_values()), then of the ORDER BY (see order_values()), whatever the order of the calls
+     * that gave them. A value that is an array gives its elements in its place.
      *
      * @return list<mixed>
      */
     public function select_bind_values(): array
     {
-        return array_flatten([...$this->select_values, ...$this->from_values, ...$this->join_values, ...$this->where_values]);
+        return array_flatten([
+            ...$this->select_values,
+            ...$this->from_values,
+            ...$this->join_values,
+            ...$this->where_values,
+            ...$this->group_values,
+            ...$this->having_values,
+            ...$this->order_values,
+        ]);
     }
 
     /**
@@ -235,6 +253,19 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the ORDER BY (see order()): the last values of the statement
+     * (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function order_values(array $values): static
+    {
+        $this->order_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * The columns that identify a row of the table (its primary key), unquoted. An adapter
      * without LIMIT/ORDER BY on UPDATE and DELETE (Postgres) picks the rows of a limited
      * UPDATE/DELETE by these columns in a subquery; without any it uses the adapter's own
@@ -260,12 +291,38 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the GROUP BY (see group()): they follow those of the WHERE (see
+     * select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function group_values(array $values): static
+    {
+        $this->group_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $having
      * @return $this
      */
     public function having($having)
     {
         $this->having = $having;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the HAVING (see having()): they follow those of the GROUP BY (see
+     * select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function having_values(array $values): static
+    {
+        $this->having_values = array_values($values);
         return $this;
     }
 

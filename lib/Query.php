@@ -88,6 +88,27 @@ class Query
         'cross_join',
         'joins',
         'left_joins',
+        'order_by',
+        'order_by_desc',
+        'order_by_raw',
+        'latest',
+        'oldest',
+        'reorder',
+        'in_random_order',
+        'group_by',
+        'group_by_raw',
+        'having',
+        'or_having',
+        'having_raw',
+        'or_having_raw',
+        'having_null',
+        'having_not_null',
+        'having_between',
+        'limit',
+        'take',
+        'offset',
+        'skip',
+        'for_page',
         'to_sql',
         'get_bindings',
     ];
@@ -924,6 +945,358 @@ class Query
     }
 
     /**
+     * Orders the rows by a column, after the orders the query already has: ascending, or with $direction
+     * descending. The direction is asc or desc in any case, and anything else is refused. The column is named by
+     * the one rule of the builder (see QueryCompiler::column()): an alias or an attribute name of the model names
+     * its column, and with joins a column of the model gets its table. It is one name, never SQL: to order by an
+     * expression, write it with order_by_raw().
+     *
+     * <code>
+     * Author::order_by('name')->order_by('author_id', 'desc')->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException at the call, and the query is left as it was, for a direction other than asc
+     *   and desc, or an empty column name
+     */
+    public function order_by(string $column, string $direction = 'asc'): static
+    {
+        return $this->add_order(__FUNCTION__, $column, $direction);
+    }
+
+    /**
+     * Orders the rows by a column, descending: order_by($column, 'desc').
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty column name, and the query is left as it was
+     */
+    public function order_by_desc(string $column): static
+    {
+        return $this->add_order(__FUNCTION__, $column, 'desc');
+    }
+
+    /**
+     * Orders the rows by an SQL expression, sent as written, with the values of its bind markers, among the other
+     * orders in the order of the calls. Unlike where_raw() and having_raw(), it does not spread a value that is a
+     * list over its marker, as select_raw() and from_raw() do not: write one marker for each value.
+     *
+     * <code>
+     * Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])->get();
+     * </code>
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function order_by_raw(string $sql, array $bindings = []): static
+    {
+        $this->state->orders[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
+
+        return $this;
+    }
+
+    /**
+     * Orders the rows by a column, the newest first: descending, by $column, which is created_at by default.
+     *
+     * <code>
+     * Author::latest()->limit(5)->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty column name, and the query is left as it was
+     */
+    public function latest(string $column = 'created_at'): static
+    {
+        return $this->add_order(__FUNCTION__, $column, 'desc');
+    }
+
+    /**
+     * Orders the rows by a column, the oldest first: ascending, by $column, which is created_at by default.
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty column name, and the query is left as it was
+     */
+    public function oldest(string $column = 'created_at'): static
+    {
+        return $this->add_order(__FUNCTION__, $column, 'asc');
+    }
+
+    /**
+     * Replaces every order the query has, those of order_by_raw() with their values and the random order
+     * included, by the order of $column and $direction as order_by() reads them. Without a column it only
+     * removes them. The orders added after it follow it.
+     *
+     * <code>
+     * Author::order_by('name')->reorder('author_id', 'desc')->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException as order_by() does, for a direction no column goes with too, and then no
+     *   order is removed
+     */
+    public function reorder(?string $column = null, string $direction = 'asc'): static
+    {
+        // read, and refused if need be, before any order is removed
+        $direction = $this->order_direction(__FUNCTION__, $direction);
+
+        $this->state->orders = null === $column ? [] : [$this->column_order(__FUNCTION__, $column, $direction)];
+
+        return $this;
+    }
+
+    /**
+     * Puts the rows in random order, after the orders the query already has: by the random function of the
+     * adapter, RAND() on MySQL and MariaDB, RANDOM() on Postgres and SQLite (see Connection::random_function()).
+     *
+     * <code>
+     * Author::in_random_order()->limit(1)->get();
+     * </code>
+     *
+     * @return $this
+     */
+    public function in_random_order(): static
+    {
+        $this->state->orders[] = ['type' => 'random'];
+
+        return $this;
+    }
+
+    /**
+     * Groups the rows by these columns, after the groups the query already has. Each is one name, read by the one
+     * rule of the builder (see QueryCompiler::column()), as order_by() reads its own: an expression is grouped by
+     * with group_by_raw(). Without a column it adds none.
+     *
+     * <code>
+     * Author::select('parent_author_id')->select_raw('COUNT(*) AS n')->group_by('parent_author_id')->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty column name, and then none of them is added
+     */
+    public function group_by(string ...$columns): static
+    {
+        $compiler = $this->compiler();
+        $groups = [];
+
+        foreach ($columns as $column) {
+            $compiler->refuse_empty_column_name($column, __FUNCTION__);
+            $groups[] = ['type' => 'column', 'column' => $column];
+        }
+
+        $this->state->groups = [...$this->state->groups, ...$groups];
+
+        return $this;
+    }
+
+    /**
+     * Groups the rows by an SQL expression, sent as written, with the values of its bind markers, after the groups
+     * the query already has. A value that is a list is not spread over its marker, as in order_by_raw(): write one
+     * marker for each value.
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function group_by_raw(string $sql, array $bindings = []): static
+    {
+        $this->state->groups[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
+
+        return $this;
+    }
+
+    /**
+     * Adds a condition to the HAVING, ANDed with the conditions before it: a column compared with a value by =,
+     * having('parent_author_id', 2), or by an operator, having('parent_author_id', '>', 1), as where() reads them.
+     * The condition is read and written as one of the WHERE is (see Conditions and ConditionCompiler), so the
+     * operators are the same, an unknown one is refused, null is compared with IS NULL and IS NOT NULL, and a value
+     * is prepared for its column. The column is named by the one rule of the builder: a name that is a column of
+     * the model is its real column, and any other, the alias of a selected expression, is quoted as written (MySQL,
+     * MariaDB and SQLite accept such an alias in a HAVING, Postgres does not). An aggregate is written with
+     * having_raw().
+     *
+     * <code>
+     * Author::select('parent_author_id')->group_by('parent_author_id')->having('parent_author_id', '>', 1)->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException at the call, and the query is left as it was, for an unknown operator, a null
+     *   compared by another operator than =, !=, <> and <=>, an array as the value, no value, or an empty column
+     *   name
+     */
+    public function having(string $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_havings([$this->conditions()->comparison(__FUNCTION__, $column, $operator, $value, func_num_args() - 1, boolean: 'AND')]);
+    }
+
+    /**
+     * Adds a condition to the HAVING as having() does, ORed with the conditions before it.
+     *
+     * @return $this
+     * @throws ActiveRecordException as having() does
+     */
+    public function or_having(string $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->add_havings([$this->conditions()->comparison(__FUNCTION__, $column, $operator, $value, func_num_args() - 1, boolean: 'OR')]);
+    }
+
+    /**
+     * Adds a condition written in SQL to the HAVING, ANDed, sent as written, in parentheses when another condition
+     * is beside it, with the values of its bind markers. As in where_raw(), a value that is a list is spread over
+     * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?).
+     *
+     * <code>
+     * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();
+     * </code>
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function having_raw(string $sql, array $bindings = []): static
+    {
+        return $this->add_havings([$this->conditions()->raw($sql, $bindings, boolean: 'AND')]);
+    }
+
+    /**
+     * Adds a condition written in SQL to the HAVING as having_raw() does, ORed.
+     *
+     * @param array<mixed> $bindings
+     * @return $this
+     */
+    public function or_having_raw(string $sql, array $bindings = []): static
+    {
+        return $this->add_havings([$this->conditions()->raw($sql, $bindings, boolean: 'OR')]);
+    }
+
+    /**
+     * Adds column IS NULL to the HAVING, ANDed.
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty column name
+     */
+    public function having_null(string $column): static
+    {
+        return $this->add_havings($this->conditions()->nulls(__FUNCTION__, $column, boolean: 'AND', not: false));
+    }
+
+    /**
+     * Adds column IS NOT NULL to the HAVING, ANDed.
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty column name
+     */
+    public function having_not_null(string $column): static
+    {
+        return $this->add_havings($this->conditions()->nulls(__FUNCTION__, $column, boolean: 'AND', not: true));
+    }
+
+    /**
+     * Adds column BETWEEN ? AND ? to the HAVING, ANDed, with the two values of the list, whose keys are not read.
+     *
+     * @param array<mixed> $values
+     * @return $this
+     * @throws ActiveRecordException for an empty column name, or a list that does not hold two values, or holds
+     *   an array
+     */
+    public function having_between(string $column, array $values): static
+    {
+        return $this->add_havings([$this->conditions()->between(__FUNCTION__, $column, $values, boolean: 'AND', not: false)]);
+    }
+
+    /**
+     * Limits the rows to the first $value, in the way of the legacy 'limit' option (see SQLBuilder::limit()): 0 is
+     * LIMIT 0 and finds nothing (#34). A later limit() or take(), or for_page(), replaces it.
+     *
+     * <code>
+     * Author::order_by('name')->limit(10)->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException for a negative value, and the query is left as it was
+     */
+    public function limit(int $value): static
+    {
+        $this->state->limit = $this->window_value(__FUNCTION__, $value);
+
+        return $this;
+    }
+
+    /**
+     * Limits the rows to the first $value, as limit() does: Eloquent's other name for it.
+     *
+     * @return $this
+     * @throws ActiveRecordException as limit() does
+     */
+    public function take(int $value): static
+    {
+        $this->state->limit = $this->window_value(__FUNCTION__, $value);
+
+        return $this;
+    }
+
+    /**
+     * Skips the first $value rows, in the way of the legacy 'offset' option (see SQLBuilder::offset()): without a
+     * limit, every row after them is selected (#130). A later offset() or skip(), or for_page(), replaces it.
+     *
+     * <code>
+     * Author::order_by('name')->offset(10)->limit(10)->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException for a negative value, and the query is left as it was
+     */
+    public function offset(int $value): static
+    {
+        $this->state->offset = $this->window_value(__FUNCTION__, $value);
+
+        return $this;
+    }
+
+    /**
+     * Skips the first $value rows, as offset() does: Eloquent's other name for it.
+     *
+     * @return $this
+     * @throws ActiveRecordException as offset() does
+     */
+    public function skip(int $value): static
+    {
+        $this->state->offset = $this->window_value(__FUNCTION__, $value);
+
+        return $this;
+    }
+
+    /**
+     * Selects the rows of page $page (the first is 1) of pages of $per_page rows: it skips the rows of the pages
+     * before it and limits the rows to one page, replacing the offset and the limit the query has. A page of 0
+     * rows selects none. Without an order, the rows of the pages are the database's to choose.
+     *
+     * <code>
+     * Author::order_by('author_id')->for_page(2, 25)->get();
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException at the call, and the query is left as it was, for a page before the first, a
+     *   negative $per_page, or a page whose offset (the rows before it) is beyond the largest integer
+     */
+    public function for_page(int $page, int $per_page = 15): static
+    {
+        if ($page < 1) {
+            throw new ActiveRecordException(sprintf('%s() needs a page >= 1, not %d, on %s', __FUNCTION__, $page, $this->model_class));
+        }
+
+        if ($per_page < 0) {
+            throw new ActiveRecordException(sprintf('%s() needs a per_page >= 0, not %d, on %s', __FUNCTION__, $per_page, $this->model_class));
+        }
+
+        // the product would turn into a float beyond the largest integer
+        if ($per_page > 0 && $page - 1 > intdiv(PHP_INT_MAX, $per_page)) {
+            throw new ActiveRecordException(sprintf('%s() cannot start page %d of %d rows: the offset passes the largest integer, on %s', __FUNCTION__, $page, $per_page, $this->model_class));
+        }
+
+        $this->state->offset = ($page - 1) * $per_page;
+        $this->state->limit = $per_page;
+
+        return $this;
+    }
+
+    /**
      * The SELECT the query sends, with its bind markers (see get_bindings()).
      */
     public function to_sql(): string
@@ -933,9 +1306,10 @@ class Query
 
     /**
      * The values the query binds to the markers of its SELECT, in the order of the clauses: those of the
-     * select, of the FROM, of the joins, then of the WHERE. A value compared with a column is prepared for
-     * it (a DateTime in the format of the column's type); the others, those of the *_raw() methods, are as
-     * they were given, and the query prepares them when it runs (a DateTime is sent as a date and time).
+     * select, of the FROM, of the joins, of the WHERE, of the GROUP BY, of the HAVING, then of the ORDER BY. A
+     * value compared with a column is prepared for it (a DateTime in the format of the column's type); the
+     * others, those of the *_raw() methods, are as they were given, and the query prepares them when it runs (a
+     * DateTime is sent as a date and time). The limit and the offset are written in the statement, not bound.
      *
      * @return list<mixed>
      */
@@ -1392,6 +1766,76 @@ class Query
         }
 
         return $list;
+    }
+
+    /**
+     * Adds an order by a column to the ORDER BY, after those it holds, for a call of $method.
+     *
+     * @return $this
+     * @throws ActiveRecordException for a direction other than asc and desc, or an empty column name
+     */
+    private function add_order(string $method, string $column, string $direction): static
+    {
+        $this->state->orders[] = $this->column_order($method, $column, $this->order_direction($method, $direction));
+
+        return $this;
+    }
+
+    /**
+     * The order by a column of a call of $method, in the direction $direction (see order_direction()): the name
+     * is read by column() when the statement is compiled.
+     *
+     * @param 'ASC'|'DESC' $direction
+     * @return array{type: 'column', column: string, direction: 'ASC'|'DESC'}
+     * @throws ActiveRecordException for an empty column name
+     */
+    private function column_order(string $method, string $column, string $direction): array
+    {
+        $this->compiler()->refuse_empty_column_name($column, $method);
+
+        return ['type' => 'column', 'column' => $column, 'direction' => $direction];
+    }
+
+    /**
+     * The direction of an order given to $method, in upper case: asc or desc, in any case.
+     *
+     * @return 'ASC'|'DESC'
+     * @throws ActiveRecordException for any other
+     */
+    private function order_direction(string $method, string $direction): string
+    {
+        return match (strtolower($direction)) {
+            'asc' => 'ASC',
+            'desc' => 'DESC',
+            default => throw new ActiveRecordException(sprintf("Invalid order direction '%s' in %s() on %s", $direction, $method, $this->model_class)),
+        };
+    }
+
+    /**
+     * Adds conditions to the HAVING, after those it holds.
+     *
+     * @param list<Where> $havings
+     * @return $this
+     */
+    private function add_havings(array $havings): static
+    {
+        $this->state->havings = [...$this->state->havings, ...$havings];
+
+        return $this;
+    }
+
+    /**
+     * The number given to $method, limit() or offset() or one of their other names: at least 0.
+     *
+     * @throws ActiveRecordException for a negative one
+     */
+    private function window_value(string $method, int $value): int
+    {
+        if ($value < 0) {
+            throw new ActiveRecordException(sprintf('%s() must be >= 0, not %d, on %s', $method, $value, $this->model_class));
+        }
+
+        return $value;
     }
 
     /**

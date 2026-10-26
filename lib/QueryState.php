@@ -31,6 +31,8 @@ namespace ActiveRecord;
  * @phpstan-type WhereGroup array{type: 'group', boolean: 'AND'|'OR', not: bool, group: QueryState}
  * @phpstan-type Where WhereBasic|WhereColumn|WhereRaw|WhereIn|WhereNull|WhereBetween|WhereBetweenColumns|WhereLike|WhereHash|WhereGroup
  * @phpstan-type Join array{type: 'INNER'|'LEFT'|'RIGHT'|'CROSS', table: string, alias: string|null, wheres: list<Where>}
+ * @phpstan-type OrderBy array{type: 'column', column: string, direction: 'ASC'|'DESC'}|array{type: 'raw', sql: string, bindings: list<mixed>}|array{type: 'random'}
+ * @phpstan-type GroupBy array{type: 'column', column: string}|array{type: 'raw', sql: string, bindings: list<mixed>}
  */
 final class QueryState
 {
@@ -99,4 +101,44 @@ final class QueryState
      * @var list<Where>
      */
     public array $wheres = [];
+
+    /**
+     * The builder's GROUP BY, in order (Query::group_by() and group_by_raw()): a column as it was named,
+     * which QueryCompiler::column() reads when the statement is compiled; or SQL with the values of its
+     * bind markers.
+     *
+     * @var list<GroupBy>
+     */
+    public array $groups = [];
+
+    /**
+     * The conditions of the builder's HAVING, in order (Query::having() and its family): the shapes of
+     * $wheres, as Conditions reads them, each joined to the one before it by its boolean (that of the
+     * first is dropped). They are rendered as the conditions of the WHERE are, by the same rule for the
+     * names of their columns.
+     *
+     * @var list<Where>
+     */
+    public array $havings = [];
+
+    /**
+     * The builder's ORDER BY, in order (Query::order_by() and its family): a column as it was named, which
+     * QueryCompiler::column() reads when the statement is compiled, with its direction; SQL with the values
+     * of its bind markers; or the random order of the adapter (Connection::random_function()).
+     *
+     * @var list<OrderBy>
+     */
+    public array $orders = [];
+
+    /**
+     * The most rows the builder selects (Query::limit(), Query::for_page()), or null for no limit. Zero is a
+     * limit: it selects none (#34).
+     */
+    public ?int $limit = null;
+
+    /**
+     * The rows the builder skips (Query::offset(), Query::for_page()), or null when none was given. Zero is
+     * a value like any other: it is compiled as the legacy 'offset' option compiles it.
+     */
+    public ?int $offset = null;
 }

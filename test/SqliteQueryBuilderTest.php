@@ -51,4 +51,27 @@ class SqliteQueryBuilderTest extends DatabaseTest
             $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecord\ActiveRecordException::class);
         }
     }
+
+    // Spec §5.2: in_random_order() is RANDOM() on SQLite, through the adapter's random_function()
+    public function test_in_random_order_is_random(): void
+    {
+        $this->assert_same('RANDOM()', $this->conn->random_function());
+        $this->assert_same('SELECT * FROM `authors` ORDER BY RANDOM()', Author::in_random_order()->to_sql());
+        $this->assert_same('SELECT * FROM `authors` ORDER BY `name` ASC, RANDOM()', Author::order_by('name')->in_random_order()->to_sql());
+
+        $ids = array_map(fn(Author $author): int => $author->author_id, Author::in_random_order()->get());
+        sort($ids);
+        $this->assert_same([1, 2, 3, 4], $ids);
+    }
+
+    // SQLite needs a LIMIT before an OFFSET: an offset alone goes with an unbounded one, LIMIT -1 (#130)
+    public function test_the_window_is_limit_with_an_offset_before_the_count(): void
+    {
+        $this->assert_same('SELECT * FROM `authors` LIMIT 2', Author::limit(2)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 1,2', Author::limit(2)->offset(1)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT -1 OFFSET 1', Author::offset(1)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 2,2', Author::for_page(2, 2)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 0', Author::limit(0)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 9223372036854775806,1', Author::for_page(PHP_INT_MAX, 1)->to_sql());
+    }
 }

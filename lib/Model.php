@@ -126,6 +126,27 @@ use Closure;
  * @method static Query<static> cross_join(string $table) A new query on this class with this CROSS JOIN
  * @method static Query<static> joins(string|array<mixed> $relationships_or_sql) A new query on this class joined to these relationships, or with these JOIN fragments
  * @method static Query<static> left_joins(string|array<mixed> $relationships) A new query on this class left joined to these relationships
+ * @method static Query<static> order_by(string $column, string $direction = 'asc') A new query on this class ordered by this column
+ * @method static Query<static> order_by_desc(string $column) A new query on this class ordered by this column, descending
+ * @method static Query<static> order_by_raw(string $sql, array<mixed> $bindings = []) A new query on this class ordered by this SQL expression
+ * @method static Query<static> latest(string $column = 'created_at') A new query on this class with the newest rows first
+ * @method static Query<static> oldest(string $column = 'created_at') A new query on this class with the oldest rows first
+ * @method static Query<static> reorder(?string $column = null, string $direction = 'asc') A new query on this class ordered by this column alone
+ * @method static Query<static> in_random_order() A new query on this class with its rows in random order
+ * @method static Query<static> group_by(string ...$columns) A new query on this class grouped by these columns
+ * @method static Query<static> group_by_raw(string $sql, array<mixed> $bindings = []) A new query on this class grouped by this SQL expression
+ * @method static Query<static> having(string $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition in its HAVING
+ * @method static Query<static> or_having(string $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition in its HAVING
+ * @method static Query<static> having_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition in its HAVING
+ * @method static Query<static> or_having_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition in its HAVING
+ * @method static Query<static> having_null(string $column) A new query on this class with this column IS NULL in its HAVING
+ * @method static Query<static> having_not_null(string $column) A new query on this class with this column IS NOT NULL in its HAVING
+ * @method static Query<static> having_between(string $column, array<mixed> $values) A new query on this class with column BETWEEN two values in its HAVING
+ * @method static Query<static> limit(int $value) A new query on this class limited to this many rows
+ * @method static Query<static> take(int $value) A new query on this class limited to this many rows
+ * @method static Query<static> offset(int $value) A new query on this class that skips this many rows
+ * @method static Query<static> skip(int $value) A new query on this class that skips this many rows
+ * @method static Query<static> for_page(int $page, int $per_page = 15) A new query on this class for this page of rows
  * @method static string to_sql() The SELECT of a new query on this class
  * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
  * @phpstan-import-type Relationship from AbstractRelationship

@@ -710,6 +710,16 @@ abstract class Connection
     }
 
     /**
+     * The SQL function that returns a random number, by which an ORDER BY puts the rows in random order
+     * (Query::in_random_order()): RANDOM() by default, which Postgres and SQLite have. MySQL and MariaDB
+     * name it RAND().
+     */
+    public function random_function(): string
+    {
+        return 'RANDOM()';
+    }
+
+    /**
      * Return a date time formatted into the database's date format.
      *
      * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)

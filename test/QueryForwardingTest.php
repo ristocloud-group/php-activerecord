@@ -139,9 +139,19 @@ class QueryForwardingTest extends DatabaseTest
         $this->assert_exception_message_contains('Call to undefined method: frobnicate', fn() => Author::frobnicate(), ActiveRecord\ActiveRecordException::class);
     }
 
+    // latest() is a builder method (Query::latest()), so Author::latest() is forwarded to a new query; a
+    // class that defines a static latest() of its own is called by PHP itself, and __callStatic() never sees it
     public function test_a_subclass_method_shadows_a_forwarded_one(): void
     {
+        $this->assert_true(in_array('latest', Query::FORWARDABLE, true));
+        $this->assert_true(method_exists(ShadowingAuthor::class, 'latest'));
+        $this->assert_false(method_exists(Author::class, 'latest'));
+
+        $this->assert_instance_of(Query::class, Author::latest());
+        $this->assert_sql_has('ORDER BY created_at DESC', Author::latest()->to_sql());
         $this->assert_same('own', ShadowingAuthor::latest());
+        // the builder method is still there, through the entry that no class defines
+        $this->assert_sql_has('ORDER BY created_at DESC', ShadowingAuthor::new_query()->latest()->to_sql());
     }
 
     public function test_forwardable_matches_the_method_tags(): void

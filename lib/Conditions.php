@@ -345,7 +345,10 @@ final class Conditions
         }
 
         if (is_array($value)) {
-            throw new ActiveRecordException(sprintf("An array is no value for '%s' in %s() on %s: a list of values goes to where_in() or where_not_in()", $given, $method, $this->model_class));
+            // a HAVING has no IN of its own: it takes a list of values in an expression (having_raw() spreads it)
+            $hint = str_contains($method, 'having') ? 'having_raw()' : 'where_in() or where_not_in()';
+
+            throw new ActiveRecordException(sprintf("An array is no value for '%s' in %s() on %s: a list of values goes to %s", $given, $method, $this->model_class, $hint));
         }
 
         return [$operator, $value];

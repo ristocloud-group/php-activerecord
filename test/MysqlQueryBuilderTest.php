@@ -77,4 +77,26 @@ class MysqlQueryBuilderTest extends DatabaseTest
             $this->assert_exception_message_contains("Unknown operator '$operator' in where() on Author", fn() => Author::where('name', $operator, 'x'), ActiveRecord\ActiveRecordException::class);
         }
     }
+
+    // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the
+    // order is an order like any other, and the database runs it
+    public function test_in_random_order_is_rand(): void
+    {
+        $this->assert_same('RAND()', $this->conn->random_function());
+        $this->assert_same('SELECT * FROM `authors` ORDER BY RAND()', Author::in_random_order()->to_sql());
+        $this->assert_same('SELECT * FROM `authors` ORDER BY `name` ASC, RAND()', Author::order_by('name')->in_random_order()->to_sql());
+        $this->assert_same([1, 2, 3, 4], $this->ids(Author::in_random_order()->get()));
+    }
+
+    // MySQL has no OFFSET without LIMIT: the window of the builder is the adapter's own, an offset alone going with
+    // the largest row count (#130), and the largest integers are exact in it
+    public function test_the_window_is_limit_with_an_offset_before_the_count(): void
+    {
+        $this->assert_same('SELECT * FROM `authors` LIMIT 2', Author::limit(2)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 1,2', Author::limit(2)->offset(1)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 1, 18446744073709551615', Author::offset(1)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 2,2', Author::for_page(2, 2)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 0', Author::limit(0)->to_sql());
+        $this->assert_same('SELECT * FROM `authors` LIMIT 9223372036854775806,1', Author::for_page(PHP_INT_MAX, 1)->to_sql());
+    }
 }

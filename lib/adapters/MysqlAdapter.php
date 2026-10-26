@@ -162,6 +162,14 @@ class MysqlAdapter extends Connection
     }
 
     /**
+     * MySQL and MariaDB name the function that returns a random number RAND().
+     */
+    public function random_function(): string
+    {
+        return 'RAND()';
+    }
+
+    /**
      * @return array<string, string|array{name: string, length?: int}>
      */
     public function native_database_types()

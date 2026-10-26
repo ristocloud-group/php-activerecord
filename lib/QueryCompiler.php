@@ -103,10 +103,10 @@ final class QueryCompiler
     }
 
     /**
-     * Refuses an empty column name given to a condition of the builder (see Conditions), as select() and
-     * from() refuse theirs. The name itself is read by column() when the statement is compiled.
+     * Refuses an empty column name given to a condition or an order of the builder (see Conditions), as
+     * select() and from() refuse theirs. The name itself is read by column() when the statement is compiled.
      *
-     * @internal Serves Conditions; not a supported API.
+     * @internal Serves Conditions and Query; not a supported API.
      * @param string $method The builder method the name was given to, for the message of the exception
      * @throws ActiveRecordException for an empty name
      */
@@ -310,7 +310,8 @@ final class QueryCompiler
 
     /**
      * The SELECT of the builder's clauses: what it selects, else the default select, from the model's
-     * table or the FROM that from() or from_raw() gives, with the joins and the WHERE.
+     * table or the FROM that from() or from_raw() gives, with the joins, the WHERE, the GROUP BY, the HAVING,
+     * the ORDER BY and the window (LIMIT and OFFSET).
      */
     private function compile_clauses(QueryState $state): SQLBuilder
     {
@@ -346,7 +347,89 @@ final class QueryCompiler
             $sql->where_condition($where['sql'], $where['values']);
         }
 
+        $group = $this->group_clause($state);
+
+        if (null !== $group) {
+            $sql->group($group['sql']);
+            $sql->group_values($group['values']);
+        }
+
+        // rendered as the conditions of the WHERE are, by the same rules
+        if ([] !== $state->havings) {
+            $having = $this->conditions($state)->compile($state->havings);
+            $sql->having($having['sql']);
+            $sql->having_values($having['values']);
+        }
+
+        $order = $this->order_clause($state);
+
+        if (null !== $order) {
+            $sql->order($order['sql']);
+            $sql->order_values($order['values']);
+        }
+
+        // the window goes through the calls that the legacy 'limit' and 'offset' options make (see
+        // compile_legacy()), so that an offset without a limit (#130) and a limit of 0 (#34) are the same there
+        if (null !== $state->limit) {
+            $sql->limit($state->limit);
+        }
+
+        if (null !== $state->offset) {
+            $sql->offset($state->offset);
+        }
+
         return $sql;
+    }
+
+    /**
+     * The GROUP BY of the builder's groups, without the keywords, and the values of its bind markers in order;
+     * null when it has none. A column is named by the one rule (see column()), and SQL written by hand is sent
+     * as it is.
+     *
+     * @return array{sql: string, values: list<mixed>}|null
+     */
+    private function group_clause(QueryState $state): ?array
+    {
+        $sql = [];
+        $values = [];
+
+        foreach ($state->groups as $group) {
+            if ('raw' === $group['type']) {
+                $sql[] = $group['sql'];
+                $values = [...$values, ...$group['bindings']];
+            } else {
+                $sql[] = $this->column($group['column'], $state);
+            }
+        }
+
+        return [] === $sql ? null : ['sql' => implode(', ', $sql), 'values' => $values];
+    }
+
+    /**
+     * The ORDER BY of the builder's orders, without the keywords, and the values of its bind markers in order;
+     * null when it has none. A column is named by the one rule (see column()) and followed by its direction,
+     * SQL written by hand is sent as it is, and the random order is the adapter's random function (see
+     * Connection::random_function()).
+     *
+     * @return array{sql: string, values: list<mixed>}|null
+     */
+    private function order_clause(QueryState $state): ?array
+    {
+        $sql = [];
+        $values = [];
+
+        foreach ($state->orders as $order) {
+            if ('raw' === $order['type']) {
+                $sql[] = $order['sql'];
+                $values = [...$values, ...$order['bindings']];
+            } elseif ('random' === $order['type']) {
+                $sql[] = $this->connection()->random_function();
+            } else {
+                $sql[] = $this->column($order['column'], $state) . ' ' . $order['direction'];
+            }
+        }
+
+        return [] === $sql ? null : ['sql' => implode(', ', $sql), 'values' => $values];
     }
 
     /**
