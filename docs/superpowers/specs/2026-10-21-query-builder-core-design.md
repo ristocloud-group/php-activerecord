@@ -310,7 +310,12 @@ Details settled while building the terminals (Task 15):
 
 - **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
 - **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
-- **`exists()`** drops order, limit and offset, and selects `1` when the query has no select of its own.
+- **`exists()`** drops order, limit and offset, and selects `1` unless the query has a HAVING, which may name a select
+  alias. An aggregate select such as `COUNT(*)` would otherwise make it true with no matching row. Eloquent has that
+  trap; this is a deliberate deviation.
+- **A wrapped `count()`** with no column selects `1` in the subquery unless the query has DISTINCT or a HAVING. On
+  MySQL/MariaDB the caller's select could hold two columns with the same name, and a derived table rejects that
+  (error 1060).
 - **`count($column)`** counts the column's non-null values. After `distinct()` with no select, it counts distinct rows.
 - **Qualified names.** `value()` / `pluck()` given a qualified name (`'authors.name'`) return the driver's value uncast, because casting needs a model column.
 - **`pluck($col, $key)` keys** are the driver's values. A `null` key becomes `''`, because PHP 8.5 deprecates null array keys.
