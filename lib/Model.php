@@ -120,6 +120,12 @@ use Closure;
  * @method static Query<static> or_where_none(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on no column
  * @method static Query<static> where_key(mixed $id) A new query on this class with this primary key, or these
  * @method static Query<static> where_key_not(mixed $id) A new query on this class without this primary key, or these
+ * @method static Query<static> join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null) A new query on this class with this INNER JOIN
+ * @method static Query<static> left_join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null) A new query on this class with this LEFT JOIN
+ * @method static Query<static> right_join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null) A new query on this class with this RIGHT JOIN
+ * @method static Query<static> cross_join(string $table) A new query on this class with this CROSS JOIN
+ * @method static Query<static> joins(string|array<mixed> $relationships_or_sql) A new query on this class joined to these relationships, or with these JOIN fragments
+ * @method static Query<static> left_joins(string|array<mixed> $relationships) A new query on this class left joined to these relationships
  * @method static string to_sql() The SELECT of a new query on this class
  * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
  * @phpstan-import-type Relationship from AbstractRelationship

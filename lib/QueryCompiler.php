@@ -318,7 +318,9 @@ final class QueryCompiler
         $sql->from_values($state->from_bindings);
 
         if ([] !== $state->joins) {
-            $sql->joins(implode(' ', $state->joins));
+            $joins = $this->joins_clause($state);
+            $sql->joins($joins['sql']);
+            $sql->join_values($joins['values']);
         }
 
         $columns = [];
@@ -345,6 +347,40 @@ final class QueryCompiler
         }
 
         return $sql;
+    }
+
+    /**
+     * The joins of the builder, in order, as SQL separated by spaces, and the values of their bind markers
+     * in order. A join held as SQL (relationships, a JOIN fragment) is sent as it is. A join of join() and
+     * its family is its type, JOIN, its table reference (see table_reference()), and the ON of its
+     * conditions, which name their columns by the one rule (see column()) and are rendered as those of the
+     * WHERE are; a CROSS join has no ON.
+     *
+     * @return array{sql: string, values: list<mixed>}
+     */
+    private function joins_clause(QueryState $state): array
+    {
+        $sql = [];
+        $values = [];
+
+        foreach ($state->joins as $join) {
+            if (is_string($join)) {
+                $sql[] = $join;
+                continue;
+            }
+
+            $clause = "{$join['type']} JOIN " . $this->table_reference($join['table'], $join['alias'], 'join')['sql'];
+
+            if ([] !== $join['wheres']) {
+                $on = $this->conditions($state)->compile($join['wheres']);
+                $clause .= " ON {$on['sql']}";
+                $values = [...$values, ...$on['values']];
+            }
+
+            $sql[] = $clause;
+        }
+
+        return ['sql' => implode(' ', $sql), 'values' => $values];
     }
 
     /**

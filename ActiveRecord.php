@@ -12,6 +12,7 @@ require __DIR__ . '/lib/QueryState.php';
 require __DIR__ . '/lib/QueryCompiler.php';
 require __DIR__ . '/lib/Conditions.php';
 require __DIR__ . '/lib/ConditionCompiler.php';
+require __DIR__ . '/lib/JoinClause.php';
 require __DIR__ . '/lib/Query.php';
 require __DIR__ . '/lib/Timestamps.php';
 require __DIR__ . '/lib/ConnectionManager.php';

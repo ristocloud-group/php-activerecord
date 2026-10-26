@@ -43,6 +43,9 @@ class SQLBuilder
     /** @var list<mixed> */
     private array $from_values = [];
 
+    /** @var list<mixed> */
+    private array $join_values = [];
+
     private ?string $joins = null;
     private ?string $order = null;
     private ?int $limit = null;
@@ -162,15 +165,15 @@ class SQLBuilder
 
     /**
      * The bind values of a SELECT, in the order of its clauses: those of the select (see
-     * select_values()), of the FROM (see from_values()), then of the WHERE (see get_where_values()),
-     * whatever the order of the calls that gave them. A value that is an array gives its elements in
-     * its place.
+     * select_values()), of the FROM (see from_values()), of the joins (see join_values()), then of
+     * the WHERE (see get_where_values()), whatever the order of the calls that gave them. A value
+     * that is an array gives its elements in its place.
      *
      * @return list<mixed>
      */
     public function select_bind_values(): array
     {
-        return array_flatten([...$this->select_values, ...$this->from_values, ...$this->where_values]);
+        return array_flatten([...$this->select_values, ...$this->from_values, ...$this->join_values, ...$this->where_values]);
     }
 
     /**
@@ -334,6 +337,19 @@ class SQLBuilder
     public function joins($joins)
     {
         $this->joins = $joins;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the joins (see joins()), those of their ON conditions in
+     * order: they follow those of the FROM (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function join_values(array $values): static
+    {
+        $this->join_values = array_values($values);
         return $this;
     }
 

@@ -409,22 +409,18 @@ class QueryWhereTest extends DatabaseTest
     // With joins too: the model's columns get its table, the joined tables' names stay as written (spec §6.2.4)
     public function test_with_joins_a_hash_is_rendered_as_a_legacy_conditions_hash(): void
     {
-        $joins = Book::table()->create_joins(['author']);
-
         foreach ([
             ['name' => 'Ancient Art of Main Tanking', 'authors.name' => 'Tito', 'parent_author_id' => 3],
             ['author_id' => [1, 2], 'secondary_author_id' => null, 'NAME' => 'x'],
         ] as $hash) {
             $legacy = Book::table()->options_to_sql(['joins' => ['author'], 'conditions' => $hash]);
-            $query = Book::where($hash);
-            $query->state()->joins[] = $joins;
+            $query = Book::where($hash)->joins('author');
 
             $this->assert_same($legacy->to_s(), $query->to_sql());
             $this->assert_same($legacy->get_where_values(), $query->get_bindings());
         }
 
-        $query = Book::where(['name' => 'Ancient Art of Main Tanking', 'authors.name' => 'Tito', 'parent_author_id' => 3]);
-        $query->state()->joins[] = $joins;
+        $query = Book::where(['name' => 'Ancient Art of Main Tanking', 'authors.name' => 'Tito', 'parent_author_id' => 3])->joins('author');
         $this->assert_same([1], $this->values($query->get(), 'book_id'));
     }
 
@@ -849,8 +845,8 @@ class QueryWhereTest extends DatabaseTest
             ->where_between('book_id', [1, 2])
             ->where_column('author_id', 'authors.author_id')
             ->where_like('name', 'ancient%')
-            ->where_key(1);
-        $query->state()->joins[] = $joins;
+            ->where_key(1)
+            ->joins('author');
 
         $like = $this->conn->like_condition($this->sql('`books`.`name`'), false, false);
         $this->assert_same(
@@ -864,8 +860,7 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same(['Ancient Art of Main Tanking', 'Tito', 3, 1, 2, 'ancient%', 1], $query->get_bindings());
         $this->assert_same([1], $this->values($query->get(), 'book_id'));
 
-        $query = Book::from('books', 'b')->where('name', 'Another Book');
-        $query->state()->joins[] = 'INNER JOIN authors ON(b.author_id = authors.author_id)';
+        $query = Book::from('books', 'b')->where('name', 'Another Book')->joins('INNER JOIN authors ON(b.author_id = authors.author_id)');
 
         $this->assert_same($this->sql('SELECT `b`.* FROM `books` AS `b` INNER JOIN authors ON(b.author_id = authors.author_id) WHERE `b`.`name` = ?'), $query->to_sql());
         $this->assert_same([2], $this->values($query->get(), 'book_id'));

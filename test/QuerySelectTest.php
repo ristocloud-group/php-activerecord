@@ -15,7 +15,7 @@ class QuerySelectTest extends DatabaseTest
 {
     /**
      * A join of the books to their authors, whose table has a name column too. The builder's join
-     * methods are not of this family: a test that needs joins records this one in the query's state.
+     * methods are not of this family: a test that needs joins gives this fragment to joins().
      */
     private const string JOIN_AUTHORS = 'INNER JOIN authors ON(books.author_id = authors.author_id)';
 
@@ -368,7 +368,7 @@ class QuerySelectTest extends DatabaseTest
         $query = Book::new_query();
         $this->assert_same('SELECT * FROM ' . $this->quoted('books'), $query->to_sql());
 
-        $query->state()->joins[] = self::JOIN_AUTHORS;
+        $query->joins(self::JOIN_AUTHORS);
         $this->assert_same('SELECT ' . $this->quoted('books') . '.* FROM ' . $this->quoted('books') . ' ' . self::JOIN_AUTHORS, $query->to_sql());
         $this->assert_same(['Ancient Art of Main Tanking', 'Another Book'], $this->sorted_values($query->get(), 'name'));
 
@@ -378,15 +378,13 @@ class QuerySelectTest extends DatabaseTest
 
     public function test_with_joins_the_default_select_reads_the_rows_by_the_name_the_from_gives_them(): void
     {
-        $query = Book::new_query()->from('books', 'b');
-        $query->state()->joins[] = 'INNER JOIN authors ON(b.author_id = authors.author_id)';
+        $query = Book::new_query()->from('books', 'b')->joins('INNER JOIN authors ON(b.author_id = authors.author_id)');
 
         $this->assert_same('SELECT ' . $this->quoted('b') . '.* FROM ' . $this->quoted('books') . ' AS ' . $this->quoted('b') . ' INNER JOIN authors ON(b.author_id = authors.author_id)', $query->to_sql());
         $this->assert_same(['Ancient Art of Main Tanking', 'Another Book'], $this->sorted_values($query->get(), 'name'));
 
         // a raw FROM: the model's table, as the legacy 'from' option selects it
-        $query = Book::new_query()->from_raw('(SELECT * FROM books WHERE book_id > ?) books', [1]);
-        $query->state()->joins[] = self::JOIN_AUTHORS;
+        $query = Book::new_query()->from_raw('(SELECT * FROM books WHERE book_id > ?) books', [1])->joins(self::JOIN_AUTHORS);
 
         $this->assert_same('SELECT ' . $this->quoted('books') . '.* FROM (SELECT * FROM books WHERE book_id > ?) books ' . self::JOIN_AUTHORS, $query->to_sql());
         $this->assert_same(['Another Book'], $this->sorted_values($query->get(), 'name'));
@@ -395,8 +393,7 @@ class QuerySelectTest extends DatabaseTest
     // Spec §5.1 rule 2 at work: the authors have a name too, which the books' would be ambiguous with
     public function test_with_joins_the_selected_columns_of_the_model_are_never_ambiguous(): void
     {
-        $query = Book::new_query()->select('book_id', 'name', 'authors.name as author_name');
-        $query->state()->joins[] = self::JOIN_AUTHORS;
+        $query = Book::new_query()->select('book_id', 'name', 'authors.name as author_name')->joins(self::JOIN_AUTHORS);
 
         $this->assert_same(
             'SELECT ' . $this->quoted('books', 'book_id') . ', ' . $this->quoted('books', 'name') . ', ' . $this->quoted('authors', 'name') . ' AS ' . $this->quoted('author_name')
@@ -553,9 +550,9 @@ class QuerySelectTest extends DatabaseTest
             fn(Query $query) => $query->distinct(),
             fn(Query $query) => $query->from('authors', 'a'),
             fn(Query $query) => $query->from_raw('authors a'),
-            function (Query $query): void {
-                $query->state()->joins[] = 'INNER JOIN books ON(books.author_id = authors.author_id)';
-            },
+            fn(Query $query) => $query->joins('INNER JOIN books ON(books.author_id = authors.author_id)'),
+            fn(Query $query) => $query->joins('books'),
+            fn(Query $query) => $query->join('books', 'books.author_id', '=', 'authors.author_id'),
         ] as $clause) {
             $query = $legacy();
             $clause($query);

@@ -30,6 +30,7 @@ namespace ActiveRecord;
  * @phpstan-type WhereHash array{type: 'hash', boolean: 'AND'|'OR', column: string, value: mixed}
  * @phpstan-type WhereGroup array{type: 'group', boolean: 'AND'|'OR', not: bool, group: QueryState}
  * @phpstan-type Where WhereBasic|WhereColumn|WhereRaw|WhereIn|WhereNull|WhereBetween|WhereBetweenColumns|WhereLike|WhereHash|WhereGroup
+ * @phpstan-type Join array{type: 'INNER'|'LEFT'|'RIGHT'|'CROSS', table: string, alias: string|null, wheres: list<Where>}
  */
 final class QueryState
 {
@@ -73,10 +74,16 @@ final class QueryState
     public array $from_bindings = [];
 
     /**
-     * The joins of the builder, in order, as SQL. With any, a column of the model is qualified
-     * (see QueryCompiler::column()), and the default select is the model's rows only.
+     * The joins of the builder, in order. The joins of relationships that Query::joins() and
+     * left_joins() add, and the JOIN fragments joins() takes, are held as their SQL. A join of
+     * Query::join(), left_join(), right_join() or cross_join() is held as its type, its table and the
+     * alias it has, if any (as QueryCompiler::table_reference() reads them), and the conditions of its
+     * ON, in the shapes of $wheres, as they were when the join was added; a CROSS join has none.
      *
-     * @var list<string>
+     * With any join, a column of the model is qualified (see QueryCompiler::column()), and the
+     * default select is the model's rows only.
+     *
+     * @var list<string|Join>
      */
     public array $joins = [];
 

@@ -765,9 +765,32 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * @param bool $using_through is this a THROUGH relationship?
      * @param string $alias a table alias for when a table is being joined twice
      * @return string SQL INNER JOIN fragment
+     * @see construct_join_sql()
      */
     public function construct_inner_join_sql(Table $from_table, $using_through = false, $alias = null)
     {
+        // the flag read by its truth, as this method always read it
+        return $this->construct_join_sql($from_table, (bool) $using_through, $alias, 'INNER');
+    }
+
+    /**
+     * The JOIN of the association, of the type $type: INNER, as construct_inner_join_sql() writes it, or LEFT,
+     * the same JOIN with only its keyword changed. The ON compares the key columns, which the relationship
+     * names, and the joined table gets $alias when one is given.
+     *
+     * @param Table $from_table the table used for the FROM SQL statement
+     * @param bool $using_through is this a THROUGH relationship?
+     * @param string|null $alias a table alias for when a table is being joined twice
+     * @param string $type the type of the join: INNER or LEFT
+     * @return string SQL JOIN fragment
+     * @throws RelationshipException for another type
+     */
+    public function construct_join_sql(Table $from_table, bool $using_through = false, ?string $alias = null, string $type = 'INNER'): string
+    {
+        if ('INNER' !== $type && 'LEFT' !== $type) {
+            throw new RelationshipException("Unknown join type '$type' for relationship '{$this->attribute_name}': INNER or LEFT");
+        }
+
         if ($using_through) {
             $join_table = $from_table;
             $join_table_name = $from_table->get_fully_qualified_table_name();
@@ -812,7 +835,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
             $aliased_join_table_name = $join_table_name;
         }
 
-        return "INNER JOIN $join_table_name {$alias}ON($from_table_name.$foreign_key = $aliased_join_table_name.$join_primary_key)";
+        return "$type JOIN $join_table_name {$alias}ON($from_table_name.$foreign_key = $aliased_join_table_name.$join_primary_key)";
     }
 
     /**

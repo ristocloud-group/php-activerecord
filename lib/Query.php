@@ -82,6 +82,12 @@ class Query
         'or_where_none',
         'where_key',
         'where_key_not',
+        'join',
+        'left_join',
+        'right_join',
+        'cross_join',
+        'joins',
+        'left_joins',
         'to_sql',
         'get_bindings',
     ];
@@ -769,6 +775,129 @@ class Query
     }
 
     /**
+     * Adds an INNER JOIN of $table, ON a comparison of two columns or ON the conditions a closure writes:
+     * - join('authors', 'authors.author_id', '=', 'books.author_id'): the columns compared by an operator,
+     *   any that where() takes; with two columns only, join('authors', 'authors.author_id',
+     *   'books.author_id'), by =;
+     * - join('authors', fn (JoinClause $join) => $join->on(...)->where(...)): the conditions the closure adds
+     *   to the JoinClause it is passed, taken when it returns (see JoinClause).
+     *
+     * The table is read as from() reads its own: quoted part by part, and "table as alias" (AS in any case,
+     * outside quotes) gives it an alias. The columns are named by the one rule of the builder (see
+     * QueryCompiler::column()): with joins, a column of the model gets its table, and any other name is as
+     * written. The joins are sent in the order they are added, those of joins() and left_joins() included,
+     * and the values of their conditions are bound after those of the FROM and before those of the WHERE.
+     *
+     * <code>
+     * Book::join('authors', 'authors.author_id', '=', 'books.author_id')->where('authors.name', 'Tito')->get();
+     * </code>
+     *
+     * @param (Closure(JoinClause): mixed)|string $first
+     * @return $this
+     * @throws ActiveRecordException at the call, and the query is left as it was: for an empty table name or
+     *   alias, for a condition that where() and where_column() refuse (an unknown operator, an empty column
+     *   name, no second column, ...), and for a closure that adds no condition, since a join without one pairs
+     *   every row with every row of the table (cross_join() joins without one)
+     */
+    public function join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null): static
+    {
+        return $this->add_join(__FUNCTION__, 'INNER', $table, $first, $operator, $second, func_num_args() - 2);
+    }
+
+    /**
+     * Adds a LEFT JOIN of $table, as join() adds an INNER JOIN: the rows of the model without a match are kept,
+     * with nulls for the joined table's columns.
+     *
+     * @param (Closure(JoinClause): mixed)|string $first
+     * @return $this
+     * @throws ActiveRecordException as join() does
+     */
+    public function left_join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null): static
+    {
+        return $this->add_join(__FUNCTION__, 'LEFT', $table, $first, $operator, $second, func_num_args() - 2);
+    }
+
+    /**
+     * Adds a RIGHT JOIN of $table, as join() adds an INNER JOIN: the rows of the joined table without a match
+     * are kept, with nulls for the model's columns.
+     *
+     * @param (Closure(JoinClause): mixed)|string $first
+     * @return $this
+     * @throws ActiveRecordException as join() does
+     */
+    public function right_join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null): static
+    {
+        return $this->add_join(__FUNCTION__, 'RIGHT', $table, $first, $operator, $second, func_num_args() - 2);
+    }
+
+    /**
+     * Adds a CROSS JOIN of $table, without an ON: every row paired with every row of the table. The table is
+     * read as join() reads it.
+     *
+     * @return $this
+     * @throws ActiveRecordException at the call, for an empty table name or alias, and the query is left as
+     *   it was
+     */
+    public function cross_join(string $table): static
+    {
+        // read, and refused if need be, at the call (spec §5.7)
+        $reference = $this->compiler()->table_reference($table, null, __FUNCTION__);
+        $this->state->joins[] = ['type' => 'CROSS', 'table' => $reference['table'], 'alias' => $reference['alias'], 'wheres' => []];
+
+        return $this;
+    }
+
+    /**
+     * Joins the relationships of the model named in $relationships_or_sql, a name or a list of them, each
+     * with the INNER JOIN of the legacy 'joins' option, and sends the entries that hold "JOIN " as written,
+     * as that option does: hand-written JOIN fragments. When two relationships of one call join the same
+     * table, the second and later get their relationship's name as alias. See Table::create_joins().
+     *
+     * <code>
+     * Book::joins('author')->where('authors.name', 'Tito')->get();
+     * Book::joins(['author', 'LEFT JOIN authors s ON(s.author_id = books.secondary_author_id)'])->get();
+     * </code>
+     *
+     * @param string|array<mixed> $relationships_or_sql
+     * @return $this
+     * @throws RelationshipException at the call, for a name that is no relationship of the model, and the query
+     *   is left as it was
+     * @throws ActiveRecordException at the call, for an entry that is not a string
+     */
+    public function joins(string|array $relationships_or_sql): static
+    {
+        return $this->add_relationship_joins($this->relationship_names(__FUNCTION__, $relationships_or_sql), 'INNER');
+    }
+
+    /**
+     * Joins the relationships of the model named in $relationships as joins() does, each with a LEFT JOIN:
+     * the rows of the model without a related row are kept. It takes relationships only, and a JOIN fragment
+     * goes to joins().
+     *
+     * <code>
+     * Event::left_joins('venue')->get();
+     * </code>
+     *
+     * @param string|array<mixed> $relationships
+     * @return $this
+     * @throws RelationshipException at the call, for a name that is no relationship of the model, a JOIN
+     *   fragment among them, and the query is left as it was
+     * @throws ActiveRecordException at the call, for an entry that is not a string
+     */
+    public function left_joins(string|array $relationships): static
+    {
+        $names = $this->relationship_names(__FUNCTION__, $relationships);
+        $table = $this->table();
+
+        // each a declared relationship, which a JOIN fragment never is
+        foreach ($names as $name) {
+            $table->get_relationship($name, true);
+        }
+
+        return $this->add_relationship_joins($names, 'LEFT');
+    }
+
+    /**
      * The SELECT the query sends, with its bind markers (see get_bindings()).
      */
     public function to_sql(): string
@@ -778,9 +907,9 @@ class Query
 
     /**
      * The values the query binds to the markers of its SELECT, in the order of the clauses: those of the
-     * select, of the FROM, then of the WHERE. A value compared with a column is prepared for it (a
-     * DateTime in the format of the column's type); the others, those of the *_raw() methods, are as they
-     * were given, and the query prepares them when it runs (a DateTime is sent as a date and time).
+     * select, of the FROM, of the joins, then of the WHERE. A value compared with a column is prepared for
+     * it (a DateTime in the format of the column's type); the others, those of the *_raw() methods, are as
+     * they were given, and the query prepares them when it runs (a DateTime is sent as a date and time).
      *
      * @return list<mixed>
      */
@@ -1164,6 +1293,78 @@ class Query
         $this->state->wheres = [...$this->state->wheres, ...$wheres];
 
         return $this;
+    }
+
+    /**
+     * Adds the join of a call of $method, join(), left_join() or right_join() (see join()), of the type $type:
+     * $table, and the conditions the closure $first writes, or the comparison of the column $first with the
+     * column $second by $operator. $count is the number of the arguments given after $first.
+     *
+     * @param 'INNER'|'LEFT'|'RIGHT' $type
+     * @return $this
+     * @throws ActiveRecordException as join() does
+     */
+    private function add_join(string $method, string $type, string $table, Closure|string $first, ?string $operator, ?string $second, int $count): static
+    {
+        // read, and refused if need be, at the call (spec §5.7)
+        $reference = $this->compiler()->table_reference($table, null, $method);
+
+        if ($first instanceof Closure) {
+            $join = new JoinClause($type, $table, $this->conditions());
+            $first($join);
+            // taken now: a later change to the JoinClause changes nothing here
+            $wheres = $join->wheres();
+
+            if ([] === $wheres) {
+                throw new ActiveRecordException(sprintf("The closure given to %s() on %s adds no condition to the join of '%s': cross_join() joins without one", $method, $this->model_class, $table));
+            }
+        } else {
+            $wheres = [$this->conditions()->column_comparison($method, $first, $operator, $second, $count, boolean: 'AND')];
+        }
+
+        $this->state->joins[] = ['type' => $type, 'table' => $reference['table'], 'alias' => $reference['alias'], 'wheres' => $wheres];
+
+        return $this;
+    }
+
+    /**
+     * Adds the joins of these relationships and JOIN fragments, of the type $type (see
+     * Table::create_joins_of_type()), as their SQL; none for no names.
+     *
+     * @param list<string> $names
+     * @param 'INNER'|'LEFT' $type
+     * @return $this
+     * @throws RelationshipException for a name that is no relationship of the model
+     */
+    private function add_relationship_joins(array $names, string $type): static
+    {
+        if ([] !== $names) {
+            $this->state->joins[] = $this->table()->create_joins_of_type($names, $type);
+        }
+
+        return $this;
+    }
+
+    /**
+     * The names given to $method, joins() or left_joins(): a name, or a list of them.
+     *
+     * @param string|array<mixed> $names
+     * @return list<string>
+     * @throws ActiveRecordException for an entry that is not a string
+     */
+    private function relationship_names(string $method, string|array $names): array
+    {
+        $list = [];
+
+        foreach (is_array($names) ? $names : [$names] as $name) {
+            if (!is_string($name)) {
+                throw new ActiveRecordException(sprintf('A relationship name must be a string, not %s, in %s() on %s', get_debug_type($name), $method, $this->model_class));
+            }
+
+            $list[] = $name;
+        }
+
+        return $list;
     }
 
     /**

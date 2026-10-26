@@ -198,6 +198,7 @@ class Table
     /**
      * @param list<string>|string $joins
      * @return string
+     * @see create_joins_of_type()
      */
     public function create_joins($joins)
     {
@@ -205,7 +206,22 @@ class Table
             return $joins;
         }
 
-        $self = $this->table;
+        return $this->create_joins_of_type($joins, 'INNER');
+    }
+
+    /**
+     * create_joins() of a list with a join type: each relationship it names joined with a $type JOIN
+     * (see AbstractRelationship::construct_join_sql()), and each entry that holds "JOIN " sent as
+     * written, in order, separated by spaces. When two relationships join the same table, the second
+     * and later get the relationship's name as their alias.
+     *
+     * @internal Serves create_joins() and Query::joins() and left_joins(); not a supported API.
+     * @param list<string> $joins Relationship names, and JOIN fragments
+     * @param string $type INNER or LEFT
+     * @throws RelationshipException for an entry that names no relationship of the model
+     */
+    public function create_joins_of_type(array $joins, string $type): string
+    {
         $ret = $space = '';
 
         $existing_tables = [];
@@ -227,7 +243,7 @@ class Table
                         $alias = null;
                     }
 
-                    $ret .= $rel->construct_inner_join_sql($this, false, $alias);
+                    $ret .= $rel->construct_join_sql($this, false, $alias, $type);
                 } else {
                     throw new RelationshipException("Relationship named $value has not been declared for class: {$this->class->getName()}");
                 }
