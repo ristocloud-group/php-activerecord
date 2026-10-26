@@ -603,11 +603,18 @@ class Query
 
     /**
      * Adds column LIKE pattern, ANDed. The pattern takes the wildcards % (any characters) and _ (one
-     * character), and every other character is itself. By default it matches in any case, as the
-     * adapter can: LIKE on MySQL and MariaDB as the column's collation decides, ILIKE on Postgres,
-     * LIKE on SQLite (ASCII letters only). With $case_sensitive it matches in the case given: LIKE
-     * CAST(? AS BINARY) on MySQL and MariaDB, a byte comparison; LIKE on Postgres; GLOB on SQLite, with
-     * the pattern translated (see Connection::like_condition() and like_pattern()).
+     * character). By default it matches in any case, as the adapter can: LIKE on MySQL and MariaDB as
+     * the column's collation decides, ILIKE on Postgres, LIKE on SQLite (ASCII letters only). With
+     * $case_sensitive it matches in the case given:
+     * - MySQL and MariaDB: LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin, which compares characters
+     *   whatever the column's character set (latin1, utf8mb3, utf8mb4);
+     * - Postgres: LIKE;
+     * - SQLite: GLOB, with the pattern translated.
+     * See Connection::like_condition() and like_pattern(). Postgres compares the column as text, so that
+     * a LIKE takes a column of any type there too (see Connection::like_column()).
+     *
+     * A backslash escapes % and _ on MySQL, MariaDB and Postgres, whose LIKE has it as its escape
+     * character, but not on SQLite, whose LIKE has none and whose GLOB brackets its metacharacters instead.
      *
      * <code>
      * Author::where_like('name', 't%')->get();

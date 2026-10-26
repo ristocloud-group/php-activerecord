@@ -148,7 +148,7 @@ class MysqlAdapter extends Connection
             return parent::like_condition($column_sql, false, $not);
         }
 
-        return $column_sql . ($not ? ' NOT LIKE' : ' LIKE') . ' CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin';
+        return $this->like_column($column_sql) . ($not ? ' NOT LIKE' : ' LIKE') . ' CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin';
     }
 
     /**

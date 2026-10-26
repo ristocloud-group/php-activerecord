@@ -181,9 +181,11 @@ final class QueryCompiler
      * else. The WHERE, ORDER BY and LIMIT are the state's (see apply_write_clauses()).
      *
      * @param array<string, mixed>|string $set
+     * @throws ActiveRecordException for a state that holds builder clauses (see refuse_builder_clauses())
      */
     public function compile_update(QueryState $state, array|string $set): SQLBuilder
     {
+        $this->refuse_builder_clauses($state, 'UPDATE');
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
         $this->apply_write_clauses($sql, $state->legacy ?? []);
@@ -194,9 +196,12 @@ final class QueryCompiler
     /**
      * The DELETE of a state, whose WHERE, ORDER BY and LIMIT are the state's (see
      * apply_write_clauses()). A state without conditions deletes every row.
+     *
+     * @throws ActiveRecordException for a state that holds builder clauses (see refuse_builder_clauses())
      */
     public function compile_delete(QueryState $state): SQLBuilder
     {
+        $this->refuse_builder_clauses($state, 'DELETE');
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
         $this->apply_write_clauses($sql, $state->legacy ?? []);
@@ -392,6 +397,20 @@ final class QueryCompiler
         }
 
         return $this->table_reference($state->from, $state->from_alias, 'from')['name'];
+    }
+
+    /**
+     * Refuses to compile an $operation (UPDATE, DELETE) of a state that holds builder clauses: an UPDATE and
+     * a DELETE are compiled from the legacy options only, so the clauses would be dropped, a WHERE among
+     * them, and the statement would write every row.
+     *
+     * @throws ActiveRecordException
+     */
+    private function refuse_builder_clauses(QueryState $state, string $operation): void
+    {
+        if (self::holds_clauses($state)) {
+            throw new ActiveRecordException(sprintf('The %s of a query on %s does not take builder clauses: it would drop them', $operation, $this->table->class->name));
+        }
     }
 
     /**

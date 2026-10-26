@@ -213,7 +213,7 @@ class SqliteAdapter extends Connection
             return parent::like_condition($column_sql, false, $not);
         }
 
-        return $column_sql . ($not ? ' NOT GLOB ?' : ' GLOB ?');
+        return $this->like_column($column_sql) . ($not ? ' NOT GLOB ?' : ' GLOB ?');
     }
 
     /**

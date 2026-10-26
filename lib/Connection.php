@@ -673,7 +673,17 @@ abstract class Connection
             throw new ActiveRecordException(sprintf('%s has no case-sensitive LIKE', static::class));
         }
 
-        return $column_sql . ($not ? ' NOT LIKE ?' : ' LIKE ?');
+        return $this->like_column($column_sql) . ($not ? ' NOT LIKE ?' : ' LIKE ?');
+    }
+
+    /**
+     * A column, $column_sql as the query names it, as a LIKE compares it: in like_condition(), and with
+     * any operator of the LIKE family in a comparison of the builder (LIKE, NOT LIKE, ILIKE, ...). As it is
+     * by default; Postgres compares its text, so that a column of another type takes a LIKE too.
+     */
+    public function like_column(string $column_sql): string
+    {
+        return $column_sql;
     }
 
     /**

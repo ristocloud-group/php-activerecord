@@ -59,6 +59,38 @@ class QueryWhereTest extends DatabaseTest
         return $values;
     }
 
+    /**
+     * A connection of the default adapter hooks only, with no database: it writes SQL and runs none.
+     */
+    private function connection_without_database(): Connection
+    {
+        return new class extends Connection {
+            public function __construct() {}
+
+            public function limit($sql, $offset, $limit)
+            {
+                return $sql;
+            }
+
+            public function query_column_info($table)
+            {
+                throw new LogicException('not read');
+            }
+
+            public function query_for_tables()
+            {
+                throw new LogicException('not read');
+            }
+
+            public function set_encoding($charset) {}
+
+            public function native_database_types()
+            {
+                return [];
+            }
+        };
+    }
+
     public function test_basic_operator_and_null_forms(): void
     {
         $this->assert_sql_has('WHERE name = ?', Author::where('name', 'Tito')->to_sql());
@@ -128,7 +160,9 @@ class QueryWhereTest extends DatabaseTest
         ];
 
         foreach ($operators as $operator) {
-            $expected = $this->authors_where('`name` ' . strtoupper($operator) . ' ?');
+            // an operator of the LIKE family compares the column as the adapter's LIKE does: Postgres casts it to text
+            $column = str_contains($operator, 'like') ? $this->conn->like_column($this->sql('`name`')) : $this->sql('`name`');
+            $expected = $this->authors_where($column . ' ' . strtoupper($operator) . ' ?');
 
             foreach ([$operator, strtoupper($operator), ucwords($operator)] as $spelling) {
                 $this->assert_same($expected, Author::where('name', $spelling, 'x')->to_sql());
@@ -517,6 +551,32 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same([1, 2, 3, 4], $this->values(Author::where_not_in('parent_author_id', [null])->get()));
     }
 
+    // Spec §5.7: a list of values holds values. An array in it is refused at the call, which names the method,
+    // the model and the key of the array in the list, and the query is left as it was
+    public function test_a_list_of_values_that_holds_an_array_is_refused(): void
+    {
+        $query = Author::where('name', 'Tito');
+        $sql = $query->to_sql();
+
+        foreach ([
+            ['where_in', '1', fn() => $query->where_in('author_id', [1, [2, 3]])],
+            ['or_where_in', '0', fn() => $query->or_where_in('author_id', [[]])],
+            ['where_not_in', "'a'", fn() => $query->where_not_in('author_id', ['a' => [1]])],
+            ['or_where_not_in', '1', fn() => $query->or_where_not_in('author_id', [1, [null]])],
+            ['where_between', '0', fn() => $query->where_between('author_id', [[1], 3])],
+            ['or_where_between', '1', fn() => $query->or_where_between('author_id', [1, [3]])],
+            ['where_not_between', "'to'", fn() => $query->where_not_between('author_id', ['from' => 1, 'to' => [3]])],
+            ['or_where_not_between', '0', fn() => $query->or_where_not_between('author_id', [[1, 2], 3])],
+            ['where_key', '1', fn() => $query->where_key([1, [2]])],
+            ['where_key_not', '0', fn() => $query->where_key_not([[1, 2]])],
+        ] as [$method, $key, $call]) {
+            $this->assert_exception_message_contains("An array is no value in the list given to $method() on Author, at key $key", $call, ActiveRecordException::class);
+        }
+
+        $this->assert_same($sql, $query->to_sql());
+        $this->assert_same(['Tito'], $query->get_bindings());
+    }
+
     public function test_where_null_takes_one_column_or_several(): void
     {
         $this->assert_same($this->authors_where('`parent_author_id` IS NULL AND `some_text` IS NULL'), Author::where_null(['parent_author_id', 'some_text'])->to_sql());
@@ -591,6 +651,17 @@ class QueryWhereTest extends DatabaseTest
         }
     }
 
+    // A LIKE takes a column of any type on every adapter: Postgres, which has no LIKE on an integer, compares its
+    // text (Connection::like_column()), as Laravel's grammar does, in where_like() and in where()'s LIKE operators
+    public function test_a_like_takes_a_column_that_is_no_text(): void
+    {
+        $this->assert_same([1], $this->values(Author::where_like('author_id', '1%')->get()));
+        $this->assert_same([1], $this->values(Author::where_like('author_id', '1%', true)->get()));
+        $this->assert_same([2, 3, 4], $this->values(Author::where_not_like('author_id', '1%')->get()));
+        $this->assert_same([1], $this->values(Author::where('author_id', 'like', '1%')->get()));
+        $this->assert_same([2, 3, 4], $this->values(Author::where('author_id', 'not like', '1%')->get()));
+    }
+
     // An adapter writes a case-sensitive LIKE its own way: the default refuses it at the call, and leaves the
     // pattern as it is
     public function test_the_default_like_hooks(): void
@@ -634,6 +705,21 @@ class QueryWhereTest extends DatabaseTest
 
         $this->assert_exception_message_contains('has no case-sensitive LIKE', fn() => Query::for_table($table)->where_like('name', 'T%', true), ActiveRecordException::class);
         $this->assert_same('SELECT * FROM `authors` WHERE `name` LIKE ?', Query::for_table($table)->where_like('name', 'T%')->to_sql());
+    }
+
+    // Spec §5.7: the refusal of a case-sensitive LIKE keeps the adapter's words, and names the method and the model
+    public function test_a_like_the_adapter_cannot_write_is_refused_with_the_method_and_the_model(): void
+    {
+        $table = new Table('Author');
+        $table->conn = $this->connection_without_database();
+
+        foreach (['where_like', 'or_where_like', 'where_not_like', 'or_where_not_like'] as $method) {
+            $this->assert_exception_message_contains(
+                "has no case-sensitive LIKE, in $method() on Author",
+                fn() => Query::for_table($table)->$method('name', 'T%', true),
+                ActiveRecordException::class
+            );
+        }
     }
 
     // -- all, any, none
@@ -841,6 +927,26 @@ class QueryWhereTest extends DatabaseTest
         $query = Query::from_options(Author::table(), ['conditions' => ['name' => 'Tito']])->where('author_id', 1);
 
         $this->assert_exception_message_contains('A query on Author holds both legacy options and builder clauses', fn() => $query->to_sql(), ActiveRecordException::class);
+    }
+
+    // The engine's UPDATE and DELETE serve the legacy writes, which read the legacy options only. A state that holds
+    // builder clauses is refused before any statement: its WHERE would be dropped, and every row written.
+    public function test_the_engines_writes_refuse_builder_clauses(): void
+    {
+        // a table loaded inside the capture would add its schema read to the statements
+        Author::table();
+
+        foreach ([
+            'UPDATE' => fn() => Author::where('author_id', 1)->execute_update(['name' => 'x']),
+            'DELETE' => fn() => Author::where('author_id', 1)->execute_delete(),
+        ] as $operation => $write) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "The $operation of a query on Author does not take builder clauses: it would drop them"]],
+                GoldenStatements::capture($write)
+            );
+        }
+
+        $this->assert_same(['Bill Clinton', 'George W. Bush', 'Tito', 'Uncle Bob'], $this->values(Author::all(), 'name'));
     }
 
     // Every method of the family is reached statically (spec §4.1), runs, and returns the query it changes

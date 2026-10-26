@@ -83,7 +83,9 @@ final class ConditionCompiler
 
     /**
      * A column compared with a value by an operator, or with null: IS NULL by = and <=>, IS NOT NULL by
-     * != and <> (Conditions refuses any other operator with null).
+     * != and <> (Conditions refuses any other operator with null). An operator of the LIKE family (LIKE,
+     * NOT LIKE, ILIKE, ...) compares the column as the adapter compares it in a LIKE (see
+     * Connection::like_column(): Postgres casts it to text), as Laravel's grammar does.
      *
      * @return array{string, list<mixed>}
      */
@@ -95,7 +97,9 @@ final class ConditionCompiler
             return [$column['sql'] . (in_array($operator, ['!=', '<>'], true) ? ' IS NOT NULL' : ' IS NULL'), []];
         }
 
-        return ["{$column['sql']} $operator ?", [$this->value($column['column'], $value)]];
+        $sql = str_contains($operator, 'LIKE') ? $this->connection->like_column($column['sql']) : $column['sql'];
+
+        return ["$sql $operator ?", [$this->value($column['column'], $value)]];
     }
 
     /**

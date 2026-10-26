@@ -158,11 +158,11 @@ final class Conditions
      * @param array<mixed> $values
      * @param 'AND'|'OR' $boolean
      * @return WhereIn
-     * @throws ActiveRecordException for an empty column name
+     * @throws ActiveRecordException for an empty column name, or a list that holds an array
      */
     public function in(string $method, string $column, array $values, string $boolean, bool $not): array
     {
-        return ['type' => 'in', 'boolean' => $boolean, 'column' => $this->column_name($method, $column), 'values' => array_values($values), 'not' => $not];
+        return ['type' => 'in', 'boolean' => $boolean, 'column' => $this->column_name($method, $column), 'values' => $this->list_values($method, $values), 'not' => $not];
     }
 
     /**
@@ -190,18 +190,21 @@ final class Conditions
      * @param array<mixed> $values
      * @param 'AND'|'OR' $boolean
      * @return WhereBetween
-     * @throws ActiveRecordException for an empty column name, or a list that does not hold two values
+     * @throws ActiveRecordException for an empty column name, or a list that does not hold two values, or
+     *   holds an array
      */
     public function between(string $method, string $column, array $values, string $boolean, bool $not): array
     {
         $column = $this->column_name($method, $column);
-        $values = array_values($values);
 
         if (2 !== count($values)) {
             throw new ActiveRecordException(sprintf('%s() needs two values, not %d, on %s', $method, count($values), $this->model_class));
         }
 
-        return ['type' => 'between', 'boolean' => $boolean, 'column' => $column, 'values' => [$values[0], $values[1]], 'not' => $not];
+        // read with their keys, which a refusal names
+        [$low, $high] = $this->list_values($method, $values);
+
+        return ['type' => 'between', 'boolean' => $boolean, 'column' => $column, 'values' => [$low, $high], 'not' => $not];
     }
 
     /**
@@ -226,7 +229,9 @@ final class Conditions
     }
 
     /**
-     * column LIKE pattern, or with $not NOT LIKE (see Query::where_like()).
+     * column LIKE pattern, or with $not NOT LIKE (see Query::where_like()). The adapter refuses at the call
+     * a LIKE it cannot write (spec §5.7), not when the statement is compiled: its message is kept, with the
+     * method and the model.
      *
      * @param 'AND'|'OR' $boolean
      * @return WhereLike
@@ -235,8 +240,12 @@ final class Conditions
     public function like(string $method, string $column, string $value, bool $case_sensitive, string $boolean, bool $not): array
     {
         $column = $this->column_name($method, $column);
-        // the adapter refuses a LIKE it cannot write at the call (spec §5.7), not when the statement is compiled
-        $this->table->connection()->like_condition($column, $case_sensitive, $not);
+
+        try {
+            $this->table->connection()->like_condition($column, $case_sensitive, $not);
+        } catch (ActiveRecordException $e) {
+            throw new ActiveRecordException(sprintf('%s, in %s() on %s', $e->getMessage(), $method, $this->model_class), 0, $e);
+        }
 
         return ['type' => 'like', 'boolean' => $boolean, 'column' => $column, 'value' => $value, 'case_sensitive' => $case_sensitive, 'not' => $not];
     }
@@ -247,7 +256,8 @@ final class Conditions
      * QueryCompiler::column()).
      *
      * @return WhereBasic|WhereIn
-     * @throws ActiveRecordException for a model whose primary key is not one column
+     * @throws ActiveRecordException for a model whose primary key is not one column, or a list of ids that
+     *   holds an array
      */
     public function key(string $method, mixed $id, bool $not): array
     {
@@ -258,7 +268,7 @@ final class Conditions
         $column = $this->table->connection()->quote_name($this->table->real_column_name($this->table->pk[0]));
 
         if (is_array($id)) {
-            return ['type' => 'in', 'boolean' => 'AND', 'column' => $column, 'values' => array_values($id), 'not' => $not];
+            return ['type' => 'in', 'boolean' => 'AND', 'column' => $column, 'values' => $this->list_values($method, $id), 'not' => $not];
         }
 
         return ['type' => 'basic', 'boolean' => 'AND', 'column' => $column, 'operator' => $not ? '!=' : '=', 'value' => $id];
@@ -360,6 +370,25 @@ final class Conditions
         }
 
         return strtoupper($operator);
+    }
+
+    /**
+     * The values of a list given to $method (IN, BETWEEN, the ids of a primary key), in order, its keys
+     * not read: each one value, never an array (spec §5.7).
+     *
+     * @param array<mixed> $values
+     * @return list<mixed>
+     * @throws ActiveRecordException for a list that holds an array
+     */
+    private function list_values(string $method, array $values): array
+    {
+        foreach ($values as $key => $value) {
+            if (is_array($value)) {
+                throw new ActiveRecordException(sprintf('An array is no value in the list given to %s() on %s, at key %s', $method, $this->model_class, var_export($key, true)));
+            }
+        }
+
+        return array_values($values);
     }
 
     /**

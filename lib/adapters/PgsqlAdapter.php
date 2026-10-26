@@ -126,11 +126,21 @@ class PgsqlAdapter extends Connection
     }
 
     /**
-     * Postgres's LIKE matches in the case given, and its ILIKE in any case.
+     * Postgres's LIKE matches in the case given, and its ILIKE in any case. The column is compared as
+     * text (see like_column()).
      */
     public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
     {
-        return $column_sql . ($not ? ' NOT ' : ' ') . ($case_sensitive ? 'LIKE' : 'ILIKE') . ' ?';
+        return $this->like_column($column_sql) . ($not ? ' NOT ' : ' ') . ($case_sensitive ? 'LIKE' : 'ILIKE') . ' ?';
+    }
+
+    /**
+     * The column cast to text, as Laravel's Postgres grammar casts it in its LIKE conditions: Postgres has
+     * no LIKE on an integer, a date or a uuid, and for a text column the cast changes nothing.
+     */
+    public function like_column(string $column_sql): string
+    {
+        return "$column_sql::text";
     }
 
     /**
