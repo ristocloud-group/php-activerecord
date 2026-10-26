@@ -660,11 +660,12 @@ class Validations
      * Available options:
      *
      * <ul>
-     * <li><b>with:</b> a regular expression</li>
      * <li><b>message:</b> custom error message</li>
-     * <li><b>allow_blank:</b> allow blank strings</li>
-     * <li><b>allow_null:</b> allow null strings</li>
+     * <li><b>allow_blank:</b> skip the check when any of the fields is blank (null included)</li>
+     * <li><b>allow_null:</b> skip the check when any of the fields is null</li>
      * </ul>
+     *
+     * A null value is compared with IS NULL: without allow_null, a second null is a duplicate.
      *
      * @param list<array<int|string, mixed>> $attrs Validation definition
      * @return void
@@ -693,6 +694,18 @@ class Validations
                 $fields = [$field_config];
             }
 
+            $values = [];
+            foreach ($fields as $field) {
+                $field = $this->model->get_real_attribute_name($field);
+                $values[] = [$field, $this->model->$field];
+            }
+
+            foreach ($values as [, $value]) {
+                if ($this->is_null_with_option($value, $options) || $this->is_blank_with_option($value, $options)) {
+                    continue 2;
+                }
+            }
+
             $sql = "";
             $conditions = [""];
             $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
@@ -703,11 +716,14 @@ class Validations
                 array_push($conditions, $pk_value);
             }
 
-            foreach ($fields as $field) {
-                $field = $this->model->get_real_attribute_name($field);
+            foreach ($values as [$field, $value]) {
                 $quoted_field = $connection->quote_name($table->real_column_name((string) $field));
-                $sql .= " AND {$quoted_field}=?";
-                array_push($conditions, $this->model->$field);
+                if ($value === null) {
+                    $sql .= " AND {$quoted_field} IS NULL";
+                } else {
+                    $sql .= " AND {$quoted_field}=?";
+                    array_push($conditions, $value);
+                }
             }
 
             $conditions[0] = $sql;
