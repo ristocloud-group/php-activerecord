@@ -29,13 +29,36 @@ final class ConditionCompiler
     public function __construct(private readonly Table $table, private readonly Connection $connection, private readonly Closure $naming) {}
 
     /**
-     * Conditions of one level, each joined to the one before it by its AND or OR (that of the first is
-     * dropped), and their values in order.
+     * The conditions of a clause, the WHERE, the HAVING or an ON: each joined to the one before it by its AND or
+     * OR (that of the first is dropped), and their values in order.
+     *
+     * The text of a clause is never "0". SQLBuilder writes a WHERE or a HAVING only when its text is truthy in
+     * PHP, which "0" is not, and "0" is what a raw condition of "0" compiles to, the condition that no row meets:
+     * left out, it would select every row, and a write would write every row. In parentheses it is the same
+     * condition, and stays. It is the builder's alone: the legacy options never reach this class.
      *
      * @param list<Where> $wheres
      * @return array{sql: string, values: list<mixed>}
      */
     public function compile(array $wheres): array
+    {
+        $clause = $this->level($wheres);
+
+        if ('0' === $clause['sql']) {
+            $clause['sql'] = '(0)';
+        }
+
+        return $clause;
+    }
+
+    /**
+     * The conditions of one level, a clause or a group in it, each joined to the one before it by its AND or OR
+     * (that of the first is dropped), and their values in order.
+     *
+     * @param list<Where> $wheres
+     * @return array{sql: string, values: list<mixed>}
+     */
+    private function level(array $wheres): array
     {
         $sql = '';
         $values = [];
@@ -175,7 +198,7 @@ final class ConditionCompiler
      */
     private function group(QueryState $group, bool $not): array
     {
-        $wheres = $this->compile($group->wheres);
+        $wheres = $this->level($group->wheres);
 
         return [($not ? 'NOT (' : '(') . $wheres['sql'] . ')', $wheres['values']];
     }

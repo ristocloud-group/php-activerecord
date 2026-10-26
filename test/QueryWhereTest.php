@@ -522,6 +522,46 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same([], Author::where_raw('author_id IN(?)', [[]])->get());
     }
 
+    // A raw condition whose text is "0" is a condition that no row meets, and it is sent, not left out: SQLBuilder
+    // writes a WHERE only when its text is truthy in PHP, which "0" is not, so the builder gives it in parentheses
+    // (ConditionCompiler::compile()). MySQL, MariaDB and SQLite find no row. Postgres takes no integer for a
+    // condition and refuses the statement: it never selects every row either.
+    public function test_a_raw_condition_of_zero_is_sent_and_meets_no_row(): void
+    {
+        $this->assert_same($this->authors_where('(0)'), Author::where_raw('0')->to_sql());
+        $this->assert_same($this->authors_where('(0)'), Author::or_where_raw('0')->to_sql());
+        // alone in a group it is in the group's parentheses only, and beside another condition it was in its own already
+        $this->assert_same($this->authors_where('(0)'), Author::where(fn(Query $q) => $q->where_raw('0'))->to_sql());
+        $this->assert_same($this->authors_where('NOT (0)'), Author::where_not(fn(Query $q) => $q->where_raw('0'))->to_sql());
+        $this->assert_same($this->authors_where('`name` = ? AND (0)'), Author::where('name', 'Tito')->where_raw('0')->to_sql());
+        $this->assert_same([], Author::where_raw('0')->get_bindings());
+
+        if ($this->conn instanceof PgsqlAdapter) {
+            foreach ([fn() => Author::where_raw('0')->get(), fn() => Author::where_raw('0')->exists()] as $run) {
+                $this->assert_exception_message_contains('argument of WHERE must be type boolean, not type integer', $run, ActiveRecord\DatabaseException::class);
+            }
+        } else {
+            $this->assert_same([], Author::where_raw('0')->get());
+            $this->assert_false(Author::where_raw('0')->exists());
+            // the 0 is false, and so is not false
+            $this->assert_same([1, 2, 3, 4], $this->values(Author::where_not(fn(Query $q) => $q->where_raw('0'))->get()));
+        }
+
+        // the same condition written as a comparison, which Postgres takes too
+        $this->assert_same([], Author::where_raw('1 = 0')->get());
+        $this->assert_same([1, 2, 3, 4], $this->values(Author::where_raw('1 = 1')->get()));
+    }
+
+    // The legacy path is not the builder's, and stays as it was so that its SQL stays byte-identical: it leaves out
+    // the WHERE of 'conditions' => '0' for the same reason, and every row is found. A known bug of the legacy
+    // 'conditions' (the controller raises it as a candidate issue); the builder does not share it.
+    public function test_the_legacy_condition_of_zero_is_still_left_out(): void
+    {
+        $this->assert_same($this->sql('SELECT * FROM `authors`'), Author::table()->options_to_sql(['conditions' => '0'])->to_s());
+        $this->assert_same([1, 2, 3, 4], $this->values(Author::find('all', ['conditions' => '0'])));
+        $this->assert_same(4, Author::count(['conditions' => '0']));
+    }
+
     // -- in, null, between
 
     // where_in() and where_not_in() follow the hash rules: an empty list matches nothing (1=0) or everything

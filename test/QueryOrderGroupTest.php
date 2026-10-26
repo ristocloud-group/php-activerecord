@@ -329,6 +329,35 @@ class QueryOrderGroupTest extends DatabaseTest
         $this->assert_same([], $texts()->having_null('some_text')->get_bindings());
     }
 
+    // A raw condition whose text is "0" is sent, as it is in the WHERE (see QueryWhereTest): SQLBuilder writes a HAVING
+    // only when its text is truthy in PHP, so the builder gives it in parentheses. No group meets it on MySQL,
+    // MariaDB and SQLite; Postgres takes no integer for a condition and refuses the statement.
+    public function test_a_raw_having_of_zero_is_sent_and_meets_no_group(): void
+    {
+        $groups = fn(): Query => Author::select_raw('COUNT(*) AS n')->group_by('parent_author_id');
+        $grouped = $this->sql('SELECT COUNT(*) AS n FROM `authors` GROUP BY `parent_author_id`');
+
+        $this->assert_same("$grouped HAVING (0)", $groups()->having_raw('0')->to_sql());
+        $this->assert_same("$grouped HAVING (0)", $groups()->or_having_raw('0')->to_sql());
+        $this->assert_same($this->sql("$grouped HAVING `parent_author_id` > ? AND (0)"), $groups()->having('parent_author_id', '>', 1)->having_raw('0')->to_sql());
+        $this->assert_same([], $groups()->having_raw('0')->get_bindings());
+
+        if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
+            $this->assert_exception_message_contains('argument of HAVING must be type boolean, not type integer', fn() => $groups()->having_raw('0')->get(), ActiveRecord\DatabaseException::class);
+        } else {
+            $this->assert_same([], $groups()->having_raw('0')->get());
+            $this->assert_same([], $groups()->having('parent_author_id', '>', 1)->having_raw('0')->get());
+        }
+
+        // the same condition written as a comparison, which Postgres takes too, and a raw one that some groups meet
+        $this->assert_same([], $groups()->having_raw('1 = 0')->get());
+        $this->assert_same([1, 1, 2], array_map(fn(Model $group): int => (int) $group->n, $groups()->having_raw('COUNT(*) > ?', [0])->order_by('n')->get()));
+
+        // the legacy 'having' => '0' leaves its clause out, as it always did: a known bug of the legacy options, kept so
+        // that the legacy SQL stays byte-identical (the controller raises it as a candidate issue)
+        $this->assert_same($this->sql('SELECT * FROM `authors` GROUP BY parent_author_id'), Author::table()->options_to_sql(['group' => 'parent_author_id', 'having' => '0'])->to_s());
+    }
+
     // The conditions of a HAVING are read by Conditions and rendered by ConditionCompiler, as those of the WHERE are:
     // for the same arguments they are the same text and the same values (spec §3.2)
     public function test_having_conditions_are_those_of_where(): void

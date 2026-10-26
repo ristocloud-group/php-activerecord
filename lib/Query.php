@@ -412,6 +412,8 @@ class Query
      * Adds a condition written in SQL, ANDed: sent as written, in parentheses when another condition is
      * beside it, with the values of its bind markers. As in a legacy positional condition, a value that
      * is a list is spread over its marker: where_raw('author_id IN(?)', [[1, 2]]) is author_id IN(?,?).
+     * The condition "0" is sent too, in parentheses, and no row meets it on MySQL, MariaDB and SQLite (Postgres
+     * takes no integer for a condition, and refuses the statement).
      *
      * <code>
      * Author::where_raw('LENGTH(name) > ?', [3])->get();
@@ -1140,7 +1142,8 @@ class Query
     /**
      * Adds a condition written in SQL to the HAVING, ANDed, sent as written, in parentheses when another condition
      * is beside it, with the values of its bind markers. As in where_raw(), a value that is a list is spread over
-     * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?).
+     * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?), and the condition
+     * "0" is sent, in parentheses.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();
