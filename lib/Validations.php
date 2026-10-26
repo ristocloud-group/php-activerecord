@@ -708,15 +708,18 @@ class Validations
 
             $sql = "";
             $conditions = [""];
-            $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
-            if (count($pk) > 1 && ($exclusion = $this->composite_pk_exclusion($pk, $connection, $table)) !== null) {
+            $exclusion = count($pk) > 1 ? $this->composite_pk_exclusion($pk, $connection, $table) : null;
+            if ($exclusion !== null) {
                 [$sql, $bound] = $exclusion;
                 array_push($conditions, ...$bound);
-            } elseif ($pk_value === null) {
-                $sql = "{$pk_quoted} IS NOT NULL";
             } else {
-                $sql = "{$pk_quoted} != ?";
-                array_push($conditions, $pk_value);
+                $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
+                if ($pk_value === null) {
+                    $sql = "{$pk_quoted} IS NOT NULL";
+                } else {
+                    $sql = "{$pk_quoted} != ?";
+                    array_push($conditions, $pk_value);
+                }
             }
 
             foreach ($values as [$field, $value]) {

@@ -34,6 +34,14 @@ class CodedItemValidations extends ActiveRecord\Model
     public static $validates_uniqueness_of = [['name']];
 }
 
+// composite primary key declared on nullable columns with no default
+class CompositeItemValidations extends ActiveRecord\Model
+{
+    public static $table_name = 'composite_items';
+    public static $primary_key = ['author_ref', 'parent_ref'];
+    public static $validates_uniqueness_of = [['title']];
+}
+
 class ValidationsTest extends DatabaseTest
 {
     public function set_up($connection_name = null)
@@ -310,9 +318,7 @@ class ValidationsTest extends DatabaseTest
         $book = new BookValidations(['name' => 'pair', 'numeric_test' => null]);
         $this->assert_true($book->is_valid());
 
-        $book = new BookValidations(['name' => 'blank', 'numeric_test' => '0']);
-        $this->assert_true($book->is_valid());
-
+        // '0' is not blank: the fixture row (Another Book, numeric_test defaulted to '0') is found
         $book = new BookValidations(['name' => 'Another Book', 'numeric_test' => '0']);
         $this->assert_false($book->is_valid());
     }
@@ -342,16 +348,35 @@ class ValidationsTest extends DatabaseTest
         $this->assert_true($item->is_valid());
     }
 
-    public function test_validates_uniqueness_of_composite_pk_new_record_without_pk_values()
+    public function test_validates_uniqueness_of_composite_pk_new_record_with_a_database_filled_pk_part()
     {
-        // `code` filled by the database: whatever the attribute holds, no row is excluded
+        // `code` is left to the database: the attribute holds the introspected default
+        // expression, so the pk is partly assigned (`NOT (owner = ? AND code = ?)` or, with no
+        // owner, `NOT (owner IS NULL AND code = ?)`) and no existing row is excluded
         $item = new CodedItemValidations(['owner' => 'acme', 'name' => 'one']);
         $this->assert_false($item->is_valid());
+        $this->assert_sql_has('NOT (owner = ? AND code = ?) AND name=?', CodedItemValidations::table()->last_sql);
 
         $item = new CodedItemValidations(['name' => 'one']);
         $this->assert_false($item->is_valid());
+        $this->assert_sql_has('NOT (owner IS NULL AND code = ?) AND name=?', CodedItemValidations::table()->last_sql);
 
         $item = new CodedItemValidations(['name' => 'three']);
+        $this->assert_true($item->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_new_record_without_pk_values()
+    {
+        // no pk value at all (the pk columns have no default): nothing to exclude, so the
+        // first pk column keeps the single-pk shape `IS NOT NULL`
+        $item = new CompositeItemValidations(['title' => 'keep']);
+        $this->assert_false($item->is_valid());
+        $this->assert_equals(['Title must be unique'], $item->errors->full_messages());
+        $sql = CompositeItemValidations::table()->last_sql;
+        $this->assert_sql_has('WHERE author_ref IS NOT NULL AND title=?', $sql);
+        $this->assert_equals(1, substr_count($sql, '?'));
+
+        $item = new CompositeItemValidations(['title' => 'new']);
         $this->assert_true($item->is_valid());
     }
 

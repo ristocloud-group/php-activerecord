@@ -125,9 +125,10 @@ foreach ([['Ada', null, 'B1'], ['Bo', null, 'B2'], ['Cy', 'cy', null], ['Di', 'c
     ));
 }
 
-// On a composite primary key the record is excluded by all of its columns: moving Ada to
-// seat A/2 is a duplicate of seat A/1. (Before #155 only `hall` excluded it, which also
-// excluded every other seat of hall A, so the duplicate was not found.)
+// On a composite primary key the record is excluded by all of its columns: Ada already
+// holds seat A/1, so making her the guest of seat A/2 too is a duplicate. (Before #155 only
+// `hall` excluded the record, which also excluded every other seat of hall A, so the
+// duplicate was not found.)
 require_once __DIR__ . '/models/HallSeat.php';
 /** @var HallSeat $seat */
 $seat = HallSeat::first(['conditions' => ['hall' => 'A', 'seat' => '2']]);
