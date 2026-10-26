@@ -311,12 +311,15 @@ Details settled while building the terminals (Task 15):
 - **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
 - **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
 - **`exists()`** drops order, limit and offset. It selects `1` unless the query has a GROUP BY or a HAVING, which
-  may name select aliases.
+  may name select aliases; an empty select gets `1` in every case.
   - Without that, an aggregate select such as `COUNT(*)` would make it true with no matching row. Eloquent has that
     trap, so this is a deliberate deviation.
   - With a GROUP BY, an aggregate produces no row when nothing matches.
-- **A wrapped `count()`** selects `1` in the subquery only when it provably cannot matter: no counted column, no
-  DISTINCT, no HAVING, and a select that is empty or holds only plain column references without an alias. Otherwise
+- **A wrapped `count()`** selects `1` in the subquery only when the select cannot matter. That requires no counted
+  column, no DISTINCT, no HAVING, no `group_by_raw()` entry and no `order_by_raw()` entry in a kept window order
+  (positional references such as `GROUP BY 1` name the select). It also requires a select that is empty or holds
+  only plain column references without an alias. An empty select gets `1` even beside a HAVING, because `*` beside
+  a GROUP BY is refused by Postgres and MySQL's ONLY_FULL_GROUP_BY. Otherwise
   it keeps the caller's select, because aliases named by GROUP BY or ORDER BY, and aggregates that collapse the rows,
   need it.
   - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
