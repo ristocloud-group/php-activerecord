@@ -61,7 +61,7 @@ class PgsqlAdapter extends Connection
      * '2', but 1.5, INF and 1e15 (sent as '1.0E+15') are rejected. NAN and INF are
      * rejected before the cast, which warns for NAN on PHP 8.5.
      *
-     * @internal Serves Model::find_by_pk(); not a supported API.
+     * @internal Serves the finders by pk (QueryCompiler::keep_integer_pk_values()); not a supported API.
      */
     public function accepts_integer_value(mixed $value): bool
     {

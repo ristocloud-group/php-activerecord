@@ -12,7 +12,8 @@ use Closure;
  * One query on one model class, and the engine that turns it into SQL.
  *
  * It holds a QueryState, which QueryCompiler renders as a SQLBuilder, and runs that statement
- * through its terminals (get, exists, ...). The legacy entries (find, count, exists, ...) hand it
+ * through its terminals (get, first, find, value, pluck, exists, count, ...), which read the query
+ * as it stands and leave it so. The legacy entries (find, count, exists, ...) hand it
  * their options array through from_options(). The writes of Table (insert, update, delete) and of
  * Model (update_all, delete_all) run through its execute_*() methods, and the upsert of Table through
  * upsert().
@@ -111,6 +112,16 @@ class Query
         'for_page',
         'to_sql',
         'get_bindings',
+        'first_or_fail',
+        'first_or',
+        'sole',
+        'find_or_fail',
+        'find_many',
+        'find_or',
+        'value',
+        'sole_value',
+        'pluck',
+        'doesnt_exist',
     ];
 
     private QueryState $state;
@@ -1330,31 +1341,276 @@ class Query
      */
     public function get(): array
     {
-        $options = $this->state->legacy ?? [];
-        $sql = $this->to_sql_builder();
-        $readonly = array_key_exists('readonly', $options) && $options['readonly'];
-        $includes = array_key_exists('include', $options) ? $options['include'] : null;
-
-        /** @var list<TModel> $models */
-        $models = $this->table()->find_by_sql($sql->to_s(), $sql->select_bind_values(), $readonly, $includes);
-
-        return $models;
+        return $this->models($this->state);
     }
 
     /**
-     * Whether any row matches, without counting: the adapter's EXISTS() over the SELECT, which stops
-     * at the first row. The statement that ran is left in Table::$last_sql.
+     * The model of the first row the query selects, or null when it selects none: the query with a LIMIT
+     * of 1 and its offset, in its own order (without one, the database picks the row). A smaller limit of
+     * the query's own stays: a query limited to no row has no first row.
+     *
+     * <code>
+     * $author = Author::where('name', 'Tito')->order_by('author_id')->first();
+     * </code>
+     *
+     * Model::first() is the legacy finder, which Author::first(...) calls.
+     *
+     * @return TModel|null
+     */
+    public function first(): ?Model
+    {
+        return $this->models($this->window(1))[0] ?? null;
+    }
+
+    /**
+     * The model of the first row the query selects, read as first() reads it.
+     *
+     * @return TModel
+     * @throws RecordNotFound when the query selects no row
+     */
+    public function first_or_fail(): Model
+    {
+        return $this->first() ?? throw new RecordNotFound(sprintf('%s() found no %s', __FUNCTION__, $this->model_class));
+    }
+
+    /**
+     * The model of the first row the query selects, read as first() reads it, or else what $callback
+     * returns, called without arguments.
+     *
+     * <code>
+     * $author = Author::where('name', $name)->first_or(fn () => Author::create(['name' => $name]));
+     * </code>
+     *
+     * @param callable(): mixed $callback
+     * @return mixed The model (a TModel), or what $callback returns
+     */
+    public function first_or(callable $callback): mixed
+    {
+        return $this->first() ?? $callback();
+    }
+
+    /**
+     * The model of the one row the query selects: the query with a LIMIT of 2 and its offset, which tells
+     * one row from more (a smaller limit of the query's own stays, as in first()).
+     *
+     * @return TModel
+     * @throws RecordNotFound when the query selects no row
+     * @throws MultipleRecordsFound when it selects more than one
+     */
+    public function sole(): Model
+    {
+        return $this->sole_of(__FUNCTION__, $this->models($this->window(2)));
+    }
+
+    /**
+     * The model of the row whose primary key is $id, or for a list of ids the models of the rows whose
+     * primary key is one of them, among the rows the query selects: the key comes first in the WHERE, and
+     * the query's own conditions follow in parentheses, so that an OR in them never widens the key (spec
+     * §5.2). One id is read as first() reads a row, so null when it is not found. A list is read in the
+     * query's order and window, the ids that are missing left out; an empty one needs no statement.
+     *
+     * The ids are read as the legacy finders by pk read theirs (QueryCompiler::pk_value_for_column() and
+     * keep_integer_pk_values()): a DateTime for a DATE pk is its date, and an id that an INTEGER pk can
+     * never equal ('abc', which Postgres refuses, aborting the transaction, #92) is looked up in no
+     * statement, so found by none. The key is named by its column, never through an alias, and with joins
+     * it gets the model's table.
+     *
+     * <code>
+     * $author = Author::new_query()->find(1);
+     * $others = Author::where('name', '!=', 'Tito')->find([1, 2, 3]);
+     * </code>
+     *
+     * Model::find() is the legacy finder, which Author::find(...) calls: it throws RecordNotFound for an
+     * id that is missing.
+     *
+     * @return ($id is array ? list<TModel> : TModel|null)
+     * @throws ActiveRecordException before any statement, for a model whose primary key is not one column,
+     *   or for a list that holds a list
+     */
+    public function find(mixed $id): Model|array|null
+    {
+        $models = $this->find_by_key(__FUNCTION__, $id)[0];
+
+        return is_array($id) ? $models : ($models[0] ?? null);
+    }
+
+    /**
+     * What find() finds for $id, which must find every id: else a RecordNotFound, with the message of the
+     * legacy finders by pk (Model::find_by_pk()): "Couldn't find Author with ID=99" for one id, and for a
+     * list of which some are missing "Couldn't find all Author with IDs (1,99) (found 1, but was looking
+     * for 2)". An id given twice is looked for once, and a row that a join repeats is found once.
+     *
+     * @return ($id is array ? list<TModel> : TModel)
+     * @throws RecordNotFound when an id is missing
+     * @throws ActiveRecordException as find() does
+     */
+    public function find_or_fail(mixed $id): Model|array
+    {
+        [$models, $ids] = $this->find_by_key(__FUNCTION__, $id);
+        $missing = $this->missing($id, $models, $ids);
+
+        if (null !== $missing) {
+            throw new RecordNotFound($missing);
+        }
+
+        return is_array($id) ? $models : $models[0];
+    }
+
+    /**
+     * The models of the rows whose primary key is one of $ids, read as find() reads a list.
+     *
+     * @param array<mixed> $ids
+     * @return list<TModel>
+     * @throws ActiveRecordException as find() does
+     */
+    public function find_many(array $ids): array
+    {
+        return $this->find_by_key(__FUNCTION__, $ids)[0];
+    }
+
+    /**
+     * What find() finds for $id when it finds every id, as find_or_fail() requires, or else what $callback
+     * returns, called without arguments.
+     *
+     * @param callable(): mixed $callback
+     * @return mixed The models (a TModel, or for a list of ids a list<TModel>), or what $callback returns
+     * @throws ActiveRecordException as find() does
+     */
+    public function find_or(mixed $id, callable $callback): mixed
+    {
+        [$models, $ids] = $this->find_by_key(__FUNCTION__, $id);
+
+        if (null !== $this->missing($id, $models, $ids)) {
+            return $callback();
+        }
+
+        return is_array($id) ? $models : $models[0];
+    }
+
+    /**
+     * The value of $column in the first row the query selects, read as first() reads it, or null when it
+     * selects none. Only that column is selected, named by the one rule of the builder (see
+     * QueryCompiler::column()). A column of the model is cast as a model casts its attribute (Column::cast():
+     * an integer beyond PHP_INT_MAX is its exact digits, #44; a DECIMAL a float, #146; a date an
+     * ActiveRecord\DateTime); any other name, a qualified one for instance, gives the value as the driver
+     * returns it (see QueryCompiler::model_column()). No model is built.
+     *
+     * <code>
+     * $name = Author::where('author_id', 1)->value('name');
+     * </code>
+     *
+     * @throws ActiveRecordException for an empty column name, before any statement
+     */
+    public function value(string $column): mixed
+    {
+        $rows = $this->column_rows(__FUNCTION__, [$column], $this->window(1));
+
+        return [] === $rows ? null : $this->caster($column)($rows[0][0]);
+    }
+
+    /**
+     * The value of $column in the one row the query selects, read as sole() reads the row and value() the
+     * value.
+     *
+     * @throws RecordNotFound when the query selects no row
+     * @throws MultipleRecordsFound when it selects more than one
+     * @throws ActiveRecordException for an empty column name, before any statement
+     */
+    public function sole_value(string $column): mixed
+    {
+        $row = $this->sole_of(__FUNCTION__, $this->column_rows(__FUNCTION__, [$column], $this->window(2)));
+
+        return $this->caster($column)($row[0]);
+    }
+
+    /**
+     * The values of $column in the rows the query selects, in order, each read as value() reads one. With
+     * $key, a map of them instead, keyed by the value of $key in each row as the driver returns it, since a
+     * cast one can be no key (a date is an object, a DECIMAL's float loses digits): PHP takes it for a key
+     * as it takes any, except that a null is '' and a float its text. A later row replaces an earlier one
+     * of the same key. No model is built.
+     *
+     * <code>
+     * $names = Author::order_by('name')->pluck('name');
+     * $names_by_id = Author::new_query()->pluck('name', 'author_id');
+     * </code>
+     *
+     * @return array<mixed>
+     * @throws ActiveRecordException for an empty column name, before any statement
+     */
+    public function pluck(string $column, ?string $key = null): array
+    {
+        $rows = $this->column_rows(__FUNCTION__, null === $key ? [$column] : [$column, $key], $this->state);
+        $cast = $this->caster($column);
+        $values = [];
+
+        foreach ($rows as $row) {
+            if (null === $key) {
+                $values[] = $cast($row[0]);
+            } else {
+                $values[self::array_key($row[1])] = $cast($row[0]);
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * Whether the query selects any row, without counting: the adapter's EXISTS() over its SELECT, which
+     * stops at the first row. A query of the builder leaves its order, its limit and its offset out, as the
+     * legacy exists does (spec §5.3), so a limit of 0 does not make it false, and without a select of its
+     * own it selects 1 (see QueryCompiler::compile_exists()). The statement that ran is left in
+     * Table::$last_sql.
+     *
+     * Model::exists() is the legacy exists, which Author::exists(...) calls.
      */
     public function exists(): bool
     {
         $table = $this->table();
         $conn = $table->connection();
-        $sql = $this->to_sql_builder();
+        $sql = $this->compiler()->compile_exists($this->state);
         $values = $table->format_date_bind_values($sql->select_bind_values());
         $statement = $conn->exists_sql($sql->to_s());
         $table->last_sql = $statement;
 
         return (bool) (int) $conn->query_and_fetch_one($statement, $values);
+    }
+
+    /**
+     * Whether the query selects no row: the opposite of exists().
+     */
+    public function doesnt_exist(): bool
+    {
+        return !$this->exists();
+    }
+
+    /**
+     * The number of rows the query selects; with a $column, of those in which the column is not null, as
+     * COUNT(column) counts. A query neither grouped, distinct nor windowed is counted in place, its order
+     * left out. Any other is counted as a subquery, SELECT COUNT(*) FROM (…) AS t, so that a grouped query
+     * counts its groups, a distinct one its distinct rows, and limit() and offset() the rows of their
+     * window (see QueryCompiler::compile_count()). The statement that ran is left in Table::$last_sql.
+     *
+     * <code>
+     * $parents = Author::group_by('parent_author_id')->count();
+     * </code>
+     *
+     * Model::count() is the legacy count, which Author::count(...) calls, unchanged: grouped, it counts the
+     * rows of the first group.
+     *
+     * @throws ActiveRecordException for an empty column name, before any statement
+     */
+    public function count(string $column = '*'): int
+    {
+        $compiler = $this->compiler();
+        $compiler->refuse_empty_column_name($column, __FUNCTION__);
+
+        $table = $this->table();
+        $sql = $compiler->compile_count($this->state, $column);
+        $values = $table->format_date_bind_values($sql->select_bind_values());
+        $row = $table->connection()->query(($table->last_sql = $sql->to_s()), $values)->fetch(\PDO::FETCH_NUM);
+
+        return is_array($row) ? (int) $row[0] : 0;
     }
 
     /**
@@ -1656,6 +1912,236 @@ class Query
     private function compiler(): QueryCompiler
     {
         return new QueryCompiler($this->table());
+    }
+
+    /**
+     * The models of the rows $state selects, through Table::find_by_sql(), with the engine's $conditions
+     * first in the WHERE (see QueryCompiler::compile_select()). The legacy options 'readonly' and 'include'
+     * apply (see get()).
+     *
+     * @param list<Where> $conditions
+     * @return list<TModel>
+     */
+    private function models(QueryState $state, array $conditions = []): array
+    {
+        $options = $state->legacy ?? [];
+        $sql = $this->compiler()->compile_select($state, $conditions);
+        $readonly = array_key_exists('readonly', $options) && $options['readonly'];
+        $includes = array_key_exists('include', $options) ? $options['include'] : null;
+
+        /** @var list<TModel> $models */
+        $models = $this->table()->find_by_sql($sql->to_s(), $sql->select_bind_values(), $readonly, $includes);
+
+        return $models;
+    }
+
+    /**
+     * A copy of the query's state that selects $rows rows at most: its own limit when it is smaller.
+     */
+    private function window(int $rows): QueryState
+    {
+        $state = clone $this->state;
+        $state->limit = min($state->limit ?? $rows, $rows);
+
+        return $state;
+    }
+
+    /**
+     * The one of $rows, which $method read with a window of two rows.
+     *
+     * @template TRow
+     * @param list<TRow> $rows
+     * @return TRow
+     * @throws RecordNotFound for no row
+     * @throws MultipleRecordsFound for more than one
+     */
+    private function sole_of(string $method, array $rows): mixed
+    {
+        return match (count($rows)) {
+            0 => throw new RecordNotFound(sprintf('%s() found no %s', $method, $this->model_class)),
+            1 => $rows[0],
+            default => throw new MultipleRecordsFound(sprintf('%s() found more than one %s', $method, $this->model_class)),
+        };
+    }
+
+    /**
+     * What a find by pk of $method, find() or one of its family, finds for $id (see find()): the models,
+     * and the ids it looks for, each once, by the key of its value (see key_of()), as given.
+     *
+     * @return array{list<TModel>, array<mixed>}
+     * @throws ActiveRecordException for a model whose primary key is not one column, or for a list that
+     *   holds a list
+     */
+    private function find_by_key(string $method, mixed $id): array
+    {
+        $table = $this->table();
+
+        if (1 !== count($table->pk)) {
+            throw new ActiveRecordException(sprintf(
+                '%s() needs a single-column primary key; %s has %s, for %s',
+                $method,
+                $this->model_class,
+                [] === $table->pk ? 'none' : 'a composite one (' . implode(', ', $table->pk) . ')',
+                is_array($id) ? 'the ids [' . implode(', ', array_map(self::describe_id(...), $id)) . ']' : 'the id ' . self::describe_id($id),
+            ));
+        }
+
+        $pk = $table->pk[0];
+        $given = is_array($id) ? array_values($id) : [$id];
+        // the ids as the legacy finders by pk read theirs: the date of a DateTime for a DATE pk
+        $values = array_map(fn(mixed $value): mixed => QueryCompiler::pk_value_for_column($table, $pk, $value), $given);
+        $ids = [];
+
+        foreach ($values as $i => $value) {
+            $ids[$this->key_of($value)] ??= $given[$i];
+        }
+
+        // nothing to look for, or nothing an INTEGER pk can equal (Postgres, #92): no statement
+        if ([] === $values || !QueryCompiler::keep_integer_pk_values($table, $pk, $values)) {
+            return [[], $ids];
+        }
+
+        $key = $this->conditions()->key($method, is_array($id) ? $values : $values[0], not: false);
+
+        return [$this->models(is_array($id) ? $this->state : $this->window(1), [$key]), $ids];
+    }
+
+    /**
+     * The message of the RecordNotFound of a find of $id that found $models, looking for $ids (see
+     * find_by_key()): that of the legacy finders by pk (Model::find_by_pk()); or null when no id is missing.
+     *
+     * @param list<TModel> $models
+     * @param array<mixed> $ids
+     */
+    private function missing(mixed $id, array $models, array $ids): ?string
+    {
+        $looking_for = is_array($id) ? count($ids) : 1;
+        $found = is_array($id) ? $this->rows_found($models) : count($models);
+
+        if ($found >= $looking_for) {
+            return null;
+        }
+
+        if (1 === $looking_for) {
+            return sprintf("Couldn't find %s with ID=%s", $this->model_class, self::describe_id(is_array($id) ? reset($ids) : $id));
+        }
+
+        return sprintf("Couldn't find all %s with IDs (%s) (found %d, but was looking for %d)", $this->model_class, implode(',', array_map(self::describe_id(...), $ids)), $found, $looking_for);
+    }
+
+    /**
+     * How many of the model's rows $models are, a find by pk found: one per value of the primary key, since
+     * a join can repeat a row, or one per model when the query selected no primary key.
+     *
+     * @param list<TModel> $models
+     */
+    private function rows_found(array $models): int
+    {
+        $table = $this->table();
+        $pk = $table->pk[0];
+        // the attribute of the pk column, which a row is read into
+        $column = $table->columns[$table->real_column_name($pk)] ?? null;
+        $attribute = null === $column ? $pk : $column->inflected_name;
+        $rows = [];
+
+        foreach ($models as $model) {
+            $attributes = $model->attributes();
+            $rows[array_key_exists($attribute, $attributes) ? 'key ' . $this->key_of($attributes[$attribute]) : 'model ' . spl_object_id($model)] = true;
+        }
+
+        return count($rows);
+    }
+
+    /**
+     * A text two ids share when they are one id: that of a scalar ('1' for 1 and '1'), and of a date and time
+     * as the connection binds it.
+     */
+    private function key_of(mixed $value): string
+    {
+        return match (true) {
+            $value instanceof \DateTimeInterface => $this->table()->connection()->datetime_to_string($value),
+            is_scalar($value), null === $value, $value instanceof \Stringable => (string) $value,
+            default => get_debug_type($value),
+        };
+    }
+
+    /**
+     * The values of $columns in the rows $state selects, in order, as the driver returns them: $state with
+     * those columns as its select, each named by the one rule of the builder, for a call of $method. The
+     * statement is left in Table::$last_sql.
+     *
+     * @param list<string> $columns
+     * @return list<array<mixed>>
+     * @throws ActiveRecordException for an empty column name
+     */
+    private function column_rows(string $method, array $columns, QueryState $state): array
+    {
+        $compiler = $this->compiler();
+        $state = clone $state;
+        $state->selects = [];
+
+        foreach ($columns as $column) {
+            $compiler->refuse_empty_column_name($column, $method);
+            $state->selects[] = ['column' => $column, 'alias' => null];
+        }
+
+        $table = $this->table();
+        $sql = $compiler->compile_select($state);
+        $values = $table->format_date_bind_values($sql->select_bind_values());
+        $statement = $table->connection()->query(($table->last_sql = $sql->to_s()), $values);
+        $rows = [];
+
+        while (is_array($row = $statement->fetch(\PDO::FETCH_NUM))) {
+            $rows[] = $row;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * How a value of $column is read: cast as a model casts its attribute when $column names a column of
+     * the model (see QueryCompiler::model_column()), else as the driver returns it.
+     *
+     * @return Closure(mixed): mixed
+     */
+    private function caster(string $column): Closure
+    {
+        $model_column = $this->compiler()->model_column($column);
+        $connection = $this->table()->connection();
+
+        if (null === $model_column) {
+            return fn(mixed $value): mixed => $value;
+        }
+
+        return fn(mixed $value): mixed => $model_column->cast($value, $connection);
+    }
+
+    /**
+     * An id as the messages of the legacy finders by pk write it (Model::find_by_pk()): a date and time
+     * without a text of its own in the datetime format.
+     */
+    private static function describe_id(mixed $id): string
+    {
+        return match (true) {
+            $id instanceof \DateTimeInterface && !$id instanceof \Stringable => $id->format('Y-m-d H:i:s'),
+            is_scalar($id), null === $id, $id instanceof \Stringable => (string) $id,
+            default => get_debug_type($id),
+        };
+    }
+
+    /**
+     * $value as PHP takes it for the key of an array, spelled out where PHP would not take it as it is: a
+     * null is '', a boolean 0 or 1, a float its text.
+     */
+    private static function array_key(mixed $value): int|string
+    {
+        return match (true) {
+            is_int($value), is_string($value) => $value,
+            null === $value => '',
+            is_bool($value) => (int) $value,
+            is_float($value), $value instanceof \Stringable => (string) $value,
+            default => get_debug_type($value),
+        };
     }
 
     /**

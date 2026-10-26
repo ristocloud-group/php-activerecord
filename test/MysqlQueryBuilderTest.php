@@ -88,6 +88,15 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same([1, 2, 3, 4], $this->ids(Author::in_random_order()->get()));
     }
 
+    // Review Focus 3: a BIGINT UNSIGNED beyond PHP_INT_MAX stays exact (#44), in the key a find looks up and in the
+    // value read back, as an attribute keeps it: the digits, in a string
+    public function test_bigint_unsigned_stays_exact(): void
+    {
+        BigId::create(['id' => '18446744073709551615', 'note' => 'max']);
+        $this->assert_same('18446744073709551615', BigId::new_query()->find('18446744073709551615')->id);
+        $this->assert_same('18446744073709551615', BigId::where('note', 'max')->value('id'));
+    }
+
     // MySQL has no OFFSET without LIMIT: the window of the builder is the adapter's own, an offset alone going with
     // the largest row count (#130), and the largest integers are exact in it
     public function test_the_window_is_limit_with_an_offset_before_the_count(): void

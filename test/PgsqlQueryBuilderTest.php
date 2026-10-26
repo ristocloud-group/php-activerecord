@@ -90,6 +90,16 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(['Tito'], array_map(fn(Author $author): string => $author->name, Author::select('name')->group_by('name')->having('name', 'ilike', 't%')->get()));
     }
 
+    // Spec §5.3: a value that an INTEGER pk can never equal fails the statement on Postgres (22P02) and aborts the
+    // transaction, so a find looks it up in no statement, as the legacy finders by pk do (#92). The table is loaded
+    // first: a table read cold adds its schema read to the capture.
+    public function test_find_non_integer_pk_never_queries(): void
+    {
+        Author::table();
+        $statements = GoldenStatements::capture(fn() => $this->assert_null(Author::new_query()->find('abc')));
+        $this->assert_same([], $statements);
+    }
+
     // Postgres writes its window as LIMIT n OFFSET m, with an offset alone as OFFSET m (#130)
     public function test_the_window_is_limit_and_offset(): void
     {

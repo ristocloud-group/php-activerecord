@@ -915,7 +915,7 @@ abstract class Connection
      * True by default: MySQL, MariaDB and SQLite compare any value with an INTEGER
      * column, so 'abc' simply matches no row (#92).
      *
-     * @internal Serves Model::find_by_pk(); not a supported API.
+     * @internal Serves the finders by pk (QueryCompiler::keep_integer_pk_values()); not a supported API.
      */
     public function accepts_integer_value(mixed $value): bool
     {

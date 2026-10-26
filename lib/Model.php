@@ -149,6 +149,16 @@ use Closure;
  * @method static Query<static> for_page(int $page, int $per_page = 15) A new query on this class for this page of rows
  * @method static string to_sql() The SELECT of a new query on this class
  * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
+ * @method static static first_or_fail() The model of the first row of this class, or RecordNotFound when there is none
+ * @method static mixed first_or(callable $callback) The model of the first row of this class, or what the callback returns when there is none
+ * @method static static sole() The model of the only row of this class: RecordNotFound when there is none, MultipleRecordsFound when there are more
+ * @method static static|list<static> find_or_fail(mixed $id) The model of this primary key, or the models of these: RecordNotFound when one is missing
+ * @method static list<static> find_many(array<mixed> $ids) The models of these primary keys, the missing ones left out
+ * @method static mixed find_or(mixed $id, callable $callback) The model of this primary key, or the models of these: or what the callback returns when one is missing
+ * @method static mixed value(string $column) The value of this column in the first row of this class, cast as its attribute is, or null when there is none
+ * @method static mixed sole_value(string $column) The value of this column in the only row of this class, as sole() reads it
+ * @method static array<mixed> pluck(string $column, ?string $key = null) The values of this column in the rows of this class, or keyed by the values of another
+ * @method static bool doesnt_exist() Whether this class has no row
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */
@@ -1906,9 +1916,11 @@ class Model
             // a find by pk looks a list of values up in the first pk column only: a
             // composite key names its row by every column
             $conditions = [];
+            $table = static::table();
+            $connection = static::connection(...);
 
             foreach ($pk as $name => $value) {
-                $conditions[$name] = self::date_pk_finder_value($name, $value);
+                $conditions[$name] = QueryCompiler::pk_value_for_column($table, $name, $value, $connection);
             }
 
             $found = static::find('first', ['conditions' => $conditions]);
@@ -2647,13 +2659,17 @@ class Model
      */
     private static function pk_finder_rows(mixed $values, array $options): array
     {
-        $pk = static::table()->pk[0] ?? null;
+        $table = static::table();
+        $pk = $table->pk[0] ?? null;
+        // the values are checked on connection(), the public static a subclass can override: asked, as it
+        // always was, where a value needs it
+        $connection = static::connection(...);
         $bound = null === $pk ? $values : (is_array($values)
-            ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
-            : self::date_pk_finder_value($pk, $values));
+            ? array_map(fn($value) => QueryCompiler::pk_value_for_column($table, $pk, $value, $connection), $values)
+            : QueryCompiler::pk_value_for_column($table, $pk, $values, $connection));
         $list = [];
 
-        if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
+        if (null === $pk || QueryCompiler::keep_integer_pk_values($table, $pk, $bound, $connection)) {
             // ANDed with any conditions, whose alias names map as in find() (#149)
             $options = self::and_pk_conditions(static::pk_conditions($bound), $options, static::$alias_attribute);
             $list = static::table()->find($options);
@@ -2665,60 +2681,6 @@ class Model
     private static function describe_find_value(mixed $value): mixed
     {
         return $value instanceof \DateTimeInterface && !$value instanceof \Stringable ? $value->format('Y-m-d H:i:s') : $value;
-    }
-
-    /**
-     * A DateTime for a DATE pk column, as the date the column stores (like process_data()
-     * does for an update/delete). A finder binds its values positionally, in the datetime
-     * format ('2026-01-02 00:00:00' or '2026-01-02 14:00:00'), which SQLite compares as
-     * text with the stored '2026-01-02' and MySQL/MariaDB compare as a datetime. Any other
-     * value, or a DateTime for another column type, is returned as is.
-     */
-    private static function date_pk_finder_value(string $name, mixed $value): mixed
-    {
-        if (!$value instanceof \DateTimeInterface) {
-            return $value;
-        }
-
-        $table = static::table();
-        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
-
-        return null !== $column && Column::DATE === $column->type ? static::connection()->date_to_string($value) : $value;
-    }
-
-    /**
-     * Leaves out of $values (a finder's pk value, or list of values) those the connection
-     * cannot compare with an INTEGER pk column: on Postgres 'abc' fails the query (22P02)
-     * and aborts the open transaction, while it can only match no row (#92). Values for
-     * another column type, and values that are all accepted, are left as they are.
-     * When no value is left no query runs, so the table's last_sql still shows the
-     * previous query.
-     *
-     * @return bool False when no value is left, so there is nothing to query
-     */
-    private static function keep_integer_pk_finder_values(string $name, mixed &$values): bool
-    {
-        $table = static::table();
-        $column = $table->columns[$table->real_column_name($name)] ?? null;
-
-        if (null === $column || Column::INTEGER !== $column->type) {
-            return true;
-        }
-
-        $connection = static::connection();
-
-        if (!is_array($values)) {
-            return $connection->accepts_integer_value($values);
-        }
-
-        $accepted = array_filter($values, $connection->accepts_integer_value(...));
-
-        if (count($accepted) === count($values)) {
-            return true;
-        }
-        $values = array_values($accepted);
-
-        return [] !== $values;
     }
 
     /**

@@ -6,11 +6,14 @@
 
 namespace ActiveRecord;
 
+use Closure;
+
 /**
  * Turns a QueryState into the SQLBuilder that renders it: the one place that does.
  *
  * @internal Serves the Query engine; not a supported API.
  * @package ActiveRecord
+ * @phpstan-import-type Where from QueryState
  */
 final class QueryCompiler
 {
@@ -23,29 +26,181 @@ final class QueryCompiler
     private ?array $model_column_keys = null;
 
     /**
+     * The columns of the model's table by the keys of their names (see Connection::column_name_key()), read
+     * once (see model_column()).
+     *
+     * @var array<string, Column>|null
+     */
+    private ?array $columns_by_key = null;
+
+    /**
      * The statements are rendered for $connection when one is given, else for $table's: a bulk write
      * of Model gives the connection it always built its statement on (see Query::execute_update()).
      */
     public function __construct(private readonly Table $table, private readonly ?Connection $connection = null) {}
 
     /**
+     * A pk value of a finder as the column stores it: a DateTime for a DATE pk column as the date the column
+     * stores (like Table::process_data() does for an update/delete). A finder binds its values positionally, in the
+     * datetime format ('2026-01-02 00:00:00' or '2026-01-02 14:00:00'), which SQLite compares as text with the
+     * stored '2026-01-02' and MySQL/MariaDB compare as a datetime. Any other value, or a DateTime for another
+     * column type, is returned as is. $name names the pk column as the model does, by the column or its
+     * attribute name.
+     *
+     * Moved here unchanged from Model (date_pk_finder_value()), so that the legacy finders by pk
+     * (Model::find_by_pk() and its family, Model::reload()) and the builder's (Query::find() and its family)
+     * share it. The date is written by the connection that $connection returns when it is given, else by the
+     * Table's: the legacy finders give Model::connection(), the public static a subclass can override, which
+     * they always asked here, and only for a DateTime of a DATE pk.
+     *
+     * @internal Serves the finders by pk of Model and Query; not a supported API.
+     * @param (Closure(): Connection)|null $connection
+     */
+    public static function pk_value_for_column(Table $table, string $name, mixed $value, ?Closure $connection = null): mixed
+    {
+        if (!$value instanceof \DateTimeInterface) {
+            return $value;
+        }
+
+        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
+
+        return null !== $column && Column::DATE === $column->type ? self::pk_connection($table, $connection)->date_to_string($value) : $value;
+    }
+
+    /**
+     * Leaves out of $values (a finder's pk value, or list of values) those the connection
+     * cannot compare with an INTEGER pk column: on Postgres 'abc' fails the query (22P02)
+     * and aborts the open transaction, while it can only match no row (#92). Values for
+     * another column type, and values that are all accepted, are left as they are.
+     * When no value is left no query runs, so the table's last_sql still shows the
+     * previous query.
+     *
+     * Moved here unchanged from Model (keep_integer_pk_finder_values()), to be shared as
+     * pk_value_for_column() is, which says which connection checks the values.
+     *
+     * @internal Serves the finders by pk of Model and Query; not a supported API.
+     * @param (Closure(): Connection)|null $connection
+     * @return bool False when no value is left, so there is nothing to query
+     */
+    public static function keep_integer_pk_values(Table $table, string $name, mixed &$values, ?Closure $connection = null): bool
+    {
+        $column = $table->columns[$table->real_column_name($name)] ?? null;
+
+        if (null === $column || Column::INTEGER !== $column->type) {
+            return true;
+        }
+
+        $connection = self::pk_connection($table, $connection);
+
+        if (!is_array($values)) {
+            return $connection->accepts_integer_value($values);
+        }
+
+        $accepted = array_filter($values, $connection->accepts_integer_value(...));
+
+        if (count($accepted) === count($values)) {
+            return true;
+        }
+        $values = array_values($accepted);
+
+        return [] !== $values;
+    }
+
+    /**
      * The SELECT of a state: that of its legacy options when it holds some, as the legacy entries always
      * sent it, else that of the builder's clauses. A state that holds nothing selects every row.
      *
-     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both: the
-     *   one would be compiled and the other dropped
+     * $conditions are the engine's own, in the shapes of the builder's (QueryState::$wheres): the primary
+     * key of a find (see Query::find()). They come first in the WHERE, ANDed, and the builder's WHERE
+     * follows in parentheses (see where_clause()).
+     *
+     * @param list<Where> $conditions
+     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both, or
+     *   legacy options and conditions of the engine: the one would be compiled and the other dropped
      */
-    public function compile_select(QueryState $state): SQLBuilder
+    public function compile_select(QueryState $state, array $conditions = []): SQLBuilder
     {
         if (null === $state->legacy) {
-            return $this->compile_clauses($state);
+            return $this->compile_clauses($state, $conditions);
         }
 
-        if (self::holds_clauses($state)) {
+        if ([] !== $conditions || self::holds_clauses($state)) {
             throw new ActiveRecordException(sprintf('A query on %s holds both legacy options and builder clauses: it compiles the one or the other', $this->table->class->name));
         }
 
         return $this->compile_legacy($state->legacy);
+    }
+
+    /**
+     * The SELECT that counts the rows of a state, for Query::count(); or with a $column other than *, the
+     * rows in which that column is not null, as COUNT(column) counts.
+     *
+     * A state neither grouped (GROUP BY, HAVING), nor distinct, nor windowed (LIMIT, OFFSET) is counted in
+     * place: SELECT COUNT(*) with its FROM, joins and WHERE, without its order, which changes no number
+     * (Postgres refuses an order by a column beside COUNT, besides). Any other is counted as a subquery,
+     * SELECT COUNT(*) FROM (…) AS t, which keeps its order only when windowed, since there the order picks
+     * the rows. The subquery selects what the state selects of its own; with nothing of its own, every column
+     * with DISTINCT, the rows DISTINCT tells apart, and otherwise the counted column, or 1: a select of every
+     * column is refused beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY. The counted column
+     * is then t's column of its name (see result_name()), which the subquery must select.
+     *
+     * @internal Serves Query::count(); not a supported API.
+     * @throws ActiveRecordException for a state of legacy options (see compile_select())
+     */
+    public function compile_count(QueryState $state, string $column): SQLBuilder
+    {
+        $all = '*' === $column;
+        $windowed = null !== $state->limit || null !== $state->offset;
+        $rows = clone $state;
+
+        if (!$windowed) {
+            $rows->orders = [];
+        }
+
+        if (!$windowed && !$state->distinct && [] === $state->groups && [] === $state->havings) {
+            $rows->selects = [['raw' => 'COUNT(' . ($all ? '*' : $this->column($column, $state)) . ')', 'bindings' => []]];
+
+            return $this->compile_select($rows);
+        }
+
+        if ([] === $state->selects && !$state->distinct) {
+            $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
+        }
+
+        $subquery = $this->compile_select($rows);
+        $count = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
+        $count->from_values($subquery->select_bind_values());
+        $count->select('COUNT(' . ($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))) . ')');
+
+        return $count;
+    }
+
+    /**
+     * The SELECT whose rows Query::exists() asks for. That of a state of legacy options is its own:
+     * Model::exists() takes out of them what the legacy exists leaves out. The builder's leaves out its
+     * order, its limit and its offset, and their values, as the legacy exists does (spec §5.3), and selects
+     * 1 when the state selects nothing of its own, as the legacy exists does: a select of every column is
+     * refused beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY. A select of its own stays,
+     * which a HAVING can name.
+     *
+     * @internal Serves Query::exists(); not a supported API.
+     */
+    public function compile_exists(QueryState $state): SQLBuilder
+    {
+        if (null !== $state->legacy) {
+            return $this->compile_select($state);
+        }
+
+        $rows = clone $state;
+        $rows->orders = [];
+        $rows->limit = null;
+        $rows->offset = null;
+
+        if ([] === $rows->selects) {
+            $rows->selects = [['raw' => '1', 'bindings' => []]];
+        }
+
+        return $this->compile_select($rows);
     }
 
     /**
@@ -121,7 +276,7 @@ final class QueryCompiler
      * engine's own conditions (the primary key of a find, ...), each one condition with its values,
      * they come first, ANDed, and the builder's WHERE follows in parentheses: an OR in it never
      * widens them (spec §5.2), as the legacy finders keep their pk apart from the conditions they
-     * are given (#149).
+     * are given (#149). A WHERE in parentheses already is not wrapped a second time (see enclosed()).
      *
      * @internal Serves Query; not a supported API.
      * @param list<array{sql: string, values: list<mixed>}> $conditions
@@ -144,7 +299,7 @@ final class QueryCompiler
         }
 
         if (null !== $own) {
-            $sql[] = "({$own['sql']})";
+            $sql[] = self::enclosed($state->wheres, $own['sql']) ? $own['sql'] : "({$own['sql']})";
             $values = [...$values, ...$own['values']];
         }
 
@@ -173,6 +328,36 @@ final class QueryCompiler
     public function column(string $name, QueryState $state): string
     {
         return $this->column_reference($name, $state)['sql'];
+    }
+
+    /**
+     * The column of the model's table that $name names by the one rule (see column()): an unqualified
+     * name by its alias, its attribute name or its own name, or a pre-quoted one by its text, matched as
+     * the database matches column names. Null for any other name (a qualified one, *, a joined table's
+     * column, the alias of an expression) and for the columns no schema lists (rowid, ...). A value read
+     * of it is cast by it, as a model casts its attribute (see Query::value()).
+     *
+     * @internal Serves Query; not a supported API.
+     */
+    public function model_column(string $name): ?Column
+    {
+        $parts = $this->name_parts($name);
+
+        if (null === $parts || 1 !== count($parts) || '*' === $name) {
+            return null;
+        }
+
+        $connection = $this->connection();
+
+        if (null === $this->columns_by_key) {
+            $this->columns_by_key = [];
+
+            foreach ($this->table->columns as $column_name => $column) {
+                $this->columns_by_key[$connection->column_name_key((string) $column_name)] ??= $column;
+            }
+        }
+
+        return $this->columns_by_key[$connection->column_reference_key($parts[0][1] ? $name : $this->named_column($name))] ?? null;
     }
 
     /**
@@ -311,9 +496,12 @@ final class QueryCompiler
     /**
      * The SELECT of the builder's clauses: what it selects, else the default select, from the model's
      * table or the FROM that from() or from_raw() gives, with the joins, the WHERE, the GROUP BY, the HAVING,
-     * the ORDER BY and the window (LIMIT and OFFSET).
+     * the ORDER BY and the window (LIMIT and OFFSET). The engine's $conditions come first in the WHERE (see
+     * compile_select()).
+     *
+     * @param list<Where> $conditions
      */
-    private function compile_clauses(QueryState $state): SQLBuilder
+    private function compile_clauses(QueryState $state, array $conditions = []): SQLBuilder
     {
         $sql = new SQLBuilder($this->connection(), $this->from_clause($state));
         $sql->from_values($state->from_bindings);
@@ -341,7 +529,9 @@ final class QueryCompiler
         $sql->select(($state->distinct ? 'DISTINCT ' : '') . $columns);
         $sql->select_values($values);
 
-        $where = $this->where_clause($state);
+        // each condition of the engine is one condition, rendered as those of the WHERE are
+        $rendering = $this->conditions($state);
+        $where = $this->where_clause($state, array_map(fn(array $condition): array => $rendering->compile([$condition]), $conditions));
 
         if (null !== $where) {
             $sql->where_condition($where['sql'], $where['values']);
@@ -544,6 +734,36 @@ final class QueryCompiler
     }
 
     /**
+     * Whether the WHERE of the conditions $wheres, rendered as $sql, is in parentheses already, as one
+     * group: that of a closure, not negated (see ConditionCompiler's group()), or (0), which
+     * ConditionCompiler::compile() writes for the lone condition '0'. An OR in it then never widens the
+     * engine's conditions it is ANDed with (see where_clause()).
+     *
+     * @param list<Where> $wheres
+     */
+    private static function enclosed(array $wheres, string $sql): bool
+    {
+        if ('(0)' === $sql) {
+            return true;
+        }
+
+        $where = 1 === count($wheres) ? $wheres[0] : null;
+
+        return null !== $where && 'group' === $where['type'] && !$where['not'];
+    }
+
+    /**
+     * The connection that checks the pk values of a finder (see pk_value_for_column()): the one $connection
+     * returns when it is given, else the Table's.
+     *
+     * @param (Closure(): Connection)|null $connection
+     */
+    private static function pk_connection(Table $table, ?Closure $connection): Connection
+    {
+        return null === $connection ? $table->connection() : $connection();
+    }
+
+    /**
      * The WHERE of the 'conditions' of legacy options, if they have any: a string; a list, a
      * condition and its values as SQLBuilder::where() takes them; or a hash, whose names are read
      * through the model's aliases (#144), unless the options give the names to map as
@@ -652,7 +872,7 @@ final class QueryCompiler
         // an alias names an attribute, and an attribute its column; a pre-quoted name is the column's own
         $connection = $this->connection();
         $quoted = $parts[0][1];
-        $column = $quoted ? $name : $this->table->real_column_name($this->alias_attributes()[$name] ?? $name);
+        $column = $quoted ? $name : $this->named_column($name);
         $sql = $connection->quote_name($column);
         // the text of a pre-quoted identifier, in which a doubled quote character is one
         $q = $connection::$QUOTE_CHARACTER;
@@ -663,6 +883,41 @@ final class QueryCompiler
         }
 
         return ['sql' => $this->rows_name($state) . '.' . $sql, 'column' => $data];
+    }
+
+    /**
+     * The column an unqualified, unquoted name stands for: the column of the attribute an alias names, or of
+     * an attribute name (#92), or else the name itself (see Table::real_column_name()).
+     */
+    private function named_column(string $name): string
+    {
+        return $this->table->real_column_name($this->alias_attributes()[$name] ?? $name);
+    }
+
+    /**
+     * The name a statement gives the column it selects by $name (see column()): the text of the name, that
+     * of its last part for a qualified one, and for an unqualified one the column an alias or an attribute
+     * name stands for.
+     */
+    private function result_name(string $name): string
+    {
+        $parts = $this->name_parts($name);
+
+        if (null === $parts) {
+            return $name;
+        }
+
+        [$part, $quoted] = $parts[count($parts) - 1];
+
+        if (!$quoted) {
+            return 1 === count($parts) ? $this->named_column($part) : $part;
+        }
+
+        // the text of a quoted identifier, in which a doubled quote character is one
+        $connection = $this->connection();
+        $q = $connection::$QUOTE_CHARACTER;
+
+        return str_replace($q . $q, $q, substr($part, 1, -1));
     }
 
     /**

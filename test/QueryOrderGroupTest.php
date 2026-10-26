@@ -451,7 +451,7 @@ class QueryOrderGroupTest extends DatabaseTest
 
     // Spec §3.2: the values of a SELECT come in the order of its clauses, whatever the order of the calls: the
     // select's, the FROM's, the joins', the WHERE's, the GROUP BY's, the HAVING's, then the ORDER BY's; and they are
-    // the values get() and exists() send
+    // the values get() sends, and exists() but for the ORDER BY's (spec §5.3: it leaves the order out)
     public function test_the_bindings_come_in_the_order_of_the_clauses_and_are_those_that_get_sends(): void
     {
         $query = Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])
@@ -483,7 +483,7 @@ class QueryOrderGroupTest extends DatabaseTest
         });
 
         $this->assert_true($exists);
-        $this->assert_same([$query->get_bindings()], array_column($statements, 'values'));
+        $this->assert_same([[10, 0, 5, 1]], array_column($statements, 'values'));
 
         $sql = new SQLBuilder($this->conn, 'authors');
         $sql->where('name = ?', 'where')
