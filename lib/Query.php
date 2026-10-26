@@ -33,8 +33,10 @@ class Query
      * - update() and delete(): called statically they would write every row, so __callStatic()
      *   refuses them;
      * - the names that Model defines itself (find, first, last, all, count, exists, create, upsert,
-     *   query, find_by_sql, update_all, delete_all, transaction, table, connection, ...): PHP calls
-     *   them and they keep their legacy meaning, so they are reached through new_query() or a chain;
+     *   query, find_by_sql, update_all, delete_all, transaction, table, connection, readonly, ...): PHP
+     *   calls them and they keep their legacy meaning, so they are reached through new_query() or a
+     *   chain. PHP refuses a static call of an instance method of Model such as readonly() with its own
+     *   Error, before __callStatic() sees it;
      * - the internals of the legacy entries (from_options, to_sql_builder, state, execute_*, legacy_*).
      *
      * @var list<string>
@@ -110,7 +112,15 @@ class Query
         'offset',
         'skip',
         'for_page',
+        'with',
+        'without',
+        'with_only',
+        'when',
+        'unless',
+        'tap',
+        'clone',
         'to_sql',
+        'to_raw_sql',
         'get_bindings',
         'first_or_fail',
         'first_or',
@@ -123,6 +133,14 @@ class Query
         'pluck',
         'doesnt_exist',
     ];
+
+    /**
+     * What to_raw_sql() reads in the SQL of a statement, as PDO reads it: a string in single or double quotes (in
+     * which a backslash escapes the next character), and a comment (from -- to the end of the line, or a block
+     * comment), which are left as they are; and ?? and ?, the longer first. A ? outside the strings and the
+     * comments is a bind marker, and ?? stands for a ? of the statement.
+     */
+    private const string BIND_MARKER = '/\'(?:[^\'\\\\]++|\\\\.)*+\'|"(?:[^"\\\\]++|\\\\.)*+"|--[^\r\n]*+|\/\*.*?\*\/|\?\??/s';
 
     private QueryState $state;
 
@@ -1311,11 +1329,243 @@ class Query
     }
 
     /**
+     * Eager loads these relationships of the model with the models the query finds, as the legacy 'include' option
+     * does: get(), first(), find() and the other terminals that return models send the statements that load them
+     * through Table::find_by_sql(), after their own, and what is loaded is read with no query. A relationship is
+     * named as the model declares it ($has_many, $has_one, $belongs_to), and one of a related model by dots:
+     * 'author.books' loads the author of each model, and the books of those authors. A list of names is taken too,
+     * in which a name may hold a list of its own, as the legacy option takes it: ['author' => ['books']].
+     *
+     * The relationships are merged into those the query loads already, each once, in the order they were first
+     * given; one that others are loaded under is their parent, wherever it was first given. state()->includes holds
+     * them as the legacy option takes them. A terminal that needs no model (count(), exists(), value(), pluck())
+     * loads nothing.
+     *
+     * <code>
+     * $books = Book::with('author.books')->get();
+     * </code>
+     *
+     * @param string|array<mixed> ...$relations
+     * @return $this
+     * @throws RelationshipException at the call, and the query is left as it was, for a name that is no relationship
+     *   of its model, at any depth: where the legacy option throws it when it runs, and only if it finds a model
+     * @throws ActiveRecordException at the call, and the query is left as it was, for an empty name ('author..books'),
+     *   or a list that is no list of names: a constraint on a relationship (a Closure) is not read yet
+     */
+    public function with(string|array ...$relations): static
+    {
+        $paths = $this->relationship_paths(__FUNCTION__, $relations);
+        $this->refuse_undeclared_relationships($paths);
+        $this->state->includes = self::including($this->state->includes, $paths);
+
+        return $this;
+    }
+
+    /**
+     * Takes relationships off those the query eager loads, each by its name, 'author.books' for the books under the
+     * authors: what is loaded under a relationship goes with it, and a relationship that loses all it loaded under
+     * it stays loaded. As in Eloquent, a name that the query does not load takes nothing off, and is not looked up:
+     * it need not be a relationship of the model.
+     *
+     * <code>
+     * Book::with('author.books')->without('author.books')->get(); // loads the authors only
+     * </code>
+     *
+     * @return $this
+     * @throws ActiveRecordException for an empty name, and the query is left as it was
+     */
+    public function without(string ...$relations): static
+    {
+        $includes = $this->state->includes;
+
+        foreach ($this->relationship_paths(__FUNCTION__, $relations) as $path) {
+            $includes = self::excluding($includes, $path);
+        }
+
+        $this->state->includes = $includes;
+
+        return $this;
+    }
+
+    /**
+     * Eager loads only these relationships, as with() reads them: those the query loaded are replaced.
+     *
+     * @param string|array<mixed> ...$relations
+     * @return $this
+     * @throws RelationshipException as with() does
+     * @throws ActiveRecordException as with() does
+     */
+    public function with_only(string|array ...$relations): static
+    {
+        $paths = $this->relationship_paths(__FUNCTION__, $relations);
+        $this->refuse_undeclared_relationships($paths);
+        $this->state->includes = self::including([], $paths);
+
+        return $this;
+    }
+
+    /**
+     * Flags the models the query finds as readonly, as the legacy 'readonly' option does (see Model::readonly()):
+     * they refuse save(), delete() and the other writes. The models loaded with them (see with()) are not; with
+     * false none is.
+     *
+     * Model has an instance method of this name, which PHP calls and refuses to call without a model, so it is no
+     * entry of the static forwarding: Author::readonly() is PHP's Error, and the call is made on a query,
+     * Author::new_query()->readonly() or Author::where(...)->readonly().
+     *
+     * <code>
+     * $author = Author::where('name', 'Tito')->readonly()->first();
+     * </code>
+     *
+     * @return $this
+     */
+    public function readonly(bool $value = true): static
+    {
+        $this->state->readonly = $value;
+
+        return $this;
+    }
+
+    /**
+     * Calls $callback with the query and the value when $value is true as PHP's if reads it, or else $default, if
+     * there is one, with the same arguments: Eloquent's when(). A value that is a Closure is called with the query
+     * first, and what it returns is the value. Any other callable is no more than a value, and a true one.
+     *
+     * The query is mutable (spec §3.2), so the callback changes it, and it is what comes back: unless the callback
+     * hands back another query on the model, as in Eloquent, which is then the query that goes on, a fork for
+     * instance (see clone()). Anything else that the callback returns is of no use to the chain, and is left out.
+     *
+     * <code>
+     * Author::when($name, fn (Query $query) => $query->where('name', $name))->get();
+     * </code>
+     *
+     * @param callable(static, mixed): mixed $callback
+     * @param (callable(static, mixed): mixed)|null $default
+     * @return static
+     */
+    public function when(mixed $value, callable $callback, ?callable $default = null): static
+    {
+        return $this->conditional(true, $value, $callback, $default);
+    }
+
+    /**
+     * Calls $callback with the query and the value when $value is false as PHP's if reads it, or else $default, if
+     * there is one, with the same arguments: Eloquent's unless(), which is when() with the truth of the value
+     * reversed. The rest is as when() has it.
+     *
+     * @param callable(static, mixed): mixed $callback
+     * @param (callable(static, mixed): mixed)|null $default
+     * @return static
+     */
+    public function unless(mixed $value, callable $callback, ?callable $default = null): static
+    {
+        return $this->conditional(false, $value, $callback, $default);
+    }
+
+    /**
+     * Calls $callback with the query, and returns the query: a step in the chain that is no clause of its own.
+     * What the callback returns is of no use here, not even another query, as in Eloquent's tap().
+     *
+     * <code>
+     * Author::where('name', 'Tito')->tap(fn (Query $query) => error_log($query->to_raw_sql()))->get();
+     * </code>
+     *
+     * @param callable(static): mixed $callback
+     * @return $this
+     */
+    public function tap(callable $callback): static
+    {
+        $callback($this);
+
+        return $this;
+    }
+
+    /**
+     * A copy of the query, to go its own way: a change to the copy never reaches the query it was made from, nor
+     * the other way round, whatever it is made to (the conditions and the groups of them, the joins and their
+     * conditions, the HAVING, the includes, the plain clauses). The query is mutable (spec §3.2), so this is how to
+     * fork one. The model and its table are shared, and so are the values the query binds, which are not copied.
+     *
+     * <code>
+     * $authors = Author::where('author_id', '>', 1);
+     * $few = $authors->clone()->limit(2)->get();
+     * $all = $authors->get();
+     * </code>
+     *
+     * @return static
+     */
+    public function clone(): static
+    {
+        return clone $this;
+    }
+
+    /**
+     * Makes PHP's own clone of a query the copy that clone() returns: its state is copied, down to the groups of
+     * conditions in it.
+     */
+    public function __clone()
+    {
+        $this->state = clone $this->state;
+    }
+
+    /**
      * The SELECT the query sends, with its bind markers (see get_bindings()).
      */
     public function to_sql(): string
     {
         return $this->to_sql_builder()->to_s();
+    }
+
+    /**
+     * The SELECT the query sends with its values written in it, each bind marker replaced, in order, by the next
+     * value of get_bindings(): to read a statement, or to run it by hand, for debugging only. The query itself
+     * always sends its values bound, never written in the statement.
+     *
+     * - A string is written as Connection::escape() quotes it, and so is a date and time, in the format the
+     *   query binds it (a date for a DATE column that it is compared with, else a date and time).
+     * - An int is written as it is, and a float as PHP writes it, which is how PDO binds it (to the digits that the
+     *   precision setting keeps); INF, -INF and NAN as the strings 'INF', '-INF' and 'NAN'. null is NULL, and a
+     *   bool the 0 or 1 that the adapter binds: Postgres refuses a boolean column compared with 1, where the
+     *   query's bound text '1' is accepted.
+     * - An object that has a text (__toString()) is written as that string, and no other object is a value.
+     *
+     * The markers are those PDO reads: a ? outside a string and a comment, so the ? of a string of SQL written
+     * by hand is no marker, and ?? is a ? of the statement. What is written in place of a marker is never read
+     * again: a ? in a value is the value's. A statement whose markers and values do not match is not written.
+     *
+     * <code>
+     * Author::where('name', "O'Neil")->to_raw_sql(); // SELECT * FROM `authors` WHERE `name` = 'O\'Neil'
+     * </code>
+     *
+     * @throws ActiveRecordException for markers and values that do not match, or a value that is no SQL
+     */
+    public function to_raw_sql(): string
+    {
+        $table = $this->table();
+        $sql = $this->to_sql_builder();
+        $values = $table->format_date_bind_values($sql->select_bind_values());
+        $connection = $table->connection();
+        $markers = 0;
+
+        $raw = preg_replace_callback(self::BIND_MARKER, function (array $match) use (&$markers, $values, $connection): string {
+            if ('?' !== $match[0]) {
+                // a string and a comment as they are, and ?? as the ? it stands for
+                return '??' === $match[0] ? '?' : $match[0];
+            }
+
+            // a marker that has no value is counted, and the statement refused below
+            return $this->sql_literal($values[$markers++] ?? null, $connection);
+        }, $sql->to_s());
+
+        if (null === $raw) {
+            throw new ActiveRecordException(sprintf('to_raw_sql() could not read the SELECT of %s: %s', $this->model_class, preg_last_error_msg()));
+        }
+
+        if ($markers !== count($values)) {
+            throw new ActiveRecordException(sprintf('to_raw_sql() found %d bind markers in the SELECT of %s, for %d values', $markers, $this->model_class, count($values)));
+        }
+
+        return $raw;
     }
 
     /**
@@ -1334,8 +1584,8 @@ class Query
 
     /**
      * Runs the query and returns the models of the rows it selects, through Table::find_by_sql().
-     * The legacy options 'readonly' (the models are readonly) and 'include' (the relationships to
-     * eager load) apply.
+     * The models are readonly if the query is (readonly(), or the legacy option of that name), and the
+     * relationships it eager loads (with(), or the legacy 'include' option) are loaded with them.
      *
      * @return list<TModel>
      */
@@ -1930,8 +2180,9 @@ class Query
 
     /**
      * The models of the rows $state selects, through Table::find_by_sql(), with the engine's $conditions
-     * first in the WHERE (see QueryCompiler::compile_select()). The legacy options 'readonly' and 'include'
-     * apply (see get()).
+     * first in the WHERE (see QueryCompiler::compile_select()). The readonly flag and the relationships to
+     * eager load are those of the builder, or of the legacy options 'readonly' and 'include' (see get()): a
+     * state holds the one or the other.
      *
      * @param list<Where> $conditions
      * @return list<TModel>
@@ -1940,8 +2191,9 @@ class Query
     {
         $options = $state->legacy ?? [];
         $sql = $this->compiler()->compile_select($state, $conditions);
-        $readonly = array_key_exists('readonly', $options) && $options['readonly'];
-        $includes = array_key_exists('include', $options) ? $options['include'] : null;
+        $readonly = $state->readonly || (array_key_exists('readonly', $options) && $options['readonly']);
+        // no includes at all is null, which find_by_sql() takes as nothing to load, and spares it the attributes
+        $includes = array_key_exists('include', $options) ? $options['include'] : ([] === $state->includes ? null : $state->includes);
 
         /** @var list<TModel> $models */
         $models = $this->table()->find_by_sql($sql->to_s(), $sql->select_bind_values(), $readonly, $includes);
@@ -2339,6 +2591,254 @@ class Query
         }
 
         return $value;
+    }
+
+    /**
+     * What when() and unless() do: the callback runs when the truth of $value is $when (true for when(), false for
+     * unless()), else the default does, if there is one. A Closure given as the value is called with the query, and
+     * what it returns is the value.
+     *
+     * @param callable(static, mixed): mixed $callback
+     * @param (callable(static, mixed): mixed)|null $default
+     * @return static The query, or the query on the model that the callback handed back
+     */
+    private function conditional(bool $when, mixed $value, callable $callback, ?callable $default): static
+    {
+        $value = $value instanceof Closure ? $value($this) : $value;
+        $run = $when === (bool) $value ? $callback : $default;
+
+        if (null === $run) {
+            return $this;
+        }
+
+        $result = $run($this, $value);
+
+        // a query on another model is no query of this chain: it is of no use, as is anything else that is no query
+        return $result instanceof static && $result->model_class === $this->model_class ? $result : $this;
+    }
+
+    /**
+     * The path of every relationship that the arguments of with(), without() or with_only() ($method) name: each a
+     * dotted name, or a list in which an entry is a dotted name, or a name with a list of its own (see
+     * listed_paths()). A path is the names from the model's relationship to the one it names, in order.
+     *
+     * @param array<string|array<mixed>> $relations
+     * @return list<list<string>>
+     * @throws ActiveRecordException for an empty name, or a list in no form that is read
+     */
+    private function relationship_paths(string $method, array $relations): array
+    {
+        $paths = [];
+
+        foreach ($relations as $relation) {
+            $paths = [...$paths, ...(is_array($relation) ? $this->listed_paths($method, $relation, []) : [$this->dotted_path($method, $relation)])];
+        }
+
+        return $paths;
+    }
+
+    /**
+     * The paths of a list of relationships as the legacy 'include' option takes it, under the path $prefix: an
+     * entry with an int key is a name, and one with a string key is a name with a list of the relationships loaded
+     * under it. A name with an empty list is loaded alone.
+     *
+     * @param array<mixed> $list
+     * @param list<string> $prefix
+     * @return list<list<string>>
+     * @throws ActiveRecordException for an empty name, or an entry in no such form
+     */
+    private function listed_paths(string $method, array $list, array $prefix): array
+    {
+        $paths = [];
+
+        foreach ($list as $key => $entry) {
+            if (is_int($key) && is_string($entry)) {
+                $paths[] = [...$prefix, ...$this->dotted_path($method, $entry)];
+            } elseif (is_string($key) && is_array($entry)) {
+                $path = [...$prefix, ...$this->dotted_path($method, $key)];
+                $paths = [...$paths, ...([] === $entry ? [$path] : $this->listed_paths($method, $entry, $path))];
+            } else {
+                throw new ActiveRecordException(sprintf(
+                    '%s() takes a relationship name, or a list of them in which a name may hold a list, not %s at key %s, on %s',
+                    $method,
+                    get_debug_type($entry),
+                    var_export($key, true),
+                    $this->model_class,
+                ));
+            }
+        }
+
+        return $paths;
+    }
+
+    /**
+     * The names of a dotted relationship name ('author.books'), in order.
+     *
+     * @return list<string>
+     * @throws ActiveRecordException for a name that is empty, or has an empty part
+     */
+    private function dotted_path(string $method, string $name): array
+    {
+        $path = explode('.', $name);
+
+        foreach ($path as $part) {
+            if ('' === trim($part)) {
+                throw new ActiveRecordException(sprintf("Empty relationship name: '%s' in %s() on %s", $name, $method, $this->model_class));
+            }
+        }
+
+        return $path;
+    }
+
+    /**
+     * Refuses a path that names a relationship that its model does not declare, with the RelationshipException
+     * that the legacy 'include' option throws for it: the first name is the model's, and each one after it the
+     * relationship's before it, whose model is loaded to look for it.
+     *
+     * @param list<list<string>> $paths
+     * @throws RelationshipException
+     */
+    private function refuse_undeclared_relationships(array $paths): void
+    {
+        foreach ($paths as $path) {
+            $table = $this->table();
+            $last = count($path) - 1;
+
+            foreach ($path as $i => $name) {
+                $relationship = $table->get_relationship($name, true)
+                    ?? throw new RelationshipException(sprintf('Relationship named %s has not been declared for class: %s', $name, $table->class->getName()));
+
+                if ($i < $last) {
+                    $table = $relationship->get_table();
+                }
+            }
+        }
+    }
+
+    /**
+     * $tree, the relationships a query eager loads, with each of $paths in it. A relationship is a list entry
+     * while nothing is loaded under it, and a key with the list of what is once something is, where it was first
+     * given; each is in the tree once.
+     *
+     * @param array<int|string, mixed> $tree
+     * @param list<list<string>> $paths
+     * @return array<int|string, mixed>
+     */
+    private static function including(array $tree, array $paths): array
+    {
+        foreach ($paths as $path) {
+            $tree = self::include_path($tree, $path);
+        }
+
+        return $tree;
+    }
+
+    /**
+     * $tree with the relationship that $path names in it, and those before it in the path as its parents.
+     *
+     * @param array<int|string, mixed> $tree
+     * @param list<string> $path
+     * @return array<int|string, mixed>
+     */
+    private static function include_path(array $tree, array $path): array
+    {
+        $name = $path[0];
+        $rest = array_slice($path, 1);
+        $included = [];
+        $found = false;
+
+        foreach ($tree as $key => $entry) {
+            if (!self::is_include($key, $entry, $name)) {
+                self::add_include($included, $key, $entry);
+            } elseif ([] === $rest) {
+                // it is loaded already, with whatever is loaded under it
+                self::add_include($included, $key, $entry);
+                $found = true;
+            } else {
+                // a name that is loaded alone becomes the parent of the others, in its place
+                $included[$name] = self::include_path(is_array($entry) ? $entry : [], $rest);
+                $found = true;
+            }
+        }
+
+        if (!$found) {
+            if ([] === $rest) {
+                $included[] = $name;
+            } else {
+                $included[$name] = self::include_path([], $rest);
+            }
+        }
+
+        return $included;
+    }
+
+    /**
+     * $tree without the relationship that $path names, and what is loaded under it. A relationship that loses all
+     * that was loaded under it stays in the tree, with an empty list.
+     *
+     * @param array<int|string, mixed> $tree
+     * @param list<string> $path
+     * @return array<int|string, mixed>
+     */
+    private static function excluding(array $tree, array $path): array
+    {
+        $name = $path[0];
+        $rest = array_slice($path, 1);
+        $included = [];
+
+        foreach ($tree as $key => $entry) {
+            if (!self::is_include($key, $entry, $name)) {
+                self::add_include($included, $key, $entry);
+            } elseif ([] !== $rest) {
+                // what is under it: a relationship loaded alone has none, so nothing is taken off
+                self::add_include($included, $key, is_array($entry) ? self::excluding($entry, $rest) : $entry);
+            }
+        }
+
+        return $included;
+    }
+
+    /**
+     * Whether an entry of an include tree ($key and $entry as a foreach gives them) is the relationship $name: a
+     * key that is a name, or an entry that is.
+     */
+    private static function is_include(int|string $key, mixed $entry, string $name): bool
+    {
+        return is_string($key) ? $key === $name : $entry === $name;
+    }
+
+    /**
+     * Adds an entry of an include tree to $included, as it was: a name with its list keeps its key, and a name
+     * alone is a list entry, which takes the next place of the list.
+     *
+     * @param array<int|string, mixed> $included
+     */
+    private static function add_include(array &$included, int|string $key, mixed $entry): void
+    {
+        if (is_string($key)) {
+            $included[$key] = $entry;
+        } else {
+            $included[] = $entry;
+        }
+    }
+
+    /**
+     * $value as SQL: what to_raw_sql() writes in place of a bind marker (see to_raw_sql()).
+     *
+     * @throws ActiveRecordException for a value that is no SQL
+     */
+    private function sql_literal(mixed $value, Connection $connection): string
+    {
+        return match (true) {
+            null === $value => 'NULL',
+            is_bool($value) => $value ? '1' : '0',
+            is_int($value) => (string) $value,
+            is_float($value) && is_finite($value) => (string) $value,
+            // a number that is none, by name: PHP 8.5 warns when it is cast to a string
+            is_float($value) => $connection->escape(is_nan($value) ? 'NAN' : ($value > 0 ? 'INF' : '-INF')),
+            is_string($value), $value instanceof \Stringable => $connection->escape((string) $value),
+            default => throw new ActiveRecordException(sprintf('to_raw_sql() cannot write a %s as SQL, in %s', get_debug_type($value), $this->model_class)),
+        };
     }
 
     /**

@@ -8,7 +8,8 @@ namespace ActiveRecord;
 
 /**
  * The plain data of one Query: what the builder records and QueryCompiler turns into
- * SQLBuilder calls. Typed public properties, no behavior.
+ * SQLBuilder calls. Typed public properties, and no behavior but the deep copy that a clone makes (see
+ * __clone()).
  *
  * A state holds legacy options or the builder's clauses: QueryCompiler compiles the legacy
  * options when there are any, and the clauses otherwise.
@@ -141,4 +142,59 @@ final class QueryState
      * a value like any other: it is compiled as the legacy 'offset' option compiles it.
      */
     public ?int $offset = null;
+
+    /**
+     * The relationships the builder eager loads with the models it finds (Query::with(), without() and
+     * with_only()), in the form the legacy 'include' option takes them: a relationship that is loaded alone is a
+     * list entry, and one with relationships of its model loaded under it is a key with the list of those,
+     * 'author' => ['books'], to any depth. None: nothing is loaded.
+     *
+     * @var array<int|string, mixed>
+     */
+    public array $includes = [];
+
+    /** Whether the models the builder finds are readonly (Query::readonly()), as the legacy 'readonly' option has them. */
+    public bool $readonly = false;
+
+    /**
+     * A copy of a state shares no group of conditions with it: the groups of the WHERE, of the HAVING and of the
+     * ON of a join are states of their own (see $wheres), and a copy that held the same ones would change with the
+     * state it was made from, and change it. Everything else is a scalar, or an array, which a copy holds by value,
+     * or a value that the builder binds, which it holds as it is (a DateTime is the same DateTime).
+     */
+    public function __clone()
+    {
+        $this->wheres = self::copy_groups($this->wheres);
+        $this->havings = self::copy_groups($this->havings);
+        $joins = [];
+
+        foreach ($this->joins as $join) {
+            if (!is_string($join)) {
+                $join['wheres'] = self::copy_groups($join['wheres']);
+            }
+
+            $joins[] = $join;
+        }
+
+        $this->joins = $joins;
+    }
+
+    /**
+     * The conditions $conditions, with each group of them a copy of its own, and the groups in it too (see
+     * __clone()).
+     *
+     * @param list<Where> $conditions
+     * @return list<Where>
+     */
+    private static function copy_groups(array $conditions): array
+    {
+        foreach ($conditions as $i => $condition) {
+            if ('group' === $condition['type']) {
+                $condition['group'] = clone $condition['group'];
+                $conditions[$i] = $condition;
+            }
+        }
+
+        return $conditions;
+    }
 }

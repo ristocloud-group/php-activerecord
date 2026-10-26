@@ -147,7 +147,15 @@ use Closure;
  * @method static Query<static> offset(int $value) A new query on this class that skips this many rows
  * @method static Query<static> skip(int $value) A new query on this class that skips this many rows
  * @method static Query<static> for_page(int $page, int $per_page = 15) A new query on this class for this page of rows
+ * @method static Query<static> with(string|array<mixed> ...$relations) A new query on this class that eager loads these relationships, in dot notation or as the include option takes them
+ * @method static Query<static> without(string ...$relations) A new query on this class, which loads none of these relationships
+ * @method static Query<static> with_only(string|array<mixed> ...$relations) A new query on this class that eager loads only these relationships
+ * @method static Query<static> when(mixed $value, callable $callback, ?callable $default = null) A new query on this class, which the callback changes when the value is true, or else the default does
+ * @method static Query<static> unless(mixed $value, callable $callback, ?callable $default = null) A new query on this class, which the callback changes when the value is false, or else the default does
+ * @method static Query<static> tap(callable $callback) A new query on this class, passed to the callback
+ * @method static Query<static> clone() A copy of a new query on this class
  * @method static string to_sql() The SELECT of a new query on this class
+ * @method static string to_raw_sql() The SELECT of a new query on this class with its values written in it, for debugging
  * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
  * @method static static first_or_fail() The model of the first row of this class, or RecordNotFound when there is none
  * @method static mixed first_or(callable $callback) The model of the first row of this class, or what the callback returns when there is none
