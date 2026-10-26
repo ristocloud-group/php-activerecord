@@ -709,7 +709,10 @@ class Validations
             $sql = "";
             $conditions = [""];
             $pk_quoted = $connection->quote_name($table->real_column_name((string) $pk[0]));
-            if ($pk_value === null) {
+            if (count($pk) > 1 && ($exclusion = $this->composite_pk_exclusion($pk, $connection, $table)) !== null) {
+                [$sql, $bound] = $exclusion;
+                array_push($conditions, ...$bound);
+            } elseif ($pk_value === null) {
                 $sql = "{$pk_quoted} IS NOT NULL";
             } else {
                 $sql = "{$pk_quoted} != ?";
@@ -732,6 +735,32 @@ class Validations
                 $this->record->add($add_record, $options['message']);
             }
         }
+    }
+
+    /**
+     * Excludes the record being validated by every column of its composite pk, not the
+     * first one alone (#155): `NOT ({a} = ? AND {b} IS NULL)`, a null part (a new record
+     * with part of its key assigned) compared with IS NULL. Null when no pk value is set.
+     *
+     * @param list<string> $pk
+     * @return array{string, list<mixed>}|null the SQL and its bound values
+     */
+    private function composite_pk_exclusion(array $pk, Connection $connection, Table $table): ?array
+    {
+        $parts = [];
+        $bound = [];
+        foreach ($pk as $column) {
+            $value = $this->model->$column;
+            $quoted = $connection->quote_name($table->real_column_name($column));
+            if ($value === null) {
+                $parts[] = "{$quoted} IS NULL";
+            } else {
+                $parts[] = "{$quoted} = ?";
+                $bound[] = $value;
+            }
+        }
+
+        return [] === $bound ? null : ['NOT (' . implode(' AND ', $parts) . ')', $bound];
     }
 
     /**

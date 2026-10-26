@@ -27,6 +27,13 @@ class ValuestoreValidations extends ActiveRecord\Model
     public static $validates_uniqueness_of = [];
 }
 
+// composite primary key (owner, code); the database fills `code` when it is not sent
+class CodedItemValidations extends ActiveRecord\Model
+{
+    public static $table_name = 'coded_items';
+    public static $validates_uniqueness_of = [['name']];
+}
+
 class ValidationsTest extends DatabaseTest
 {
     public function set_up($connection_name = null)
@@ -308,6 +315,44 @@ class ValidationsTest extends DatabaseTest
 
         $book = new BookValidations(['name' => 'Another Book', 'numeric_test' => '0']);
         $this->assert_false($book->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_excludes_self_by_the_whole_composite_pk()
+    {
+        // acme/def renamed to the name of acme/abc: same owner, different row
+        $item = CodedItemValidations::first(['conditions' => ['owner' => 'acme', 'code' => 'def']]);
+        $item->name = 'one';
+        $this->assert_false($item->is_valid());
+        $this->assert_equals(['Name must be unique'], $item->errors->full_messages());
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_record_itself_is_valid()
+    {
+        $item = CodedItemValidations::first(['conditions' => ['owner' => 'acme', 'code' => 'abc']]);
+        $this->assert_true($item->is_valid());
+        $this->assert_sql_has('NOT (owner = ? AND code = ?) AND name=?', CodedItemValidations::table()->last_sql);
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_new_record()
+    {
+        $item = new CodedItemValidations(['owner' => 'other', 'code' => 'zzz', 'name' => 'one']);
+        $this->assert_false($item->is_valid());
+
+        $item = new CodedItemValidations(['owner' => 'other', 'code' => 'zzz', 'name' => 'three']);
+        $this->assert_true($item->is_valid());
+    }
+
+    public function test_validates_uniqueness_of_composite_pk_new_record_without_pk_values()
+    {
+        // `code` filled by the database: whatever the attribute holds, no row is excluded
+        $item = new CodedItemValidations(['owner' => 'acme', 'name' => 'one']);
+        $this->assert_false($item->is_valid());
+
+        $item = new CodedItemValidations(['name' => 'one']);
+        $this->assert_false($item->is_valid());
+
+        $item = new CodedItemValidations(['name' => 'three']);
+        $this->assert_true($item->is_valid());
     }
 
     public function test_get_validation_rules()
