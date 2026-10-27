@@ -150,10 +150,14 @@ on MySQL and SQLite. Only `find()` passes `mapped_names`. Twenty-two monolith mo
 - **`lib/IncludeTree.php`, `lib/RawSqlWriter.php` (new, `@internal`).** Pure helpers of `Query`: the include-tree
   rules of `with` / `without` / `with_only`, and the literal writer of `to_raw_sql()`.
 - **`lib/JoinClause.php` (new).** The closure form of joins (`on`, `or_on`, `where`…), with bound values.
-- **`lib/ExactDecimal.php` (new, `@internal`).** It takes the three private helpers of
-  `Validations` (#175) — `to_exact_decimal()`, `compare_exact_decimals()`, `exact_integer_digits()` — and adds an
-  exact long division with half-up rounding at a given scale. It is pure PHP, as decided in #175 (no bcmath/gmp,
-  no extension requirement). `Validations` calls it with unchanged behavior; #175's tests guard that.
+- **`lib/ExactDecimal.php` (new, `@internal`).** The exact-decimal helper, pure PHP, as decided in #175 (no
+  bcmath/gmp, no extension requirement).
+  - `parse()`, `integer_digits()` and `compare()` are #175's former `Validations` helpers, moved unchanged.
+    `Validations` calls them with unchanged behavior; #175's tests guard that.
+  - `to_int_or_string()` returns an `int` when the exact value fits `[PHP_INT_MIN, PHP_INT_MAX]`, decided by digit
+    comparison, else the normalized digits.
+  - `divide()` is an exact long division rounded half-up (away from zero) at a scale, with no negative zero.
+  - Callers classify floats first: a float argument is coerced by PHP before the method runs.
 - **The timestamp policy (internal).** The single source of "now", the per-class suspension stack behind
   `Model::without_timestamps()`, and the rule of §5.6. `Model::set_timestamps()`, `upsert` and the engine all use it.
 - **`lib/Exceptions.php`.** Gains `MultipleRecordsFound extends ActiveRecordException`.
