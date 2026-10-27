@@ -158,6 +158,10 @@ on MySQL and SQLite. Only `find()` passes `mapped_names`. Twenty-two monolith mo
     comparison, else the normalized digits.
   - `divide()` is an exact long division rounded half-up (away from zero) at a scale, with no negative zero.
   - Callers classify floats first: a float argument is coerced by PHP before the method runs.
+  - `MAX_SCALE` is 16387 (Postgres's maximum numeric scale 16383, plus avg's 4); a larger scale throws.
+- **`lib/AggregateCaster.php` (new, `@internal`).** It classifies the aggregated column (exact integer, exact
+  decimal, floating, expression) and casts the driver's value by §5.4. `Connection::exact_decimals()` (`@internal`,
+  default true, `SqliteAdapter` false) says whether the adapter stores DECIMAL exactly.
 - **The timestamp policy (internal).** The single source of "now", the per-class suspension stack behind
   `Model::without_timestamps()`, and the rule of §5.6. `Model::set_timestamps()`, `upsert` and the engine all use it.
 - **`lib/Exceptions.php`.** Gains `MultipleRecordsFound extends ActiveRecordException`.
@@ -387,6 +391,21 @@ The results are therefore identical on MySQL, MariaDB and Postgres, and on SQLit
 documented SQLite exceptions are: DECIMAL columns are REAL storage, so the floating path applies; and a SUM
 beyond 2^63 fails with SQLite's `integer overflow` (`DatabaseException`). The computation is pure PHP and
 deterministic, with no extension (#175's decision).
+
+Details settled while building the aggregates (Task 18):
+
+- **The aggregates share `count()`'s shape rules (§5.3).** A plain query is aggregated in place, with its order
+  dropped. A grouped, distinct or windowed query (limit/offset) aggregates the rows of its result:
+  `SELECT SUM(t.col) FROM (…) AS t`. Eloquent ignores the LIMIT and aggregates every row; this is a deviation, listed
+  in the README.
+- **A non-model column over no row** returns the driver's `NULL` from `sum()`, so `sum()`'s type is
+  `int|string|float|null`.
+- **SQLite** stores DECIMAL as REAL (NUMERIC affinity), so its DECIMAL columns classify as floating: `sum`/`avg` are
+  floats, and an empty `sum` is `0.0`. A BIGINT sum beyond `PHP_INT_MAX` raises SQLite's integer overflow
+  (`DatabaseException`).
+- **The raw type decides the class.** Postgres `real` and SQLite `REAL` are `Column::STRING` with raw type `real`.
+  Postgres `float8` arrives as a string on PHP 8.3 and as a float on PHP 8.5; both read as floats. Postgres's `NaN` and
+  `Infinity` read as PHP's `NAN` and `INF`.
 
 ### 5.5 Writes
 
