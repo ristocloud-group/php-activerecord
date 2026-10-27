@@ -253,6 +253,24 @@ class MysqlQueryBuilderTest extends DatabaseTest
         }
     }
 
+    // A wrapped query keeps the select of its own, so an expression can carry the name of a DECIMAL column. A BIGINT that no
+    // float holds (9007199254740993 is the first) stays its exact digits, where reading it as a float would make it
+    // 9007199254740992.0.
+    public function test_an_int_under_the_name_of_a_decimal_column_stays_exact(): void
+    {
+        $big = fn(): ActiveRecord\Query => Measurement::select_raw('9007199254740993 AS amount')->limit(5);
+
+        $this->assert_same('9007199254740993', $big()->max('amount'));
+        $this->assert_same('9007199254740993', $big()->min('amount'));
+        $this->assert_same('18014398509481986', $big()->sum('amount'));
+        $this->assert_same('9007199254740993.0000', $big()->avg('amount'));
+
+        $seven = fn(): ActiveRecord\Query => Measurement::select_raw('7 AS amount')->limit(5);
+        $this->assert_same('7', $seven()->max('amount'));
+        $this->assert_same('14', $seven()->sum('amount'));
+        $this->assert_same('7.0000', $seven()->avg('amount'));
+    }
+
     // A column that is not the model's has no type to read by, so its aggregates are the driver's values: MySQL's SUM of
     // INTs is a DECIMAL, which PDO returns as a string, where the model's own column is an int
     public function test_a_column_that_is_not_the_models_is_the_string_mysql_returns(): void

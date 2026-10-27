@@ -15,7 +15,8 @@ namespace ActiveRecord;
  * A column of the model is of one kind (see kind()), which tells how its aggregates are read:
  * - INTEGER, an exact integer: its MIN, MAX and SUM are an int while the exact value fits PHP_INT_MIN to PHP_INT_MAX,
  *   else the exact digits as a string (ExactDecimal decides on the digits, never with a float);
- * - DECIMAL, an exact decimal: the string the database returns, its scale kept;
+ * - DECIMAL, an exact decimal: the string the database returns, its scale kept (an int that the driver gives for it, as
+ *   an expression aliased like the column does, is its digits: no digit is lost);
  * - FLOATING: a float.
  * The AVG of an INTEGER or DECIMAL column is exact too: the SUM divided by the COUNT (average()); that of a FLOATING
  * column is the database's, as a float. Any other column, and any name that is no column of the model (a joined table's
@@ -106,10 +107,11 @@ final class AggregateCaster
      * and a MIN, a MAX and an AVG of no value are null. AVG is read here for the kinds that average in the database
      * (FLOATING, and none); an exact column's is average().
      *
-     * A value that is not of the type the kind expects is not hidden: an int or a float for a DECIMAL is the float of it
-     * (a database that returns a number for a decimal has no exact one), a float for an INTEGER stays the float it is
-     * (SQLite's REAL in an INTEGER column), and the text of a float is read as a float, with Postgres's spellings of NaN
-     * and the infinities.
+     * A value that is not of the type the kind expects is not hidden, and loses no digit. For a DECIMAL an int is its
+     * digits, a string of the same value (a wrapped query keeps the select of its own, whose expression can be aliased
+     * like the column, and 9007199254740993 must stay exact: a float would make it 9007199254740992), and only a float is
+     * a float. A float for an INTEGER stays the float it is (SQLite's REAL in an INTEGER column). The text of a float is
+     * read as a float, with Postgres's spellings of NaN and the infinities.
      *
      * @param self::INTEGER|self::DECIMAL|self::FLOATING|null $kind
      * @param 'MIN'|'MAX'|'SUM'|'AVG' $function
@@ -129,7 +131,11 @@ final class AggregateCaster
 
         return match ($kind) {
             self::INTEGER => is_int($value) || is_string($value) ? ExactDecimal::to_int_or_string($value) : $value,
-            self::DECIMAL => is_string($value) ? $value : self::to_float($value),
+            self::DECIMAL => match (true) {
+                is_string($value) => $value,
+                is_int($value) => (string) $value,
+                default => self::to_float($value),
+            },
             self::FLOATING => self::to_float($value),
             default => $value,
         };
@@ -143,13 +149,13 @@ final class AggregateCaster
      *
      * COUNT(col) counts the values, not the rows, so that NULLs do not weigh on the average, as in the database's own.
      *
-     * Where the driver gives the SUM as a float (SQLite: its REAL storage), or as an int for a DECIMAL (SQLite: a whole
-     * decimal), no exact quotient exists, and the average is the float $sum / $count.
+     * A SUM that the driver gives as an int is divided exactly, as a string is (Postgres sums the INTs of a column into a
+     * bigint, which PDO returns as an int). Only a SUM that is a float has no exact quotient (SQLite stores a REAL in an
+     * INTEGER column), and the average is the float $sum / $count.
      *
-     * @param self::INTEGER|self::DECIMAL $kind
      * @throws ActiveRecordException for a SUM that is text which ExactDecimal does not read as a decimal ('NaN', say)
      */
-    public static function average(string $kind, mixed $sum, mixed $count): string|float|null
+    public static function average(mixed $sum, mixed $count): string|float|null
     {
         $count = (int) $count;
 
@@ -157,7 +163,7 @@ final class AggregateCaster
             return null;
         }
 
-        if (is_string($sum) || (is_int($sum) && self::INTEGER === $kind)) {
+        if (is_string($sum) || is_int($sum)) {
             return ExactDecimal::divide($sum, $count, self::scale($sum) + self::AVERAGE_EXTRA_SCALE);
         }
 

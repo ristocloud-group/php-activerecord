@@ -2472,7 +2472,7 @@ class Query
         if (AggregateCaster::INTEGER === $kind || AggregateCaster::DECIMAL === $kind) {
             [$sum, $count] = $this->aggregate_row($column, ['SUM', 'COUNT']);
 
-            return AggregateCaster::average($kind, $sum, $count);
+            return AggregateCaster::average($sum, $count);
         }
 
         /** @var string|float|null $average */

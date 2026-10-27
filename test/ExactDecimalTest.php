@@ -257,7 +257,7 @@ class ExactDecimalTest extends SnakeCase_PHPUnit_Framework_TestCase
     {
         $this->assert_same('0.' . str_repeat('3', 16387), ExactDecimal::divide('1', 3, 16387));
         $this->assert_same('0.' . str_repeat('3', 16386), ExactDecimal::divide('1', 3, 16386));
-        $this->assert_same(ExactDecimal::MAX_SCALE, 16387);
+        $this->assert_same(16387, ExactDecimal::MAX_SCALE);
 
         foreach ([16388, 16389, 100000, PHP_INT_MAX - 1, PHP_INT_MAX] as $scale) {
             $this->assert_refused(fn() => ExactDecimal::divide('1', 3, $scale), ['ExactDecimal::divide()', 'scale', 'at most 16387', (string) $scale], "scale $scale");

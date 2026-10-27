@@ -124,13 +124,22 @@ class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
         }
     }
 
-    // SQLite stores DECIMAL as a REAL, or as an integer when the value is whole: the floating path, whatever the value
-    public function test_a_decimal_column_that_the_driver_gives_as_a_number_is_a_float(): void
+    // A DECIMAL column that the driver gives as an int loses no digit. A wrapped query keeps the select of its own, so an
+    // expression can carry the name of a DECIMAL column, and a float would make 9007199254740993 (the first int that a
+    // float cannot hold) 9007199254740992. The int is its digits, a string of the same value, as the database's own
+    // DECIMAL is; only a float is a float. (SQLite has no exact decimal: its DECIMAL columns are floating, see kind().)
+    public function test_a_decimal_column_that_the_driver_gives_as_an_int_is_its_digits(): void
     {
         foreach (['MIN', 'MAX', 'SUM'] as $function) {
+            $this->assert_same('12', AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 12), $function);
+            $this->assert_same('0', AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 0), $function);
+            $this->assert_same('-7', AggregateCaster::cast(AggregateCaster::DECIMAL, $function, -7), $function);
+            $this->assert_same('9007199254740993', AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 9007199254740993), $function);
+            $this->assert_same('9223372036854775807', AggregateCaster::cast(AggregateCaster::DECIMAL, $function, PHP_INT_MAX), $function);
+            $this->assert_same('-9223372036854775808', AggregateCaster::cast(AggregateCaster::DECIMAL, $function, PHP_INT_MIN), $function);
+            // a float is a float
             $this->assert_same(1234567890123.46, AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 1234567890123.46), $function);
-            $this->assert_same(12.0, AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 12), $function);
-            $this->assert_same(0.0, AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 0), $function);
+            $this->assert_same(0.5, AggregateCaster::cast(AggregateCaster::DECIMAL, $function, 0.5), $function);
         }
     }
 
@@ -217,9 +226,9 @@ class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
             }
         }
 
-        $this->assert_same(1.75, $this->strict_call(fn() => AggregateCaster::average(AggregateCaster::INTEGER, 3.5, 2)));
-        $this->assert_same(3.0, $this->strict_call(fn() => AggregateCaster::average(AggregateCaster::INTEGER, 6.0, 2)));
-        $this->assert_same(-1.25, $this->strict_call(fn() => AggregateCaster::average(AggregateCaster::DECIMAL, -2.5, 2)));
+        $this->assert_same(1.75, $this->strict_call(fn() => AggregateCaster::average(3.5, 2)));
+        $this->assert_same(3.0, $this->strict_call(fn() => AggregateCaster::average(6.0, 2)));
+        $this->assert_same(-1.25, $this->strict_call(fn() => AggregateCaster::average(-2.5, 2)));
     }
 
     // §5.4: the AVG of an exact column is its SUM divided by its COUNT, exactly, at the scale of the SUM plus four
@@ -227,74 +236,79 @@ class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
     public function test_the_average_of_an_integer_column_has_four_decimals(): void
     {
         // Postgres gives the SUM of INTs as an int, MySQL as a DECIMAL string
-        $this->assert_same('1.6667', AggregateCaster::average(AggregateCaster::INTEGER, 5, 3));
-        $this->assert_same('1.6667', AggregateCaster::average(AggregateCaster::INTEGER, '5', 3));
-        $this->assert_same('1.6667', AggregateCaster::average(AggregateCaster::INTEGER, '5', '3'));
-        $this->assert_same('1.5000', AggregateCaster::average(AggregateCaster::INTEGER, 3, 2));
-        $this->assert_same('-1.6667', AggregateCaster::average(AggregateCaster::INTEGER, '-5', 3));
-        $this->assert_same('0.0000', AggregateCaster::average(AggregateCaster::INTEGER, 0, 3));
-        $this->assert_same('0.0000', AggregateCaster::average(AggregateCaster::INTEGER, '0', 3));
+        $this->assert_same('1.6667', AggregateCaster::average(5, 3));
+        $this->assert_same('1.6667', AggregateCaster::average('5', 3));
+        $this->assert_same('1.6667', AggregateCaster::average('5', '3'));
+        $this->assert_same('1.5000', AggregateCaster::average(3, 2));
+        $this->assert_same('-1.6667', AggregateCaster::average('-5', 3));
+        $this->assert_same('0.0000', AggregateCaster::average(0, 3));
+        $this->assert_same('0.0000', AggregateCaster::average('0', 3));
         // half way: away from zero, on both signs
-        $this->assert_same('0.0313', AggregateCaster::average(AggregateCaster::INTEGER, 1, 32));
-        $this->assert_same('-0.0313', AggregateCaster::average(AggregateCaster::INTEGER, -1, 32));
+        $this->assert_same('0.0313', AggregateCaster::average(1, 32));
+        $this->assert_same('-0.0313', AggregateCaster::average(-1, 32));
         // beyond the 53 bits of a float and the 63 of an int
-        $this->assert_same('4611686018427387904.0000', AggregateCaster::average(AggregateCaster::INTEGER, '9223372036854775808', 2));
-        $this->assert_same('9223372036854775807.0000', AggregateCaster::average(AggregateCaster::INTEGER, '18446744073709551614', 2));
-        $this->assert_same('9223372036854775807.6667', AggregateCaster::average(AggregateCaster::INTEGER, '27670116110564327423', 3));
+        $this->assert_same('4611686018427387904.0000', AggregateCaster::average('9223372036854775808', 2));
+        $this->assert_same('9223372036854775807.0000', AggregateCaster::average('18446744073709551614', 2));
+        $this->assert_same('9223372036854775807.6667', AggregateCaster::average('27670116110564327423', 3));
     }
 
     // The scale is that of the SUM as the driver wrote it, trailing zeros included: ExactDecimal::parse() drops them
     // ('2.50' has the fraction '5'), which would give 5 decimals where MySQL's AVG gives 6
     public function test_the_average_of_a_decimal_column_keeps_the_scale_of_the_sum_plus_four(): void
     {
-        $this->assert_same('617283945061.730000', AggregateCaster::average(AggregateCaster::DECIMAL, '1234567890123.46', 2));
-        $this->assert_same('2.500000', AggregateCaster::average(AggregateCaster::DECIMAL, '2.50', 1));
-        $this->assert_same('0.000000', AggregateCaster::average(AggregateCaster::DECIMAL, '0.00', 2));
-        $this->assert_same('-0.010000', AggregateCaster::average(AggregateCaster::DECIMAL, '-0.01', 1));
-        $this->assert_same('-0.003333', AggregateCaster::average(AggregateCaster::DECIMAL, '-0.01', 3));
+        $this->assert_same('617283945061.730000', AggregateCaster::average('1234567890123.46', 2));
+        $this->assert_same('2.500000', AggregateCaster::average('2.50', 1));
+        $this->assert_same('0.000000', AggregateCaster::average('0.00', 2));
+        $this->assert_same('-0.010000', AggregateCaster::average('-0.01', 1));
+        $this->assert_same('-0.003333', AggregateCaster::average('-0.01', 3));
         // a SUM with no fraction digits: four
-        $this->assert_same('33.3333', AggregateCaster::average(AggregateCaster::DECIMAL, '100', 3));
+        $this->assert_same('33.3333', AggregateCaster::average('100', 3));
         // 18 integer digits, 2 decimals: a float keeps 15 to 17 of them
-        $this->assert_same('999999999999999999.990000', AggregateCaster::average(AggregateCaster::DECIMAL, '2999999999999999999.97', 3));
+        $this->assert_same('999999999999999999.990000', AggregateCaster::average('2999999999999999999.97', 3));
     }
 
     // Postgres's numeric has up to 16383 fraction digits: the average of such a SUM has 16387, the most ExactDecimal allows
     public function test_the_average_of_the_widest_numeric_sum_is_computed(): void
     {
-        $this->assert_same('1.' . str_repeat('0', 16387), AggregateCaster::average(AggregateCaster::DECIMAL, '3.' . str_repeat('0', 16383), 3));
+        $this->assert_same('1.' . str_repeat('0', 16387), AggregateCaster::average('3.' . str_repeat('0', 16383), 3));
         // 3.00…09 / 3 is 1.00…03 exactly
-        $this->assert_same('1.' . str_repeat('0', 16382) . '30000', AggregateCaster::average(AggregateCaster::DECIMAL, '3.' . str_repeat('0', 16382) . '9', 3));
+        $this->assert_same('1.' . str_repeat('0', 16382) . '30000', AggregateCaster::average('3.' . str_repeat('0', 16382) . '9', 3));
     }
 
     // A SUM that is NULL (no row, or only NULLs) has no average; neither has a COUNT of 0 (whatever the SUM)
     public function test_the_average_of_no_row_is_null(): void
     {
-        foreach ([AggregateCaster::INTEGER, AggregateCaster::DECIMAL] as $kind) {
-            $this->assert_null(AggregateCaster::average($kind, null, 0), $kind);
-            $this->assert_null(AggregateCaster::average($kind, null, '0'), $kind);
-            $this->assert_null(AggregateCaster::average($kind, '0', 0), $kind);
-            $this->assert_null(AggregateCaster::average($kind, '0', '0'), $kind);
-            // a SUM and a COUNT that no database gives together: no division by a count that is not there, nor of a missing SUM
-            $this->assert_null(AggregateCaster::average($kind, null, 3), $kind);
-            $this->assert_null(AggregateCaster::average($kind, '5', -1), $kind);
-        }
+        $this->assert_null(AggregateCaster::average(null, 0));
+        $this->assert_null(AggregateCaster::average(null, '0'));
+        $this->assert_null(AggregateCaster::average('0', 0));
+        $this->assert_null(AggregateCaster::average('0', '0'));
+        $this->assert_null(AggregateCaster::average(0, 0));
+        // a SUM and a COUNT that no database gives together: no division by a count that is not there, nor of a missing SUM
+        $this->assert_null(AggregateCaster::average(null, 3));
+        $this->assert_null(AggregateCaster::average('5', -1));
     }
 
     // The scale is read as ExactDecimal reads the number, which skips the whitespace around it
     public function test_the_scale_of_a_sum_does_not_count_the_space_around_it(): void
     {
-        $this->assert_same('2.500000', AggregateCaster::average(AggregateCaster::DECIMAL, ' 2.50 ', 1));
-        $this->assert_same('2.50000', AggregateCaster::average(AggregateCaster::DECIMAL, "\t2.5\n", 1));
+        $this->assert_same('2.500000', AggregateCaster::average(' 2.50 ', 1));
+        $this->assert_same('2.50000', AggregateCaster::average("\t2.5\n", 1));
     }
 
-    // Where the driver gives the SUM as a number (SQLite's REAL storage), it is divided as a float: a DECIMAL column
-    // too, even for a whole SUM, which SQLite gives as an int
-    public function test_the_average_of_a_sum_the_driver_gives_as_a_number_is_a_float(): void
+    // A SUM that the driver gives as an int is divided exactly, as a string is: Postgres gives the SUM of INTs as an int, and
+    // a wrapped query's select can name a DECIMAL column by an expression of ints. Only a float SUM has no exact quotient
+    // (SQLite stores a REAL in an INTEGER column), and is divided as a float.
+    public function test_the_average_of_a_sum_the_driver_gives_as_an_int_is_exact_and_as_a_float_is_a_float(): void
     {
-        $this->assert_same(617283945061.73, AggregateCaster::average(AggregateCaster::DECIMAL, 1234567890123.46, 2));
-        $this->assert_same(6.0, AggregateCaster::average(AggregateCaster::DECIMAL, 12, 2));
-        $this->assert_same(0.0, AggregateCaster::average(AggregateCaster::DECIMAL, 0, 2));
-        // an INTEGER column that holds a fraction: SQLite sums it as a float
-        $this->assert_same(1.75, AggregateCaster::average(AggregateCaster::INTEGER, 3.5, 2));
+        $this->assert_same('6.0000', AggregateCaster::average(12, 2));
+        $this->assert_same('0.0000', AggregateCaster::average(0, 2));
+        $this->assert_same('9007199254740993.0000', AggregateCaster::average(9007199254740993, 1));
+        // 9007199254740993 / 2, which no float holds
+        $this->assert_same('4503599627370496.5000', AggregateCaster::average(9007199254740993, 2));
+        $this->assert_same('-4611686018427387904.0000', AggregateCaster::average(PHP_INT_MIN, 2));
+
+        $this->assert_same(617283945061.73, AggregateCaster::average(1234567890123.46, 2));
+        $this->assert_same(1.75, AggregateCaster::average(3.5, 2));
+        $this->assert_same(-1.25, AggregateCaster::average(-2.5, 2));
     }
 }
