@@ -405,7 +405,16 @@ Details settled while building the aggregates (Task 18):
   (`DatabaseException`).
 - **The raw type decides the class.** Postgres `real` and SQLite `REAL` are `Column::STRING` with raw type `real`.
   Postgres `float8` arrives as a string on PHP 8.3 and as a float on PHP 8.5; both read as floats. Postgres's `NaN` and
-  `Infinity` read as PHP's `NAN` and `INF`.
+  `Infinity` read as PHP's `NAN` and `INF` on floating columns. A Postgres `numeric` NaN or ±Infinity stays the
+  string `'NaN'` / `'Infinity'` / `'-Infinity'` in `sum`, `min`, `max` and `avg`.
+- **A `BOOLEAN` column aggregates as an integer.** On MySQL/MariaDB (`tinyint(1)`) and SQLite, `sum` counts the
+  trues, `avg` is exact, and `min`/`max` are `0`/`1`. Postgres refuses `SUM`/`AVG`/`MIN`/`MAX` of boolean, which
+  surfaces as `DatabaseException`.
+- **An ungrouped column under GROUP BY is refused.** `sum`/`min`/`max`/`avg` on a grouped query with no select of
+  its own and only structured group columns refuse an aggregated column that is not grouped. MariaDB's default
+  mode and SQLite would pick an arbitrary row per group. With a select of its own or a raw group it is allowed and
+  documented.
+- **Postgres `bytea`.** A `min`/`max` over it arrives as a stream, which is read into a string.
 
 ### 5.5 Writes
 
@@ -602,7 +611,14 @@ scopes (sub-project 3). The maintainer confirmed that the monolith base model wi
   - aggregates are exact;
   - timestamps on every INSERT;
   - static `update` / `delete` are refused;
-  - the builder's `find()` returns `null` where the legacy one throws.
+  - the builder's `find()` returns `null` where the legacy one throws;
+  - `sum` / `min` / `max` / `avg` over a grouped, distinct or windowed query aggregate its result rows (Eloquent
+    ignores the LIMIT); a grouped aggregate of an ungrouped column is refused at the call;
+  - `or_where(hash)` ANDs its entries; `where_all` / `where_any` / `where_none` refuse an empty column list;
+  - `exists()` selects `1`, so an aggregate select cannot make it true;
+  - `find_or($ids)` calls the callback when any id is missing; `when()` / `unless()` hand back only a same-model
+    query; `readonly()` is not forwardable;
+  - and the rest of the "Details settled" notes (§4.2, §5.2, §5.3, §5.4).
 - A "legacy vs builder" table for the names that exist in both.
 - A docblock on every public method, and a runnable example under `examples/`.
 
