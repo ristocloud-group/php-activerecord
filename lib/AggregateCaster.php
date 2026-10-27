@@ -14,7 +14,8 @@ namespace ActiveRecord;
  *
  * A column of the model is of one kind (see kind()), which tells how its aggregates are read:
  * - INTEGER, an exact integer: its MIN, MAX and SUM are an int while the exact value fits PHP_INT_MIN to PHP_INT_MAX,
- *   else the exact digits as a string (ExactDecimal decides on the digits, never with a float);
+ *   else the exact digits as a string (ExactDecimal decides on the digits, never with a float). A boolean column is one
+ *   (see kind());
  * - DECIMAL, an exact decimal: the string the database returns, its scale kept (an int that the driver gives for it, as
  *   an expression aliased like the column does, is its digits: no digit is lost);
  * - FLOATING: a float.
@@ -67,11 +68,17 @@ final class AggregateCaster
 
     /**
      * The kind of the aggregates of $column, from its type and its raw type, or null for a column that is not a number
-     * (text, a date, a boolean) and for no column at all (a name that is no column of the model).
+     * (text, a date) and for no column at all (a name that is no column of the model).
      *
      * The raw type decides for the decimals and the floats, whatever the column's type: DECIMAL covers both, and Postgres's
      * real (float4) and SQLite's REAL have no entry in the type mapping, so they are reported as Column::STRING with the
      * raw type 'real'. An integer is a Column::INTEGER.
+     *
+     * A boolean (Column::BOOLEAN: the tinyint(1) of MySQL and MariaDB, a declared BOOLEAN of SQLite) is an integer: it
+     * holds 0 and 1, so its sum() counts the trues, as an int, where MySQL's SUM is a DECIMAL string; its avg() is exact
+     * ('1.0000' when all are true); its min() and max() are the ints 0 and 1. Postgres has no such aggregate of a boolean
+     * (it has bool_and() and bool_or()): "function sum(boolean) does not exist" is a DatabaseException, as the database's
+     * own errors are.
      *
      * A database that does not keep the digits of a DECIMAL ($exact_decimals false: SQLite stores a REAL) has no exact
      * decimal: its decimal columns are FLOATING.
@@ -89,7 +96,7 @@ final class AggregateCaster
         return match (true) {
             in_array($raw_type, self::DECIMAL_TYPES, true) => $exact_decimals ? self::DECIMAL : self::FLOATING,
             in_array($raw_type, self::FLOATING_TYPES, true) => self::FLOATING,
-            Column::INTEGER === $column->type => self::INTEGER,
+            Column::INTEGER === $column->type, Column::BOOLEAN === $column->type => self::INTEGER,
             default => null,
         };
     }

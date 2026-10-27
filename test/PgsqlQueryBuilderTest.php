@@ -268,6 +268,19 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(-INF, $this->strict_call(fn() => Measurement::where('label', 'ninf')->avg('ratio')));
     }
 
+    // A boolean column aggregates as an integer, which Postgres has no SUM, AVG, MIN or MAX of (it has bool_and() and
+    // bool_or()): its error, undefined function (42883), surfaces as a DatabaseException. The avg() of an integer column is
+    // asked as its SUM, which is the function that is named.
+    public function test_a_boolean_column_has_no_aggregate_on_postgres(): void
+    {
+        foreach (['sum' => 'sum', 'avg' => 'sum', 'average' => 'sum', 'min' => 'min', 'max' => 'max'] as $method => $function) {
+            $this->assert_exception_message_contains("function $function(boolean) does not exist", fn() => Venue::$method('is_available'), ActiveRecord\DatabaseException::class);
+        }
+
+        // a boolean that none of the six venues is, and no row: the statement is the same, and so is the error
+        $this->assert_exception_message_contains('function sum(boolean) does not exist', fn() => Venue::where('name', 'zzz')->sum('is_retired'), ActiveRecord\DatabaseException::class);
+    }
+
     // Postgres writes its window as LIMIT n OFFSET m, with an offset alone as OFFSET m (#130)
     public function test_the_window_is_limit_and_offset(): void
     {

@@ -60,6 +60,20 @@ class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
         }
     }
 
+    // A boolean is an integer: MySQL's and MariaDB's tinyint(1) and SQLite's BOOLEAN hold 0 and 1, so its sum() counts the
+    // trues, its avg() is exact and its min() and max() are the ints 0 and 1 (Postgres refuses these aggregates of a boolean)
+    public function test_kind_of_a_boolean_column_is_integer(): void
+    {
+        foreach ([[Column::BOOLEAN, 'tinyint'], [Column::BOOLEAN, 'boolean'], [Column::BOOLEAN, 'bool']] as [$type, $raw_type]) {
+            $this->assert_same(AggregateCaster::INTEGER, AggregateCaster::kind($this->column($type, $raw_type)), "$type $raw_type");
+            $this->assert_same(AggregateCaster::INTEGER, AggregateCaster::kind($this->column($type, $raw_type), false), "$type $raw_type, no exact decimals");
+        }
+
+        // the sum of MySQL is a DECIMAL string, which is the int of the count
+        $this->assert_same(6, AggregateCaster::cast(AggregateCaster::INTEGER, 'SUM', '6'));
+        $this->assert_same(0, AggregateCaster::cast(AggregateCaster::INTEGER, 'SUM', null));
+    }
+
     // A database that stores a DECIMAL as a floating-point number (SQLite) has no exact decimal: the raw type is still
     // decimal, numeric or dec, and the column is floating. The other kinds do not change.
     public function test_kind_of_a_decimal_column_where_the_database_keeps_no_digits_is_floating(): void
@@ -79,7 +93,7 @@ class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
     // Every other column, and anything that names none, is read as the driver gives it
     public function test_kind_of_any_other_column_is_none(): void
     {
-        foreach ([[Column::STRING, 'varchar'], [Column::STRING, 'text'], [Column::STRING, 'money'], [Column::STRING, 'year'], [Column::STRING, 'float8'], [Column::DATETIME, 'datetime'], [Column::DATE, 'date'], [Column::TIME, 'time'], [Column::BOOLEAN, 'tinyint'], [Column::BOOLEAN, 'boolean']] as [$type, $raw_type]) {
+        foreach ([[Column::STRING, 'varchar'], [Column::STRING, 'text'], [Column::STRING, 'money'], [Column::STRING, 'year'], [Column::STRING, 'float8'], [Column::DATETIME, 'datetime'], [Column::DATE, 'date'], [Column::TIME, 'time']] as [$type, $raw_type]) {
             $this->assert_null(AggregateCaster::kind($this->column($type, $raw_type)), "$type $raw_type");
         }
 

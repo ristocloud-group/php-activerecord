@@ -271,6 +271,33 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same('7.0000', $seven()->avg('amount'));
     }
 
+    // A boolean column (tinyint(1)) aggregates as an integer: sum() counts the trues, as an int where MySQL's SUM is a DECIMAL
+    // string; avg() is exact; min() and max() are the ints 0 and 1. The six venues are all available, and none is retired.
+    public function test_a_boolean_column_aggregates_as_an_integer(): void
+    {
+        $this->assert_same(6, Venue::sum('is_available'));
+        $this->assert_same('1.0000', Venue::avg('is_available'));
+        $this->assert_same('1.0000', Venue::average('is_available'));
+        $this->assert_same(1, Venue::min('is_available'));
+        $this->assert_same(1, Venue::max('is_available'));
+        $this->assert_same(0, Venue::sum('is_retired'));
+        $this->assert_same('0.0000', Venue::avg('is_retired'));
+        $this->assert_same(0, Venue::min('is_retired'));
+        $this->assert_same(0, Venue::max('is_retired'));
+
+        // two of the six not available
+        $this->conn->query("UPDATE venues SET is_available = 0 WHERE state = 'DC'");
+        $this->assert_same(4, Venue::sum('is_available'));
+        $this->assert_same('0.6667', Venue::avg('is_available'));
+        $this->assert_same(0, Venue::min('is_available'));
+        $this->assert_same(1, Venue::max('is_available'));
+
+        // no row
+        $this->assert_same(0, Venue::where('name', 'zzz')->sum('is_available'));
+        $this->assert_null(Venue::where('name', 'zzz')->avg('is_available'));
+        $this->assert_null(Venue::where('name', 'zzz')->max('is_available'));
+    }
+
     // A column that is not the model's has no type to read by, so its aggregates are the driver's values: MySQL's SUM of
     // INTs is a DECIMAL, which PDO returns as a string, where the model's own column is an int
     public function test_a_column_that_is_not_the_models_is_the_string_mysql_returns(): void

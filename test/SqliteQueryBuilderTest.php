@@ -247,6 +247,33 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same('4611686018427387904.0000', Measurement::where('label', 'a')->avg('big'));
     }
 
+    // A boolean column aggregates as an integer: sum() counts the trues, avg() is exact (SQLite sums integers into an integer,
+    // so its own AVG is not asked), min() and max() are the ints 0 and 1. The six venues are all available, none is retired.
+    public function test_a_boolean_column_aggregates_as_an_integer(): void
+    {
+        $this->assert_same(6, Venue::sum('is_available'));
+        $this->assert_same('1.0000', Venue::avg('is_available'));
+        $this->assert_same('1.0000', Venue::average('is_available'));
+        $this->assert_same(1, Venue::min('is_available'));
+        $this->assert_same(1, Venue::max('is_available'));
+        $this->assert_same(0, Venue::sum('is_retired'));
+        $this->assert_same('0.0000', Venue::avg('is_retired'));
+        $this->assert_same(0, Venue::min('is_retired'));
+        $this->assert_same(0, Venue::max('is_retired'));
+
+        // two of the six not available
+        $this->conn->query("UPDATE venues SET is_available = 0 WHERE state = 'DC'");
+        $this->assert_same(4, Venue::sum('is_available'));
+        $this->assert_same('0.6667', Venue::avg('is_available'));
+        $this->assert_same(0, Venue::min('is_available'));
+        $this->assert_same(1, Venue::max('is_available'));
+
+        // no row
+        $this->assert_same(0, Venue::where('name', 'zzz')->sum('is_available'));
+        $this->assert_null(Venue::where('name', 'zzz')->avg('is_available'));
+        $this->assert_null(Venue::where('name', 'zzz')->max('is_available'));
+    }
+
     // SQLite needs a LIMIT before an OFFSET: an offset alone goes with an unbounded one, LIMIT -1 (#130)
     public function test_the_window_is_limit_with_an_offset_before_the_count(): void
     {
