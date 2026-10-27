@@ -684,37 +684,42 @@ class QueryOrderGroupTest extends DatabaseTest
     }
 
     // A state holds legacy options or builder clauses, never both: the clauses of this task are clauses
-    // whatever they hold, limit(0) and offset(0) included
+    // whatever they hold, limit(0) and offset(0) included. The engine's writes take an order and a limit, which pick
+    // the rows they write (QueryWriteTest), and refuse the groups, the havings and the offset, whose name they give
     public function test_legacy_options_and_the_clauses_are_never_compiled_together(): void
     {
         $clauses = [
-            'order_by' => fn(Query $q) => $q->order_by('name'),
-            'order_by_raw' => fn(Query $q) => $q->order_by_raw('name'),
-            'in_random_order' => fn(Query $q) => $q->in_random_order(),
-            'group_by' => fn(Query $q) => $q->group_by('name'),
-            'group_by_raw' => fn(Query $q) => $q->group_by_raw('name'),
-            'having' => fn(Query $q) => $q->having('name', 'x'),
-            'having_raw' => fn(Query $q) => $q->having_raw('name = 1'),
-            'limit' => fn(Query $q) => $q->limit(2),
-            'limit(0)' => fn(Query $q) => $q->limit(0),
-            'offset' => fn(Query $q) => $q->offset(2),
-            'offset(0)' => fn(Query $q) => $q->offset(0),
-            'for_page' => fn(Query $q) => $q->for_page(1, 2),
+            'order_by' => [fn(Query $q) => $q->order_by('name'), null],
+            'order_by_raw' => [fn(Query $q) => $q->order_by_raw('name'), null],
+            'in_random_order' => [fn(Query $q) => $q->in_random_order(), null],
+            'group_by' => [fn(Query $q) => $q->group_by('name'), 'group_by'],
+            'group_by_raw' => [fn(Query $q) => $q->group_by_raw('name'), 'group_by'],
+            'having' => [fn(Query $q) => $q->having('name', 'x'), 'having'],
+            'having_raw' => [fn(Query $q) => $q->having_raw('name = 1'), 'having'],
+            'limit' => [fn(Query $q) => $q->limit(2), null],
+            'limit(0)' => [fn(Query $q) => $q->limit(0), null],
+            'offset' => [fn(Query $q) => $q->offset(2), 'offset'],
+            'offset(0)' => [fn(Query $q) => $q->offset(0), 'offset'],
+            'for_page' => [fn(Query $q) => $q->for_page(1, 2), 'offset'],
         ];
         // loaded before the captures, which would otherwise hold the schema read of the table
         Author::table();
 
-        foreach ($clauses as $name => $add) {
+        foreach ($clauses as $name => [$add, $refused]) {
             $query = $add(Query::from_options(Author::table(), ['conditions' => ['name' => 'Tito']]));
 
             $this->assert_exception_message_contains('A query on Author holds both legacy options and builder clauses', fn() => $query->to_sql(), ActiveRecordException::class);
 
-            // and the engine's writes, which read the legacy options only, refuse them: their WHERE would be dropped
-            foreach (['UPDATE' => fn() => $add(Author::new_query())->execute_update(['name' => 'x']), 'DELETE' => fn() => $add(Author::new_query())->execute_delete()] as $operation => $write) {
+            if (null === $refused) {
+                continue;
+            }
+
+            // and the engine's writes refuse the clauses they cannot use: they would be dropped
+            foreach (['update' => fn() => $add(Author::new_query())->execute_update(['name' => 'x']), 'delete' => fn() => $add(Author::new_query())->execute_delete()] as $method => $write) {
                 $this->assert_same(
-                    [['exception' => ActiveRecordException::class, 'message' => "The $operation of a query on Author does not take builder clauses: it would drop them"]],
+                    [['exception' => ActiveRecordException::class, 'message' => "$method() cannot use $refused, on Author: it takes only where, order_by and limit"]],
                     GoldenStatements::capture($write),
-                    "$operation after $name"
+                    "$method after $name"
                 );
             }
         }

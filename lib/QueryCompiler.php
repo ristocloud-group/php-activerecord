@@ -20,6 +20,33 @@ use Closure;
 final class QueryCompiler
 {
     /**
+     * The fields of a state that an UPDATE and a DELETE compile (see apply_write_clauses()): the legacy options of the
+     * legacy writes, or the where, the order and the limit of the builder, which pick the rows they write. Every other
+     * field is refused (see refuse_unwritable_clauses()).
+     *
+     * @var list<string>
+     */
+    private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'orders', 'limit'];
+
+    /**
+     * The name a refusal gives a field of a state, where it is not the field's own: the builder method, or the family
+     * of methods, that sets it.
+     *
+     * @var array<string, string>
+     */
+    private const array CLAUSE_NAMES = [
+        'legacy' => 'legacy options',
+        'selects' => 'select',
+        'from_alias' => 'from',
+        'from_bindings' => 'from_raw',
+        'wheres' => 'where',
+        'groups' => 'group_by',
+        'havings' => 'having',
+        'orders' => 'order_by',
+        'includes' => 'with',
+    ];
+
+    /**
      * The keys (see Connection::column_name_key()) of the names of the model's columns (see
      * model_column_names()), read once.
      *
@@ -342,6 +369,68 @@ final class QueryCompiler
     }
 
     /**
+     * Refuses SQL written by hand that its clause would lose (spec §5.7), given to $method: where_raw(), having_raw() and
+     * their or_ forms, order_by_raw() or group_by_raw(). SQLBuilder writes a WHERE, a HAVING, an ORDER BY and a GROUP BY
+     * only when its text is truthy in PHP, so text that is empty or only whitespace is refused: alone it would be left
+     * out, a WHERE that matches every row and a write that writes every row, and beside another it fails at the database.
+     *
+     * With $position, the text 0 too: an ORDER BY and a GROUP BY read it as the position of a column, which no statement
+     * has (positions start at 1), and the databases refuse it, but SQLBuilder leaves out a lone "0", which would turn
+     * the error into another result. A WHERE and a HAVING keep a "0" (see ConditionCompiler::compile()).
+     *
+     * @internal Serves Conditions and Query; not a supported API.
+     * @param string $method The builder method the SQL was given to, for the message of the exception
+     * @throws ActiveRecordException
+     */
+    public function refuse_blank_sql(string $sql, string $method, bool $position = false): void
+    {
+        $this->refuse_empty('SQL', $sql, $sql, $method);
+
+        if ($position && '0' === trim($sql)) {
+            throw new ActiveRecordException(sprintf("SQL '%s' in %s() on %s names the column at position 0, which no statement has: positions start at 1", $sql, $method, $this->table->class->name));
+        }
+    }
+
+    /**
+     * Refuses, at the call of the write $method (update(), delete(), insert() or upsert()), a state that holds a clause
+     * its statement cannot use, as spec §5.5 has it: the write would drop the clause, and write other rows than the query
+     * reads, or every row. A clause is a field of the state, other than those of $writable, that is not as in a new state,
+     * so a clause undone (readonly(false), distinct(false)) is none, and a field that QueryState gains later is refused
+     * until a write compiles it. An UPDATE and a DELETE take the where, the order and the limit (see compile_update() and
+     * compile_delete()); an INSERT and an UPSERT, which write the rows they are given, take none.
+     *
+     * @internal Serves Query; not a supported API.
+     * @param list<string> $writable The fields of the state that the statement of $method compiles
+     * @throws ActiveRecordException naming every clause the state holds, in the order of its fields, and what the write takes
+     */
+    public function refuse_unwritable_clauses(QueryState $state, string $method, array $writable = []): void
+    {
+        $held = [];
+
+        foreach (self::held_fields($state, $writable) as $field) {
+            $held[self::CLAUSE_NAMES[$field] ?? $field] = true;
+        }
+
+        if ([] === $held) {
+            return;
+        }
+
+        $takes = [];
+
+        foreach (array_diff($writable, ['legacy']) as $field) {
+            $takes[] = self::CLAUSE_NAMES[$field] ?? $field;
+        }
+
+        throw new ActiveRecordException(sprintf(
+            '%s() cannot use %s, on %s: %s',
+            $method,
+            self::listing(array_keys($held), 'or'),
+            $this->table->class->name,
+            [] === $takes ? 'it takes no clause' : 'it takes only ' . self::listing($takes, 'and'),
+        ));
+    }
+
+    /**
      * Refuses, at the call, a column that a grouped query does not group, given to min(), max(), sum() or avg() (spec 5.4).
      * Their statement (see compile_aggregate()) selects the column in a subquery beside the GROUP BY. MySQL
      * (ONLY_FULL_GROUP_BY, 1055) and Postgres (42803) refuse that statement, but MariaDB in its default mode and SQLite run
@@ -489,35 +578,37 @@ final class QueryCompiler
     }
 
     /**
-     * The UPDATE of a state. $set is a hash whose keys are the columns' real names and whose values
-     * are prepared (see Query::execute_update()), or a raw SQL string; SQLBuilder rejects anything
-     * else. The WHERE, ORDER BY and LIMIT are the state's (see apply_write_clauses()).
+     * The UPDATE of a state, for update() and the legacy writes. $set is a hash whose keys are the columns' real names
+     * and whose values are prepared (see Query::execute_update()), or a raw SQL string; SQLBuilder rejects anything
+     * else. The WHERE, ORDER BY and LIMIT are the state's: those of its legacy options, or of the builder (see
+     * apply_write_clauses()).
      *
      * @param array<string, mixed>|string $set
-     * @throws ActiveRecordException for a state that holds builder clauses (see refuse_builder_clauses())
+     * @throws ActiveRecordException for a state that holds a clause an UPDATE cannot use (see refuse_unwritable_clauses()),
+     *   or legacy options and builder clauses both, or a WHERE or an ORDER BY that compiles to nothing
      */
     public function compile_update(QueryState $state, array|string $set): SQLBuilder
     {
-        $this->refuse_builder_clauses($state, 'UPDATE');
+        $this->refuse_unwritable_clauses($state, 'update', self::UPDATE_DELETE_FIELDS);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
-        $this->apply_write_clauses($sql, $state->legacy ?? []);
+        $this->apply_write_clauses($sql, $state, 'update');
 
         return $sql;
     }
 
     /**
-     * The DELETE of a state, whose WHERE, ORDER BY and LIMIT are the state's (see
+     * The DELETE of a state, for delete() and the legacy writes, whose WHERE, ORDER BY and LIMIT are the state's (see
      * apply_write_clauses()). A state without conditions deletes every row.
      *
-     * @throws ActiveRecordException for a state that holds builder clauses (see refuse_builder_clauses())
+     * @throws ActiveRecordException as compile_update() does
      */
     public function compile_delete(QueryState $state): SQLBuilder
     {
-        $this->refuse_builder_clauses($state, 'DELETE');
+        $this->refuse_unwritable_clauses($state, 'delete', self::UPDATE_DELETE_FIELDS);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
-        $this->apply_write_clauses($sql, $state->legacy ?? []);
+        $this->apply_write_clauses($sql, $state, 'delete');
 
         return $sql;
     }
@@ -539,6 +630,22 @@ final class QueryCompiler
         if (null !== $returning) {
             $sql->returning($this->table->real_column_name($returning));
         }
+
+        return $sql;
+    }
+
+    /**
+     * The INSERT of $row_count rows of $columns, one statement of several VALUES (see SQLBuilder::insert_rows()), for
+     * Query::insert(). The names are the columns' real names, unquoted. The statement holds no values: the caller binds
+     * them row after row, each in the order of $columns, and has checked that there are rows and columns.
+     *
+     * @internal Serves Query::insert(); not a supported API.
+     * @param list<string> $columns
+     */
+    public function compile_insert_rows(array $columns, int $row_count): SQLBuilder
+    {
+        $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
+        $sql->insert_rows($columns, $row_count);
 
         return $sql;
     }
@@ -837,28 +944,45 @@ final class QueryCompiler
     }
 
     /**
-     * Refuses to compile an $operation (UPDATE, DELETE) of a state that holds builder clauses: an UPDATE and
-     * a DELETE are compiled from the legacy options only, so the clauses would be dropped, a WHERE among
-     * them, and the statement would write every row.
-     *
-     * @throws ActiveRecordException
-     */
-    private function refuse_builder_clauses(QueryState $state, string $operation): void
-    {
-        if (self::holds_clauses($state)) {
-            throw new ActiveRecordException(sprintf('The %s of a query on %s does not take builder clauses: it would drop them', $operation, $this->table->class->name));
-        }
-    }
-
-    /**
      * Whether a state holds a clause of the builder: a field, other than the legacy options, that is
      * not as in a new state.
      */
     private static function holds_clauses(QueryState $state): bool
     {
-        $legacy = ['legacy' => true];
+        return [] !== self::held_fields($state, ['legacy']);
+    }
 
-        return array_diff_key(get_object_vars($state), $legacy) !== array_diff_key(get_object_vars(new QueryState()), $legacy);
+    /**
+     * The fields of a state, other than those of $except, that are not as in a new state: the clauses it holds, in the
+     * order of the fields. Legacy options that are an empty array hold no option, and are none.
+     *
+     * @param list<string> $except
+     * @return list<string>
+     */
+    private static function held_fields(QueryState $state, array $except): array
+    {
+        $new = get_object_vars(new QueryState());
+        $held = [];
+
+        foreach (get_object_vars($state) as $field => $value) {
+            if (!in_array($field, $except, true) && $value !== $new[$field] && !('legacy' === $field && [] === $value)) {
+                $held[] = $field;
+            }
+        }
+
+        return $held;
+    }
+
+    /**
+     * $names as a sentence lists them, $conjunction before the last: "a", "a or b", "a, b or c".
+     *
+     * @param non-empty-list<string> $names
+     */
+    private static function listing(array $names, string $conjunction): string
+    {
+        $last = array_pop($names);
+
+        return [] === $names ? $last : implode(', ', $names) . " $conjunction $last";
     }
 
     /**
@@ -962,26 +1086,72 @@ final class QueryCompiler
     }
 
     /**
-     * The clauses of a legacy UPDATE or DELETE: its conditions, read as a SELECT reads them (see
-     * apply_conditions()), its limit and its order, the only options a write reads. Where the
-     * adapter has no LIMIT on UPDATE and DELETE (Postgres), a limit picks the rows by the columns of
-     * the primary key in a subquery (#92), or by the adapter's row identity without one.
+     * The clauses of an UPDATE or a DELETE, of the write $method: of a legacy write, its conditions, read as a SELECT
+     * reads them (see apply_conditions()), its limit and its order, the only options a write reads; of the builder,
+     * its WHERE, its ORDER BY (and their values) and its LIMIT, rendered as those of a SELECT are, by the same rules
+     * (see where_clause() and order_clause()). Where the adapter has no LIMIT on UPDATE and DELETE (Postgres), a limit
+     * picks the rows by the columns of the primary key in a subquery (#92), or by the adapter's row identity without one.
      *
-     * @param array<string, mixed> $options
+     * SQLBuilder writes a WHERE and an ORDER BY only when its text is truthy in PHP: one of the builder that compiled to
+     * no condition or no order would be left out, and the write would touch every row, or other rows. The builder
+     * records none (raw SQL that is blank is refused at the call, see refuse_blank_sql(), and ConditionCompiler writes a
+     * lone "0" as "(0)"); this is the last guard, before any statement.
+     *
+     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both, or a WHERE or an
+     *   ORDER BY of the builder that compiles to nothing (see refuse_lost_clause())
      */
-    private function apply_write_clauses(SQLBuilder $sql, array $options): void
+    private function apply_write_clauses(SQLBuilder $sql, QueryState $state, string $method): void
     {
-        $this->apply_conditions($sql, $options);
+        if (null !== $state->legacy) {
+            if (self::holds_clauses($state)) {
+                throw new ActiveRecordException(sprintf('A query on %s holds both legacy options and builder clauses: it compiles the one or the other', $this->table->class->name));
+            }
 
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
-        }
+            $options = $state->legacy;
+            $this->apply_conditions($sql, $options);
 
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
+            if (isset($options['limit'])) {
+                $sql->limit($options['limit']);
+            }
+
+            if (isset($options['order'])) {
+                $sql->order($options['order']);
+            }
+        } else {
+            $where = $this->where_clause($state);
+
+            if (null !== $where) {
+                $this->refuse_lost_clause('WHERE', $where['sql'], $method);
+                $sql->where_condition($where['sql'], $where['values']);
+            }
+
+            $order = $this->order_clause($state);
+
+            if (null !== $order) {
+                $this->refuse_lost_clause('ORDER BY', $order['sql'], $method);
+                $sql->order($order['sql']);
+                $sql->order_values($order['values']);
+            }
+
+            if (null !== $state->limit) {
+                $sql->limit($state->limit);
+            }
         }
 
         $sql->key_columns(array_map($this->table->real_column_name(...), $this->table->pk));
+    }
+
+    /**
+     * Refuses the WHERE or the ORDER BY ($clause) of the write $method, compiled to $sql, when it is no condition or no
+     * order that SQLBuilder writes: empty or only whitespace, or "0" (see apply_write_clauses()).
+     *
+     * @throws ActiveRecordException
+     */
+    private function refuse_lost_clause(string $clause, string $sql, string $method): void
+    {
+        if ('' === trim($sql) || '0' === $sql) {
+            throw new ActiveRecordException(sprintf("The %s of %s() on %s compiles to '%s', which is no %s: the statement is not sent", $clause, $method, $this->table->class->name, $sql, 'WHERE' === $clause ? 'condition' : 'order'));
+        }
     }
 
     /**

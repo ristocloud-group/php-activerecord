@@ -408,18 +408,20 @@ class QueryOptionsTest extends DatabaseTest
         $this->assert_same(ActiveRecord\UndefinedPropertyException::class, $builder_statements[2]['exception']);
     }
 
-    // Spec §5.5: a write that carries a clause it cannot use refuses it, and with() is one, as readonly() is. The
-    // builder's writes will come through the execute_*() methods that the legacy writes use: they refuse before
+    // Spec §5.5: a write that carries a clause it cannot use refuses it, and with() is one, as readonly() is: the
+    // builder's update() and delete(), and the execute_*() methods they share with the legacy writes, refuse before
     // they send anything.
     public function test_a_write_refuses_with_and_readonly(): void
     {
-        $refusal = fn(string $operation): array => [ActiveRecordException::class, "The $operation of a query on Author does not take builder clauses: it would drop them"];
+        $refusal = fn(string $method, string $clause): array => [ActiveRecordException::class, "$method() cannot use $clause, on Author: it takes only where, order_by and limit"];
 
-        $this->assert_same($refusal('DELETE'), $this->thrown(fn() => Author::with('books')->execute_delete()));
-        $this->assert_same($refusal('DELETE'), $this->thrown(fn() => Author::new_query()->readonly()->execute_delete()));
-        $this->assert_same($refusal('UPDATE'), $this->thrown(fn() => Author::with('books')->execute_update(['name' => 'x'])));
-        $this->assert_same($refusal('UPDATE'), $this->thrown(fn() => Author::new_query()->readonly()->execute_update(['name' => 'x'])));
-        $this->assert_same([['exception' => ActiveRecordException::class, 'message' => $refusal('DELETE')[1]]], GoldenStatements::capture(fn() => Author::with('books')->execute_delete()));
+        $this->assert_same($refusal('delete', 'with'), $this->thrown(fn() => Author::with('books')->delete()));
+        $this->assert_same($refusal('delete', 'readonly'), $this->thrown(fn() => Author::new_query()->readonly()->delete()));
+        $this->assert_same($refusal('update', 'with'), $this->thrown(fn() => Author::with('books')->update(['name' => 'x'])));
+        $this->assert_same($refusal('update', 'readonly'), $this->thrown(fn() => Author::new_query()->readonly()->update(['name' => 'x'])));
+        $this->assert_same($refusal('delete', 'with'), $this->thrown(fn() => Author::with('books')->execute_delete()));
+        $this->assert_same($refusal('update', 'readonly'), $this->thrown(fn() => Author::new_query()->readonly()->execute_update(['name' => 'x'])));
+        $this->assert_same([['exception' => ActiveRecordException::class, 'message' => $refusal('delete', 'with')[1]]], GoldenStatements::capture(fn() => Author::with('books')->delete()));
         $this->assert_same(4, Author::new_query()->count());
     }
 

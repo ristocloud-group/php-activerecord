@@ -1035,24 +1035,28 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_exception_message_contains('A query on Author holds both legacy options and builder clauses', fn() => $query->to_sql(), ActiveRecordException::class);
     }
 
-    // The engine's UPDATE and DELETE serve the legacy writes, which read the legacy options only. A state that holds
-    // builder clauses is refused before any statement: its WHERE would be dropped, and every row written.
-    public function test_the_engines_writes_refuse_builder_clauses(): void
+    // The engine's UPDATE and DELETE serve the legacy writes and the builder's update() and delete(): they compile the
+    // WHERE of the builder by the rules of the reads, so its conditions write the rows the query reads, and no other
+    // (QueryWriteTest pins every form). A state that holds legacy options and wheres both is refused, as a read refuses it
+    public function test_the_engines_writes_compile_the_where_of_the_builder(): void
     {
         // a table loaded inside the capture would add its schema read to the statements
         Author::table();
+        $q = fn(string $name): string => $this->conn->quote_name($name);
 
-        foreach ([
-            'UPDATE' => fn() => Author::where('author_id', 1)->execute_update(['name' => 'x']),
-            'DELETE' => fn() => Author::where('author_id', 1)->execute_delete(),
-        ] as $operation => $write) {
-            $this->assert_same(
-                [['exception' => ActiveRecordException::class, 'message' => "The $operation of a query on Author does not take builder clauses: it would drop them"]],
-                GoldenStatements::capture($write)
-            );
-        }
+        $this->assert_same(
+            [['sql' => "DELETE FROM {$q('authors')} WHERE {$q('author_id')} = ?", 'values' => [1]]],
+            GoldenStatements::capture(fn() => $this->assert_same(1, Author::where('author_id', 1)->execute_delete()->rowCount()))
+        );
+        $this->assert_same(1, Author::where('name', 'Tito')->or_where('author_id', 2)->execute_update(['name' => 'x'])->rowCount());
+        $this->assert_same(['Bill Clinton', 'Uncle Bob', 'x'], $this->values(Author::all(), 'name'));
 
-        $this->assert_same(['Bill Clinton', 'George W. Bush', 'Tito', 'Uncle Bob'], $this->values(Author::all(), 'name'));
+        $this->assert_exception_message_contains(
+            'A query on Author holds both legacy options and builder clauses',
+            fn() => Query::from_options(Author::table(), ['conditions' => ['name' => 'Tito']])->where('author_id', 1)->execute_delete(),
+            ActiveRecordException::class
+        );
+        $this->assert_same(3, Author::count());
     }
 
     // Every method of the family is reached statically (spec §4.1), runs, and returns the query it changes
