@@ -1,0 +1,454 @@
+<?php
+
+use ActiveRecord\ActiveRecordException;
+use ActiveRecord\AggregateCaster;
+use ActiveRecord\Query;
+
+/**
+ * The aggregates of the query builder (spec §5.4): min(), max(), sum(), avg() and average() of a column, read by the
+ * type of the column. An exact integer is an int while it fits, else its digits; an exact decimal is the string the
+ * database returns; a floating column is a float; the AVG of an exact column is exact. The adapter files pin what
+ * differs by database (the raw types the adapter reports, the DECIMAL strings, SQLite's REAL storage).
+ *
+ * Fixture data: measurements 1 (qty 1, big 2^62, amount 1234567890123.45, ratio 0.1, label 'a') and 2 (qty 2, big
+ * 2^62, amount 0.01, ratio 0.2, label 'b'). The fixture has no row of NULLs: the loader binds every CSV field as
+ * text, which strict MySQL and Postgres refuse for a number. A test that needs one creates it (third_row(): qty 2,
+ * label 'c', and NULL in big, amount and ratio). Also authors 1 to 4; books 1 and 2, of authors 1 and 2; book_reviews
+ * of 5, 3 and 4 stars.
+ */
+class QueryAggregateTest extends DatabaseTest
+{
+    /**
+     * $sql with each backtick replaced by the quote character of the connection.
+     */
+    private function sql(string $sql): string
+    {
+        return str_replace('`', $this->conn::$QUOTE_CHARACTER, $sql);
+    }
+
+    /**
+     * The third measurement: qty 2, label 'c', and NULL in the other columns.
+     */
+    private function third_row(): void
+    {
+        Measurement::create(['qty' => 2, 'label' => 'c']);
+    }
+
+    /**
+     * The statements that $call sent to the database, in order.
+     *
+     * @return list<string>
+     */
+    private function statements(callable $call): array
+    {
+        return array_column(GoldenStatements::capture($call), 'sql');
+    }
+
+    /**
+     * Gives the two measurements the values of big that the boundary tests sum.
+     */
+    private function set_big(int|string $first, int|string $second): void
+    {
+        foreach ([1 => $first, 2 => $second] as $id => $big) {
+            $values = [$big, $id];
+            $this->conn->query('UPDATE measurements SET big = ? WHERE id = ?', $values);
+        }
+    }
+
+    // Spec §5.4, §10: the aggregated column is classified by its type and its raw type: DECIMAL covers the exact
+    // types (decimal, numeric, dec) and the floating ones (float, double, real, double precision) alike. The adapter
+    // files pin the strings each database reports.
+    public function test_raw_types_classify_exact_and_floating(): void
+    {
+        $columns = Measurement::table()->columns;
+        $this->assert_true(in_array($columns['amount']->raw_type, ['decimal', 'numeric'], true));
+        $this->assert_true(in_array($columns['ratio']->raw_type, ['double', 'double precision', 'float', 'real'], true));
+
+        // the kind of each column, where the database keeps the digits of a decimal; SQLite does not, and its DECIMAL is floating
+        $exact = $this->conn->exact_decimals();
+        $this->assert_same(
+            ['id' => 'integer', 'qty' => 'integer', 'big' => 'integer', 'amount' => $exact ? 'decimal' : 'floating', 'ratio' => 'floating', 'label' => null],
+            array_map(fn(ActiveRecord\Column $column): ?string => AggregateCaster::kind($column, $exact), $columns)
+        );
+    }
+
+    public function test_integer_aggregates(): void
+    {
+        $this->third_row();
+        $this->assert_same(5, Measurement::sum('qty'));
+        $this->assert_same('1.6667', Measurement::avg('qty'));
+        $this->assert_same(1, Measurement::min('qty'));
+        $this->assert_same(2, Measurement::max('qty'));
+        // average() is another name of avg()
+        $this->assert_same('1.6667', Measurement::average('qty'));
+        $this->assert_same('1.6667', Measurement::new_query()->average('qty'));
+    }
+
+    public function test_empty_sets(): void
+    {
+        $none = fn() => Measurement::where('label', 'zzz');
+        $this->assert_same(0, $none()->sum('qty'));
+        $this->assert_null($none()->avg('qty'));
+        $this->assert_null($none()->min('qty'));
+        $this->assert_same(0.0, $none()->sum('ratio'));
+
+        // every kind: a SUM of no row is 0 of its type (that of the exact decimal is in the adapter files), a MIN, a MAX
+        // and an AVG are null
+        $this->assert_null($none()->max('qty'));
+        $this->assert_null($none()->average('qty'));
+        $this->assert_same(0, $none()->sum('big'));
+        $this->assert_null($none()->min('big'));
+        $this->assert_null($none()->max('big'));
+        $this->assert_null($none()->avg('big'));
+        $this->assert_null($none()->min('ratio'));
+        $this->assert_null($none()->max('ratio'));
+        $this->assert_null($none()->avg('ratio'));
+        $this->assert_null($none()->min('amount'));
+        $this->assert_null($none()->max('amount'));
+        $this->assert_null($none()->avg('amount'));
+        // a column that is no number gives the driver's value, which is NULL
+        $this->assert_null($none()->max('label'));
+        $this->assert_null($none()->min('label'));
+    }
+
+    // NULLs are not values: a MIN, a MAX and a SUM skip them, and the AVG divides by the count of the values (COUNT(col)),
+    // not of the rows
+    public function test_null_values_are_skipped(): void
+    {
+        $this->third_row();
+        Measurement::create(['label' => 'n']);
+
+        // qty 1, 2, 2 and NULL
+        $this->assert_same(5, Measurement::sum('qty'));
+        $this->assert_same('1.6667', Measurement::avg('qty'));
+        $this->assert_same(1, Measurement::min('qty'));
+        $this->assert_same('1.5000', Measurement::where_in('label', ['a', 'b', 'n'])->avg('qty'));
+        // a SUM of nothing but NULLs is 0, a MIN, a MAX and an AVG of them are null
+        $nulls = fn() => Measurement::where_in('label', ['c', 'n']);
+        $this->assert_same(0, $nulls()->sum('big'));
+        $this->assert_same(0.0, $nulls()->sum('ratio'));
+        $this->assert_null($nulls()->max('big'));
+        $this->assert_null($nulls()->avg('big'));
+        $this->assert_null($nulls()->avg('ratio'));
+        // big is 2^62 in one row and NULL in the other: the one value, not half of it
+        $this->assert_same('4611686018427387904.0000', Measurement::where_in('label', ['a', 'c'])->avg('big'));
+        $this->assert_same(4611686018427387904, Measurement::where_in('label', ['a', 'c'])->sum('big'));
+        $this->assert_same(0.2, Measurement::where_in('label', ['b', 'c'])->avg('ratio'));
+    }
+
+    public function test_floating_aggregates_are_floats(): void
+    {
+        $this->assert_true(is_float(Measurement::sum('ratio')));
+        $this->assert_true(is_float(Measurement::avg('ratio')));
+
+        // the doubles of 0.1 and 0.2, and of their sum and mean (the sum of doubles is the database's: 0.1 + 0.2 is
+        // 0.30000000000000004, whichever way it adds)
+        $this->assert_same(0.1, Measurement::min('ratio'));
+        $this->assert_same(0.2, Measurement::max('ratio'));
+        $this->assert_true(abs(Measurement::sum('ratio') - 0.3) < 1e-12);
+        $this->assert_true(abs(Measurement::avg('ratio') - 0.15) < 1e-12);
+        $this->assert_true(is_float(Measurement::min('ratio')) && is_float(Measurement::max('ratio')));
+        $this->assert_true(abs(Measurement::average('ratio') - 0.15) < 1e-12);
+    }
+
+    // A float never reaches ExactDecimal, whose int|string parameters PHP would give an int for it (1.5 is 1, with a
+    // deprecation). A floating column is a float whatever the adapter gives (PHP 8.3's Postgres driver gives a float8 as a
+    // string) and is never read as an exact one, which would raise the deprecation, or refuse the text. Any diagnostic
+    // fails here.
+    public function test_floating_aggregates_raise_no_php_diagnostic(): void
+    {
+        $this->third_row();
+
+        foreach (['min', 'max', 'sum', 'avg', 'average'] as $method) {
+            $value = $this->strict_call(fn() => Measurement::$method('ratio'));
+            $this->assert_true(is_float($value), "$method(ratio) is " . get_debug_type($value));
+        }
+
+        $this->assert_same(0.2, $this->strict_call(fn() => Measurement::max('ratio')));
+        $this->assert_same(0.0, $this->strict_call(fn() => Measurement::where('label', 'zzz')->sum('ratio')));
+    }
+
+    // Spec §5.4, last column: a column that is not the model's names no type, so its aggregates are the driver's
+    public function test_non_model_column_returns_the_driver_value(): void
+    {
+        $this->assert_equals(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_equals(2, Book::joins('author')->max('authors.author_id'));
+        $this->assert_equals(3, Book::joins('author')->sum('authors.author_id'));
+        $this->assert_equals(1.5, Book::joins('author')->avg('authors.author_id'));
+        // no row: the driver's NULL, where a column of the model has a 0 of its type
+        $none = fn(): Query => Book::joins('author')->where('books.book_id', 99);
+        $this->assert_null($none()->sum('authors.author_id'));
+        $this->assert_null($none()->min('authors.author_id'));
+        $this->assert_null($none()->avg('authors.author_id'));
+    }
+
+    // A column of another type than a number (text, a date) is the driver's value too: the text of a date, not a DateTime
+    public function test_a_column_that_is_no_number_gives_the_driver_value(): void
+    {
+        $this->third_row();
+        $this->assert_same('a', Measurement::min('label'));
+        $this->assert_same('c', Measurement::max('label'));
+        $this->assert_same('b', Measurement::where('label', 'b')->min('label'));
+
+        // dated_counts: 2026-01-01 10:00:00 and 2026-01-02 10:00:00
+        $this->assert_same('2026-01-01', DatedCount::min('day'));
+        $this->assert_same('2026-01-02', DatedCount::max('day'));
+        $this->assert_same('2026-01-02 10:00:00', DatedCount::max('at'));
+    }
+
+    // Spec §5.1: the aggregated column is named by the one rule of the builder: an unqualified column of the model gets
+    // the model's table when there are joins, so that author_id, a column of books and of authors, is not ambiguous
+    public function test_a_column_of_the_model_is_named_by_the_one_rule_of_the_builder(): void
+    {
+        $this->assert_same(2, Book::joins('author')->max('author_id'));
+        $this->assert_sql_has('SELECT MAX(books.author_id) FROM books INNER JOIN', Book::table()->last_sql);
+        $this->assert_same(3, Book::joins('author')->sum('author_id'));
+        $this->assert_sql_has('SELECT SUM(books.author_id) FROM books INNER JOIN', Book::table()->last_sql);
+        $this->assert_same('1.5000', Book::joins('author')->avg('author_id'));
+        $this->assert_sql_has('SELECT SUM(books.author_id), COUNT(books.author_id) FROM books INNER JOIN', Book::table()->last_sql);
+        // a qualified name is quoted part by part, as written
+        $this->assert_same(1, Book::joins('author')->min('books.author_id'));
+        $this->assert_same(4, Author::max('author_id'));
+    }
+
+    // Spec §5.1: an alias names its column, and the column's type is the type of the aggregate (score is rating, an INT)
+    public function test_an_alias_names_its_column_and_the_type_of_the_column_reads_the_aggregate(): void
+    {
+        AliasedBookReview::table();
+
+        $this->assert_same(3, AliasedBookReview::min('score'));
+        $this->assert_same(5, AliasedBookReview::max('score'));
+        $this->assert_same('4.0000', AliasedBookReview::avg('score'));
+        $this->assert_same('4.0000', AliasedBookReview::average('score'));
+        $this->assert_sql_has('SELECT SUM(rating), COUNT(rating) FROM book_reviews', AliasedBookReview::table()->last_sql);
+        $this->assert_same(12, AliasedBookReview::sum('score'));
+        $this->assert_sql_has('SELECT SUM(rating) FROM book_reviews', AliasedBookReview::table()->last_sql);
+    }
+
+    // Each aggregate is one statement over the query's FROM, joins and WHERE, without its order (Postgres refuses an order
+    // by a column beside an aggregate). An exact column's AVG is its SUM and its COUNT, whatever the adapter: the
+    // database's own AVG is never asked, and a floating column's is.
+    public function test_each_aggregate_is_one_statement(): void
+    {
+        // loaded first: a table read cold adds its schema read to a capture
+        Measurement::table();
+
+        $this->assert_same([$this->sql('SELECT MIN(`qty`) FROM `measurements`')], $this->statements(fn() => Measurement::min('qty')));
+        $this->assert_same([$this->sql('SELECT MAX(`qty`) FROM `measurements`')], $this->statements(fn() => Measurement::max('qty')));
+        $this->assert_same([$this->sql('SELECT SUM(`qty`) FROM `measurements`')], $this->statements(fn() => Measurement::sum('qty')));
+        $this->assert_same([$this->sql('SELECT SUM(`ratio`) FROM `measurements`')], $this->statements(fn() => Measurement::sum('ratio')));
+
+        // an exact decimal too, where the database keeps its digits (SQLite stores a REAL: its average is the database's)
+        $exact = ['qty' => true, 'amount' => $this->conn->exact_decimals(), 'ratio' => false];
+
+        foreach ($exact as $column => $is_exact) {
+            $expected = $is_exact ? "SELECT SUM(`$column`), COUNT(`$column`) FROM `measurements`" : "SELECT AVG(`$column`) FROM `measurements`";
+
+            foreach (['avg', 'average'] as $method) {
+                $this->assert_same([$this->sql($expected)], $this->statements(fn() => Measurement::$method($column)), "$method($column)");
+            }
+        }
+
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT SUM(`qty`) FROM `measurements` WHERE `label` = ?'), 'values' => ['a']]],
+            GoldenStatements::capture(fn() => Measurement::where('label', 'a')->order_by('id')->sum('qty'))
+        );
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT SUM(`qty`), COUNT(`qty`) FROM `measurements` WHERE `label` = ?'), 'values' => ['a']]],
+            GoldenStatements::capture(fn() => Measurement::where('label', 'a')->order_by('id')->avg('qty'))
+        );
+    }
+
+    // Spec §5.3's rule for count(), for the aggregates too: the aggregate of the rows of the result. A query that is
+    // windowed, grouped or distinct is aggregated as a subquery, SELECT SUM(t.col) FROM (…) AS t, where a plain
+    // aggregate would take the LIMIT as one of its single row, and the GROUP BY as one group of its own.
+    public function test_a_windowed_grouped_or_distinct_query_aggregates_its_rows(): void
+    {
+        Measurement::table();
+        $this->third_row();
+
+        // qty of the rows in order: 1, 2, 2
+        $by_id = fn(): Query => Measurement::order_by('id');
+        $this->assert_same(5, $by_id()->sum('qty'));
+        $this->assert_same(3, $by_id()->limit(2)->sum('qty'));
+        $this->assert_same(4, $by_id()->offset(1)->sum('qty'));
+        $this->assert_same(1, $by_id()->limit(1)->max('qty'));
+        $this->assert_same(2, $by_id()->limit(2)->offset(1)->min('qty'));
+        $this->assert_same('1.5000', $by_id()->limit(2)->avg('qty'));
+        $this->assert_same('2.0000', $by_id()->limit(2)->offset(1)->average('qty'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`qty`) FROM (') . $this->conn->limit($this->sql('SELECT `qty` FROM `measurements` ORDER BY `id` ASC'), null, 2) . ') AS t'],
+            $this->statements(fn() => $by_id()->limit(2)->sum('qty'))
+        );
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`qty`), COUNT(t.`qty`) FROM (') . $this->conn->limit($this->sql('SELECT `qty` FROM `measurements` ORDER BY `id` ASC'), null, 2) . ') AS t'],
+            $this->statements(fn() => $by_id()->limit(2)->avg('qty'))
+        );
+
+        // a window of no row has no value: the rows of the result are none
+        $this->assert_same(0, $by_id()->limit(0)->sum('qty'));
+        $this->assert_null($by_id()->limit(0)->max('qty'));
+        $this->assert_null($by_id()->limit(0)->avg('qty'));
+        $this->assert_same(0.0, $by_id()->limit(0)->sum('ratio'));
+
+        // distinct: the values of the distinct rows of the select
+        $this->assert_same(3, Measurement::distinct()->select('qty')->sum('qty'));
+        $this->assert_same('1.5000', Measurement::distinct()->select('qty')->avg('qty'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`qty`) FROM (SELECT DISTINCT `qty` FROM `measurements`) AS t')],
+            $this->statements(fn() => Measurement::distinct()->select('qty')->sum('qty'))
+        );
+
+        // grouped: the rows are the groups', whose column must be grouped
+        $this->assert_same(3, Measurement::group_by('qty')->sum('qty'));
+        $this->assert_same(2, Measurement::group_by('qty')->having_raw('COUNT(*) > ?', [1])->sum('qty'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`qty`) FROM (SELECT `qty` FROM `measurements` GROUP BY `qty`) AS t')],
+            $this->statements(fn() => Measurement::group_by('qty')->sum('qty'))
+        );
+
+        // the caller's select stays where an alias of it is the aggregated column: no model column is named doubled
+        $doubled = fn(): Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
+        $this->assert_equals(10, $doubled()->sum('doubled'));
+        $this->assert_equals(4, $doubled()->max('doubled'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`doubled`) FROM (') . $this->conn->limit($this->sql('SELECT qty * 2 AS doubled FROM `measurements` ORDER BY `id` ASC'), null, 10) . ') AS t'],
+            $this->statements(fn() => $doubled()->sum('doubled'))
+        );
+    }
+
+    // A named column of a model, whatever the window: its type reads the aggregate of the subquery as well
+    public function test_a_windowed_query_reads_the_aggregate_by_the_type_of_the_column(): void
+    {
+        $by_id = fn(): Query => Measurement::order_by('id');
+
+        $this->assert_same(4611686018427387904, $by_id()->limit(1)->sum('big'));
+        $this->assert_same('4611686018427387904.0000', $by_id()->limit(1)->avg('big'));
+        $this->assert_same(0.1, $by_id()->limit(1)->max('ratio'));
+        $this->assert_same(2, $by_id()->limit(1)->offset(1)->max('qty'));
+    }
+
+    // A DateTime bound in SQL written by hand is formatted as the other terminals format theirs (Table::format_date_bind_values(),
+    // #138): PDO cannot bind the object. dated_counts has 1 hit at 2026-01-01 10:00:00 and 2 at 2026-01-02 10:00:00.
+    public function test_a_date_time_bound_in_raw_sql_is_formatted_as_the_other_terminals_format_it(): void
+    {
+        $at = fn(): Query => DatedCount::where_raw('at = ?', [new DateTime('2026-01-02 10:00:00')]);
+
+        $this->assert_same(1, $at()->count());
+        $this->assert_same(2, $at()->sum('hits'));
+        $this->assert_same(2, $at()->max('hits'));
+        $this->assert_same(2, $at()->min('hits'));
+        $this->assert_same('2.0000', $at()->avg('hits'));
+    }
+
+    // An aggregate reads the query as it stands and leaves it so: the state is the query's, the statements are copies
+    public function test_an_aggregate_leaves_the_query_as_it_was(): void
+    {
+        $query = Measurement::where('qty', '>', 0)->order_by('id')->limit(5)->select('qty', 'ratio');
+        $before = [$query->to_sql(), $query->get_bindings()];
+
+        $query->sum('qty');
+        $query->min('qty');
+        $query->max('qty');
+        $query->avg('qty');
+        $query->average('ratio');
+
+        $this->assert_same($before, [$query->to_sql(), $query->get_bindings()]);
+        $this->assert_same(2, count($query->get()));
+        $this->assert_same(2, $query->count());
+        $this->assert_same(3, $query->sum('qty'));
+    }
+
+    // The column's name is checked before any statement, as the other builder terminals do theirs: no name, and * (which
+    // is COUNT(*)'s alone), are refused at the call
+    public function test_the_column_name_is_checked_before_any_statement(): void
+    {
+        Measurement::table();
+
+        foreach (['min', 'max', 'sum', 'avg', 'average'] as $method) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "Empty column name: '' in $method() on Measurement"]],
+                GoldenStatements::capture(fn() => Measurement::$method('')),
+                "$method('')"
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "Empty column name: '  ' in $method() on Measurement"]],
+                GoldenStatements::capture(fn() => Measurement::new_query()->$method('  ')),
+                "$method('  ')"
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "$method() takes a column name, not '*', on Measurement"]],
+                GoldenStatements::capture(fn() => Measurement::$method('*')),
+                "$method('*')"
+            );
+        }
+    }
+
+    // The five names are forwarded to a new query of the class (spec §4.1), and none is a method of Model
+    public function test_the_aggregates_are_forwarded_from_the_class(): void
+    {
+        foreach (['min', 'max', 'sum', 'avg', 'average'] as $name) {
+            $this->assert_true(in_array($name, Query::FORWARDABLE, true), $name);
+            $this->assert_false(method_exists(ActiveRecord\Model::class, $name), $name);
+        }
+
+        $this->assert_same(Measurement::new_query()->where('label', 'b')->sum('qty'), Measurement::where('label', 'b')->sum('qty'));
+        $this->assert_same(2, Measurement::where('label', 'b')->sum('qty'));
+    }
+
+    // "Exact 64-bit correctness": a SUM of BIGINTs is an int up to PHP_INT_MAX and down to PHP_INT_MIN, as are the MIN and
+    // the MAX, and its AVG is exact, on every adapter (SQLite's too: its SUM of integers is an int). Beyond that range a
+    // SUM is the exact digits (the MySQL, MariaDB and Postgres files) or SQLite's integer overflow. The expected values
+    // are those of exact integer arithmetic (Python).
+    public function test_a_sum_of_bigints_is_an_int_where_the_sum_fits(): void
+    {
+        foreach ([
+            [4611686018427387904, 4611686018427387903, PHP_INT_MAX, '4611686018427387903.5000'],
+            [-4611686018427387904, -4611686018427387904, PHP_INT_MIN, '-4611686018427387904.0000'],
+            [PHP_INT_MAX, 0, PHP_INT_MAX, '4611686018427387903.5000'],
+            [PHP_INT_MIN, 0, PHP_INT_MIN, '-4611686018427387904.0000'],
+            [PHP_INT_MAX, -1, PHP_INT_MAX - 1, '4611686018427387903.0000'],
+            [PHP_INT_MIN, 1, PHP_INT_MIN + 1, '-4611686018427387903.5000'],
+            [PHP_INT_MAX, PHP_INT_MIN, -1, '-0.5000'],
+        ] as [$first, $second, $sum, $average]) {
+            $this->set_big($first, $second);
+            $case = "$first + $second";
+
+            $this->assert_same($sum, Measurement::sum('big'), "sum $case");
+            $this->assert_same($average, Measurement::avg('big'), "avg $case");
+            $this->assert_same(max($first, $second), Measurement::max('big'), "max $case");
+            $this->assert_same(min($first, $second), Measurement::min('big'), "min $case");
+        }
+    }
+
+    public function test_the_aggregate_of_one_bigint_is_an_int(): void
+    {
+        $this->assert_same(4611686018427387904, Measurement::where('label', 'a')->sum('big'));
+        $this->assert_same(4611686018427387904, Measurement::where('label', 'a')->max('big'));
+        $this->assert_same(4611686018427387904, Measurement::where('label', 'a')->min('big'));
+        $this->assert_same('4611686018427387904.0000', Measurement::where('label', 'a')->avg('big'));
+        $this->assert_same(4611686018427387904, Measurement::max('big'));
+    }
+
+    // A whole average still has its decimals, and half way rounds away from zero (ExactDecimal; the tie of 1/32 is 0.03125)
+    public function test_an_integer_average_rounds_half_up_at_four_decimals(): void
+    {
+        $this->third_row();
+
+        $this->assert_same('1.5000', Measurement::where_in('label', ['a', 'b'])->avg('qty'));
+        $this->assert_same('2.0000', Measurement::where_in('label', ['b', 'c'])->avg('qty'));
+
+        // 32 values summing to 1 (0.03125), and to -1 (-0.03125)
+        $this->conn->query('DELETE FROM measurements');
+
+        foreach (range(1, 32) as $i) {
+            $values = [1 === $i ? 1 : 0, 'tie'];
+            $this->conn->query('INSERT INTO measurements (qty, label) VALUES (?, ?)', $values);
+        }
+
+        $this->assert_same('0.0313', Measurement::avg('qty'));
+
+        $this->conn->query("UPDATE measurements SET qty = -qty WHERE label = 'tie'");
+        $this->assert_same('-0.0313', Measurement::avg('qty'));
+    }
+}

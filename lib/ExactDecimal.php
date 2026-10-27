@@ -11,21 +11,31 @@ namespace ActiveRecord;
  * from an int or a plain decimal string into its digits, and compared, normalized or divided on them, so a number of
  * any size keeps every digit, where a float keeps 53 bits and an int 63.
  *
- * It serves Validations, which compares numbers exactly (#175), and the aggregates of Query: the int-or-digits rule of
- * a MIN, a MAX or a SUM of an integer column, and the exact division of an AVG.
+ * It serves Validations, which compares numbers exactly (#175), and the aggregates of the query builder, through
+ * AggregateCaster: the int-or-digits rule of a MIN, a MAX or a SUM of an integer column (to_int_or_string()), and the
+ * exact division of the AVG of an integer or a decimal column (divide()). Neither takes a float: PHP turns one into an
+ * int before they run (1.5 is 1, with a deprecation), so a caller classifies the floats first, as AggregateCaster does.
  *
- * @internal Serves Validations and Query; not a supported API.
+ * @internal Serves Validations and AggregateCaster; not a supported API.
  * @package ActiveRecord
  */
 final class ExactDecimal
 {
+    /**
+     * The largest scale divide() takes: 16387, the 16383 digits after the point that Postgres's numeric holds at most, and
+     * the 4 that the average of such a number adds to them. A scale beyond it is a caller's mistake, and would only
+     * exhaust the memory (a scale near PHP_INT_MAX is a fatal error that no code catches).
+     */
+    public const int MAX_SCALE = 16387;
+
     /**
      * Splits an int or a numeric string in plain decimal notation (optional
      * surrounding whitespace and sign, digits with an optional fraction) into
      * [negative, integer digits, fraction digits], without leading zeros in the
      * integer digits nor trailing zeros in the fraction ('' for none; zero is
      * never negative). Returns null for anything else — a float, an exponent
-     * string — which is then compared as a float, as before (#49).
+     * string, text — which the caller deals with in its own way (Validations
+     * compares it as a float, as before: #49).
      *
      * @return array{bool, string, string}|null
      */
@@ -92,6 +102,9 @@ final class ExactDecimal
      * do not matter ('+007' and '7.00' are 7, '-0' is 0), and the digits that come back are normalized the same way:
      * no leading zero, and no sign but a minus.
      *
+     * A float is not accepted: PHP truncates it to an int before the call (1.5 is 1, with a deprecation), so a caller
+     * classifies floats first and never passes one.
+     *
      * @return int|string An int, or the digits ('-' first when negative) of an integer beyond the int range
      * @throws ActiveRecordException for a value that is not an exact integer: a fraction that is not all zeros, or no
      *   decimal at all. A DECIMAL column keeps its scale and does not come through here
@@ -129,19 +142,23 @@ final class ExactDecimal
      * '0.0000'.
      *
      * The DECIMAL division and the AVG() of MySQL and MariaDB do the same, except that they truncate when the scale of
-     * the result is 9, 18 or 27 (an artifact of their base-10^9 storage, found by comparing them with this method on
-     * random cases), and that MariaDB writes a negative quotient that rounds to zero as '-0.000'. This method copies
-     * neither: it rounds the same way at every scale, on every adapter.
+     * the result is 9, 18 or 27 (apparently because their DECIMAL words hold 9 digits; found by comparing them with this
+     * method on random cases), and that MariaDB writes a negative quotient that rounds to zero as '-0.000'. This method
+     * copies neither: it rounds the same way at every scale, on every adapter.
      *
      * It is a long division of the digits of the dividend, taken to one digit past the scale. That digit of the
      * quotient is exact, and it alone decides the rounding (5 or more rounds up), so no remainder is compared and no
      * float is made. The dividend may have any number of digits, and the divisor may be as big as PHP_INT_MAX (see
      * wide_step()).
      *
+     * A float is not accepted as the dividend: PHP truncates it to an int before the call (1.5 is 1, with a
+     * deprecation), so a caller classifies floats first and never passes one.
+     *
      * @param int|string $dividend An int, or a decimal string as parse() reads it, whatever its size and number of fraction digits
      * @param int $divisor Above 0
-     * @param int $scale The number of fractional digits of the result: 0 or more
-     * @throws ActiveRecordException for a divisor that is not above 0, a negative scale, or a dividend that is no decimal
+     * @param int $scale The number of fractional digits of the result: 0 to MAX_SCALE
+     * @throws ActiveRecordException for a divisor that is not above 0, a scale that is negative or above MAX_SCALE, or a
+     *   dividend that is no decimal
      */
     public static function divide(int|string $dividend, int $divisor, int $scale): string
     {
@@ -151,6 +168,10 @@ final class ExactDecimal
 
         if ($scale < 0) {
             throw new ActiveRecordException(sprintf('ExactDecimal::divide() takes a scale of 0 or more, got %d', $scale));
+        }
+
+        if ($scale > self::MAX_SCALE) {
+            throw new ActiveRecordException(sprintf('ExactDecimal::divide() takes a scale of at most %d, got %d', self::MAX_SCALE, $scale));
         }
 
         $decimal = self::parse($dividend);

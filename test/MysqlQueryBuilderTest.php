@@ -1,11 +1,14 @@
 <?php
 
+use ActiveRecord\Column;
+
 /**
  * The query builder on MySQL: what its adapter writes its own way. MariadbQueryBuilderTest runs the same
  * tests on MariaDB, which shares the adapter.
  *
  * Fixture data: authors 1 Tito, 2 George W. Bush, 3 Bill Clinton, 4 Uncle Bob; charset_words, whose
- * latin1_word, utf8mb3_word and utf8mb4_word all hold 1 Café and 2 école.
+ * latin1_word, utf8mb3_word and utf8mb4_word all hold 1 Café and 2 école; measurements 1 (qty 1, big 2^62, amount
+ * 1234567890123.45, ratio 0.1) and 2 (qty 2, big 2^62, amount 0.01, ratio 0.2); big_ids 1 and PHP_INT_MAX.
  */
 class MysqlQueryBuilderTest extends DatabaseTest
 {
@@ -156,6 +159,121 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(1, count($length->get()));
         $this->assert_same("SELECT * FROM `authors` WHERE length(name) = '14'", $length->to_raw_sql());
         $this->assert_same(1, count($this->conn->query($length->to_raw_sql())->fetchAll()));
+    }
+
+    // Spec §5.4, §10: the raw types this adapter reports for the columns of the measurements, which classify their
+    // aggregates. MySQL and MariaDB give the first word of SHOW COLUMNS' type: 'decimal' for DECIMAL, NUMERIC, DEC and
+    // FIXED, 'double' for DOUBLE, REAL and DOUBLE PRECISION, 'float' for FLOAT.
+    public function test_the_raw_types_of_the_measurements(): void
+    {
+        $this->assert_same(
+            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'decimal'], 'ratio' => [Column::DECIMAL, 'double'], 'label' => [Column::STRING, 'varchar']],
+            array_map(fn(Column $column): array => [$column->type, $column->raw_type], Measurement::table()->columns)
+        );
+        $this->assert_same([Column::INTEGER, 'bigint'], [BigId::table()->columns['id']->type, BigId::table()->columns['id']->raw_type]);
+    }
+
+    // The aggregates of a DECIMAL column are the exact strings MySQL and MariaDB return, and a SUM of BIGINTs beyond
+    // PHP_INT_MAX its exact digits (MySQL sums into a DECIMAL: no float, no overflow). The AVG is exact, at the scale of
+    // the SUM plus four: DECIMAL(20,2) gives 6.
+    public function test_exact_decimal_and_big_sums(): void
+    {
+        $this->assert_same('1234567890123.46', Measurement::sum('amount'));
+        $this->assert_same('617283945061.730000', Measurement::avg('amount'));
+        $this->assert_same('9223372036854775808', Measurement::sum('big'));
+        $this->assert_same('0', Measurement::where('label', 'zzz')->sum('amount'));
+    }
+
+    // MIN and MAX of a DECIMAL are the column's own strings, its scale kept; the SUM and the AVG of a decimal keep the
+    // scale of the SUM, trailing zeros included (ExactDecimal::parse() drops them: 2.50 has the fraction 5)
+    public function test_decimal_aggregates_keep_the_scale(): void
+    {
+        $this->assert_same('0.01', Measurement::min('amount'));
+        $this->assert_same('1234567890123.45', Measurement::max('amount'));
+        $this->assert_same('617283945061.730000', Measurement::average('amount'));
+
+        $this->conn->query("INSERT INTO measurements (amount, label) VALUES ('2.50', 'd'), ('-0.01', 'e'), ('0.00', 'f')");
+        $label = fn(string $label): ActiveRecord\Query => Measurement::where('label', $label);
+
+        $this->assert_same('2.50', $label('d')->sum('amount'));
+        $this->assert_same('2.50', $label('d')->min('amount'));
+        $this->assert_same('2.50', $label('d')->max('amount'));
+        $this->assert_same('2.500000', $label('d')->avg('amount'));
+        $this->assert_same('-0.01', $label('e')->sum('amount'));
+        $this->assert_same('-0.010000', $label('e')->avg('amount'));
+        $this->assert_same('0.00', $label('f')->sum('amount'));
+        $this->assert_same('0.000000', $label('f')->avg('amount'));
+
+        // a windowed query reads its decimals the same way: the subquery keeps the column's type
+        $first = fn(): ActiveRecord\Query => Measurement::order_by('id')->limit(1);
+        $this->assert_same('1234567890123.45', $first()->sum('amount'));
+        $this->assert_same('1234567890123.45', $first()->max('amount'));
+        $this->assert_same('1234567890123.450000', $first()->avg('amount'));
+
+        // nothing but NULLs: the SUM is '0' and there is no average
+        Measurement::create(['qty' => 2, 'label' => 'c']);
+        $this->assert_same('0', $label('c')->sum('amount'));
+        $this->assert_null($label('c')->avg('amount'));
+        $this->assert_null($label('c')->max('amount'));
+    }
+
+    // Beyond what a float keeps (15 to 17 digits): DECIMAL(20,2) holds 18 integer digits, and a SUM of them has more
+    public function test_decimals_beyond_the_precision_of_a_float_are_exact(): void
+    {
+        $this->conn->query('DELETE FROM measurements');
+
+        foreach (range(1, 3) as $i) {
+            $this->conn->query("INSERT INTO measurements (amount, label) VALUES ('999999999999999999.99', 'x')");
+        }
+
+        $this->assert_same('999999999999999999.99', Measurement::min('amount'));
+        $this->assert_same('2999999999999999999.97', Measurement::sum('amount'));
+        $this->assert_same('999999999999999999.990000', Measurement::avg('amount'));
+    }
+
+    // A SUM of BIGINTs beyond the int range is the exact digits, on both sides of it, and the AVG of it exact; the MIN and
+    // the MAX stay ints. The expected values are those of exact integer arithmetic (Python).
+    public function test_sums_beyond_the_int_range_are_exact_digits(): void
+    {
+        foreach ([
+            [PHP_INT_MAX, 1, '9223372036854775808', '4611686018427387904.0000'],
+            [PHP_INT_MIN, -1, '-9223372036854775809', '-4611686018427387904.5000'],
+            [PHP_INT_MAX, PHP_INT_MAX, '18446744073709551614', '9223372036854775807.0000'],
+            [PHP_INT_MIN, PHP_INT_MIN, '-18446744073709551616', '-9223372036854775808.0000'],
+        ] as [$first, $second, $sum, $average]) {
+            foreach ([1 => $first, 2 => $second] as $id => $big) {
+                $values = [$big, $id];
+                $this->conn->query('UPDATE measurements SET big = ? WHERE id = ?', $values);
+            }
+
+            $this->assert_same($sum, Measurement::sum('big'), "sum $first + $second");
+            $this->assert_same($average, Measurement::avg('big'), "avg $first + $second");
+            $this->assert_same(max($first, $second), Measurement::max('big'), "max $first + $second");
+            $this->assert_same(min($first, $second), Measurement::min('big'), "min $first + $second");
+        }
+    }
+
+    // A column that is not the model's has no type to read by, so its aggregates are the driver's values: MySQL's SUM of
+    // INTs is a DECIMAL, which PDO returns as a string, where the model's own column is an int
+    public function test_a_column_that_is_not_the_models_is_the_string_mysql_returns(): void
+    {
+        $this->assert_same('3', Book::joins('author')->sum('authors.author_id'));
+        $this->assert_same(3, Book::joins('author')->sum('author_id'));
+        $this->assert_same('1.5000', Book::joins('author')->avg('authors.author_id'));
+        $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+    }
+
+    // Review Focus 3: a BIGINT UNSIGNED beyond PHP_INT_MAX stays exact (#44), in a MAX, a SUM and the AVG of it: the
+    // digits, in a string. The expected values are those of exact integer arithmetic (Python).
+    public function test_max_of_unsigned_bigint_beyond_int_max(): void
+    {
+        BigId::create(['id' => '18446744073709551615', 'note' => 'max']);
+        $this->assert_same('18446744073709551615', BigId::max('id'));
+        $this->assert_same(1, BigId::min('id'));
+        // 1 + PHP_INT_MAX + 18446744073709551615
+        $this->assert_same('27670116110564327423', BigId::sum('id'));
+        $this->assert_same('9223372036854775807.6667', BigId::avg('id'));
+        $this->assert_same(9223372036854775807, BigId::where('note', 'int max')->max('id'));
     }
 
     // MySQL has no OFFSET without LIMIT: the window of the builder is the adapter's own, an offset alone going with

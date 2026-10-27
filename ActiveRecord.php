@@ -16,6 +16,7 @@ require __DIR__ . '/lib/JoinClause.php';
 require __DIR__ . '/lib/IncludeTree.php';
 require __DIR__ . '/lib/RawSqlWriter.php';
 require __DIR__ . '/lib/ExactDecimal.php';
+require __DIR__ . '/lib/AggregateCaster.php';
 require __DIR__ . '/lib/Query.php';
 require __DIR__ . '/lib/Timestamps.php';
 require __DIR__ . '/lib/ConnectionManager.php';

@@ -416,6 +416,18 @@ abstract class Connection
     }
 
     /**
+     * Whether the database keeps the digits of a DECIMAL or NUMERIC column, so that its aggregates can be the exact strings
+     * it returns (spec §5.4). By default it does. An adapter whose database stores them as floating-point numbers
+     * overrides it, and the aggregates of those columns are floats.
+     *
+     * @internal Serves the aggregates of Query (AggregateCaster::kind()); not a supported API.
+     */
+    public function exact_decimals(): bool
+    {
+        return true;
+    }
+
+    /**
      * Execute a query that returns maximum of one row with one field and return it.
      *
      * @param string $sql Raw SQL string to execute.

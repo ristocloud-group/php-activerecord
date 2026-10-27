@@ -132,6 +132,11 @@ class Query
         'sole_value',
         'pluck',
         'doesnt_exist',
+        'min',
+        'max',
+        'sum',
+        'avg',
+        'average',
     ];
 
     private QueryState $state;
@@ -1864,6 +1869,96 @@ class Query
     }
 
     /**
+     * The smallest value of $column among the rows the query selects, as the column's type reads it (see
+     * AggregateCaster): an int where the exact value of an integer column fits PHP_INT_MIN to PHP_INT_MAX, else its exact
+     * digits as a string (a MySQL BIGINT UNSIGNED above PHP_INT_MAX, #44); a DECIMAL as the string the database returns,
+     * its scale kept; a float column as a float. Null when no row has a value. A column that is no column of the model
+     * (a joined table's, "authors.name"), and a column of any other type (text, a date), gives the driver's value as it is.
+     *
+     * The aggregate is that of the rows of the result, as count() counts them: a query that is grouped, distinct or
+     * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
+     * query's select, so a select of its own must hold it. The statement that ran is left in Table::$last_sql.
+     *
+     * <code>
+     * $first = Order::where('customer_id', 7)->min('placed_at');
+     * </code>
+     *
+     * @throws ActiveRecordException for an empty column name, or *, before any statement
+     */
+    public function min(string $column): int|string|float|null
+    {
+        return $this->aggregate(__FUNCTION__, 'MIN', $column);
+    }
+
+    /**
+     * The largest value of $column among the rows the query selects, read as min() reads its value.
+     *
+     * <code>
+     * $highest = Measurement::where('label', 'a')->max('big');
+     * </code>
+     *
+     * @throws ActiveRecordException as min() does
+     */
+    public function max(string $column): int|string|float|null
+    {
+        return $this->aggregate(__FUNCTION__, 'MAX', $column);
+    }
+
+    /**
+     * The sum of $column over the rows the query selects, exact, and of the type the column has (see min()): an int
+     * while the sum fits PHP_INT_MIN to PHP_INT_MAX and else its exact digits, which MySQL, MariaDB and Postgres sum into
+     * a wider number; a DECIMAL as the exact string, its scale kept; a float for a float column. NULLs are not summed, and
+     * the sum of no value is 0 of that type: 0, '0' or 0.0. A column that is no column of the model gives the driver's
+     * value, which is null for no row.
+     *
+     * SQLite has no exact decimal (it stores a DECIMAL as a REAL), so there the sum of a DECIMAL column is a float, and a
+     * sum of integers beyond PHP_INT_MAX is SQLite's own "integer overflow" error, a DatabaseException.
+     *
+     * <code>
+     * $total = Order::where('customer_id', 7)->sum('total');
+     * </code>
+     *
+     * @return int|string|float|null Null only for a column that is no column of the model, over no row
+     * @throws ActiveRecordException as min() does
+     */
+    public function sum(string $column): int|string|float|null
+    {
+        return $this->aggregate(__FUNCTION__, 'SUM', $column);
+    }
+
+    /**
+     * The average of $column over the rows the query selects, or null when no row has a value (NULLs are not counted).
+     * The average of an integer or a DECIMAL column is exact: its SUM divided by its COUNT, in one statement
+     * (SELECT SUM(col), COUNT(col)), by a long division in PHP rounded half up, at the scale of the SUM plus 4, as a string:
+     * '1.6667' for the INT column of qty 1, 2, 2, and '617283945061.730000' for a DECIMAL(20,2). So it is the same on every
+     * database, and exact beyond what a float keeps, where the databases' own AVG differ in scale and type (see
+     * ExactDecimal). The average of a float column is the database's own, as a float. A column that is no column of
+     * the model gives the driver's AVG as it is.
+     *
+     * SQLite has no exact decimal, so there the average of a DECIMAL column is a float.
+     *
+     * <code>
+     * $mean = Measurement::where('label', 'a')->avg('qty');
+     * </code>
+     *
+     * @throws ActiveRecordException as min() does
+     */
+    public function avg(string $column): string|float|null
+    {
+        return $this->average_of(__FUNCTION__, $column);
+    }
+
+    /**
+     * The average of $column, as avg() reads it: Eloquent's other name for it.
+     *
+     * @throws ActiveRecordException as avg() does
+     */
+    public function average(string $column): string|float|null
+    {
+        return $this->average_of(__FUNCTION__, $column);
+    }
+
+    /**
      * The execution of Model::count(), moved here: the SELECT of the legacy options is run (count()
      * has them select COUNT(*)) and the first column of its first row is returned, 0 when it
      * returns none (#34). A grouped count is that of the first group. Unlike exists(), it leaves
@@ -2348,6 +2443,79 @@ class Query
         }
 
         return $rows;
+    }
+
+    /**
+     * $function (MIN, MAX or SUM) of $column over the rows of the query, read by the kind of the column (see
+     * AggregateCaster::cast()), for a call of $method.
+     *
+     * @param 'MIN'|'MAX'|'SUM' $function
+     * @throws ActiveRecordException for an empty column name, or *
+     */
+    private function aggregate(string $method, string $function, string $column): mixed
+    {
+        $kind = $this->aggregate_kind($method, $column);
+
+        return AggregateCaster::cast($kind, $function, $this->aggregate_row($column, [$function])[0]);
+    }
+
+    /**
+     * The average of $column over the rows of the query, for a call of $method: that of an exact column from its SUM and
+     * its COUNT, which come in one statement, and the database's AVG of any other (see AggregateCaster::average()).
+     *
+     * @throws ActiveRecordException for an empty column name, or *
+     */
+    private function average_of(string $method, string $column): string|float|null
+    {
+        $kind = $this->aggregate_kind($method, $column);
+
+        if (AggregateCaster::INTEGER === $kind || AggregateCaster::DECIMAL === $kind) {
+            [$sum, $count] = $this->aggregate_row($column, ['SUM', 'COUNT']);
+
+            return AggregateCaster::average($kind, $sum, $count);
+        }
+
+        /** @var string|float|null $average */
+        $average = AggregateCaster::cast($kind, 'AVG', $this->aggregate_row($column, ['AVG'])[0]);
+
+        return $average;
+    }
+
+    /**
+     * Checks the column given to an aggregate, before any statement, and says which kind it is of (see
+     * AggregateCaster::kind()): a column of the model by the one rule of the builder (see QueryCompiler::column()), of the
+     * type the connection reports for it, and none for any other name.
+     *
+     * @return 'integer'|'decimal'|'floating'|null
+     * @throws ActiveRecordException for an empty column name, and for *, which only count() takes
+     */
+    private function aggregate_kind(string $method, string $column): ?string
+    {
+        $compiler = $this->compiler();
+        $compiler->refuse_empty_column_name($column, $method);
+
+        if ('*' === $column) {
+            throw new ActiveRecordException(sprintf("%s() takes a column name, not '*', on %s", $method, $this->model_class));
+        }
+
+        return AggregateCaster::kind($compiler->model_column($column), $this->table()->connection()->exact_decimals());
+    }
+
+    /**
+     * The one row that $functions give over $column, as the driver returns it, in the order of $functions: a row of NULLs
+     * if the statement gives none. The statement is left in Table::$last_sql.
+     *
+     * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
+     * @return list<mixed>
+     */
+    private function aggregate_row(string $column, array $functions): array
+    {
+        $table = $this->table();
+        $sql = $this->compiler()->compile_aggregate($this->state, $column, $functions);
+        $values = $table->format_date_bind_values($sql->select_bind_values());
+        $row = $table->connection()->query(($table->last_sql = $sql->to_s()), $values)->fetch(\PDO::FETCH_NUM);
+
+        return is_array($row) ? array_values($row) : array_fill(0, count($functions), null);
     }
 
     /**

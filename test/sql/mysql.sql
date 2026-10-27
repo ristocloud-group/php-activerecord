@@ -203,3 +203,13 @@ CREATE TABLE charset_words (
   `utf8mb3_word` VARCHAR(20) CHARACTER SET utf8mb3,
   `utf8mb4_word` VARCHAR(20) CHARACTER SET utf8mb4
 ) ENGINE=InnoDB;
+
+-- aggregates of the query builder (spec 5.4): an INT, an exact BIGINT and DECIMAL(20,2), a floating DOUBLE and a text label
+CREATE TABLE measurements (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `qty` INT,
+  `big` BIGINT,
+  `amount` DECIMAL(20,2),
+  `ratio` DOUBLE,
+  `label` VARCHAR(20)
+) ENGINE=InnoDB;

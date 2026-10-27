@@ -250,6 +250,20 @@ class ExactDecimalTest extends SnakeCase_PHPUnit_Framework_TestCase
         }
     }
 
+    // The scale is capped at 16387: the 16383 digits after the point of Postgres's widest numeric, and the 4 that the average
+    // of such a number adds. A scale near PHP_INT_MAX would end in PHP's fatal "Allowed memory size exhausted", which
+    // nothing can catch, so it is refused before any digit is made.
+    public function test_divide_takes_a_scale_up_to_the_widest_numeric_and_refuses_a_larger_one(): void
+    {
+        $this->assert_same('0.' . str_repeat('3', 16387), ExactDecimal::divide('1', 3, 16387));
+        $this->assert_same('0.' . str_repeat('3', 16386), ExactDecimal::divide('1', 3, 16386));
+        $this->assert_same(ExactDecimal::MAX_SCALE, 16387);
+
+        foreach ([16388, 16389, 100000, PHP_INT_MAX - 1, PHP_INT_MAX] as $scale) {
+            $this->assert_refused(fn() => ExactDecimal::divide('1', 3, $scale), ['ExactDecimal::divide()', 'scale', 'at most 16387', (string) $scale], "scale $scale");
+        }
+    }
+
     public function test_divide_refuses_a_dividend_that_is_no_plain_decimal(): void
     {
         foreach (['', ' ', 'abc', '1e3', '1.5e-3', '0x1A', '1,5', '5 5', '1.5.2', '-', '.', '+.', '--5'] as $dividend) {

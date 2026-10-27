@@ -205,3 +205,13 @@ CREATE TABLE charset_words (
   utf8mb3_word varchar(20),
   utf8mb4_word varchar(20)
 );
+
+-- aggregates of the query builder (spec 5.4): an INT, an exact BIGINT and DECIMAL(20,2), a floating DOUBLE PRECISION and a text label
+CREATE TABLE measurements (
+  id serial primary key,
+  qty int,
+  big bigint,
+  amount decimal(20,2),
+  ratio double precision,
+  label varchar(20)
+);

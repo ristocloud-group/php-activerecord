@@ -151,16 +151,32 @@ final class QueryCompiler
 
     /**
      * The SELECT that counts the rows of a state, for Query::count(); or with a $column other than *, the
-     * rows in which that column is not null, as COUNT(column) counts.
+     * rows in which that column is not null, as COUNT(column) counts. It is the aggregate COUNT of
+     * compile_aggregate(), whose rules (counted in place, or as a subquery) it follows.
      *
-     * A state neither grouped (GROUP BY, HAVING), nor distinct, nor windowed (LIMIT, OFFSET) is counted in
+     * @internal Serves Query::count(); not a supported API.
+     * @throws ActiveRecordException for a state of legacy options (see compile_select())
+     */
+    public function compile_count(QueryState $state, string $column): SQLBuilder
+    {
+        return $this->compile_aggregate($state, $column, ['COUNT']);
+    }
+
+    /**
+     * The SELECT that applies aggregate functions to a column of the rows of a state, for Query::count() and the
+     * aggregates of the builder (min(), max(), sum(), avg()): each function of $functions (COUNT, MIN, MAX, SUM or AVG)
+     * to $column, in one row, in the order given. With COUNT alone, $column may be *, which counts the rows; with a
+     * column, it counts those in which the column is not null, as COUNT(column) counts.
+     *
+     * A state neither grouped (GROUP BY, HAVING), nor distinct, nor windowed (LIMIT, OFFSET) is aggregated in
      * place: SELECT COUNT(*) with its FROM, joins and WHERE, without its order, which changes no number
-     * (Postgres refuses an order by a column beside COUNT, besides). Any other is counted as a subquery,
+     * (Postgres refuses an order by a column beside an aggregate, besides). Any other is aggregated as a subquery,
      * SELECT COUNT(*) FROM (…) AS t, which keeps its order only when windowed, since there the order picks
-     * the rows.
+     * the rows. So the aggregate is that of the rows of the result, as count() counts them: a grouped query counts
+     * its groups, and a window's rows are the ones it picks.
      *
      * What the subquery selects:
-     * - 1, only where the state's select provably cannot matter: no column is counted, no DISTINCT tells
+     * - 1, only where the state's select provably cannot matter: no column is aggregated, no DISTINCT tells
      *   the rows apart by the select, no HAVING may name an alias of it, no SQL written by hand in the GROUP
      *   BY, nor in the ORDER BY the subquery keeps (a window's), may name it by position or expression
      *   (GROUP BY 1 would group by the constant; see has_raw()), and it holds plain columns without an
@@ -172,31 +188,33 @@ final class QueryCompiler
      * - Otherwise the state's own select, since a clause or the rows may depend on it: a GROUP BY and an
      *   ORDER BY can name an alias of it, on every database, a HAVING too on MySQL, MariaDB and SQLite, SQL
      *   of a GROUP BY or a kept ORDER BY can name a column of it by position, and an aggregate
-     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects the counted column,
-     *   under DISTINCT too, so that a distinct count of a column counts its distinct values that are not null
-     *   (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
+     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects the aggregated column,
+     *   under DISTINCT too, so that a distinct aggregate of a column runs over its distinct values that are not
+     *   null (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
      *   beside a HAVING.
      *
-     * A counted column is read as t's column of its name (see result_name()), which the subquery must
+     * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
      * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives): MySQL's
      * ONLY_FULL_GROUP_BY and Postgres refuse any other. With the state's select kept, two result columns of
      * one name still meet MySQL's and MariaDB's 1060.
      *
-     * @internal Serves Query::count(); not a supported API.
+     * @internal Serves Query; not a supported API.
+     * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
      * @throws ActiveRecordException for a state of legacy options (see compile_select())
      */
-    public function compile_count(QueryState $state, string $column): SQLBuilder
+    public function compile_aggregate(QueryState $state, string $column, array $functions): SQLBuilder
     {
         $all = '*' === $column;
         $windowed = null !== $state->limit || null !== $state->offset;
         $rows = clone $state;
+        $apply = fn(string $expression): string => implode(', ', array_map(fn(string $function): string => "$function($expression)", $functions));
 
         if (!$windowed) {
             $rows->orders = [];
         }
 
         if (!$windowed && !$state->distinct && [] === $state->groups && [] === $state->havings) {
-            $rows->selects = [['raw' => 'COUNT(' . ($all ? '*' : $this->column($column, $state)) . ')', 'bindings' => []]];
+            $rows->selects = [['raw' => $apply($all ? '*' : $this->column($column, $state)), 'bindings' => []]];
 
             return $this->compile_select($rows);
         }
@@ -205,16 +223,16 @@ final class QueryCompiler
             // the state's select provably cannot matter
             $rows->selects = [['raw' => '1', 'bindings' => []]];
         } elseif ([] === $state->selects && !($all && $state->distinct)) {
-            // under DISTINCT, the distinct values of the counted column: SELECT DISTINCT * would keep every row apart
+            // under DISTINCT, the distinct values of the aggregated column: SELECT DISTINCT * would keep every row apart
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }
 
         $subquery = $this->compile_select($rows);
-        $count = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
-        $count->from_values($subquery->select_bind_values());
-        $count->select('COUNT(' . ($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))) . ')');
+        $aggregate = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
+        $aggregate->from_values($subquery->select_bind_values());
+        $aggregate->select($apply($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
 
-        return $count;
+        return $aggregate;
     }
 
     /**
