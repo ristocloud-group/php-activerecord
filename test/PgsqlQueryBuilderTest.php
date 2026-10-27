@@ -281,6 +281,56 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_exception_message_contains('function sum(boolean) does not exist', fn() => Venue::where('name', 'zzz')->sum('is_retired'), ActiveRecord\DatabaseException::class);
     }
 
+    // A bytea comes from the driver as a stream, read into the string of its bytes as MySQL and SQLite give a blob. Postgres has
+    // MIN and MAX of a bytea from version 18 only: earlier ones refuse it, undefined function (42883), a DatabaseException, and
+    // AggregateCasterTest pins the stream on any version. The payload is the byte of each id: 1 and 2.
+    public function test_the_min_and_max_of_a_bytea_are_its_bytes(): void
+    {
+        $payload = fn(): ActiveRecord\Query => Measurement::select_raw("decode(lpad(to_hex(id), 2, '0'), 'hex') AS payload")->order_by('id')->limit(5);
+
+        if (!(bool) $this->conn->query("SELECT to_regprocedure('max(bytea)') IS NOT NULL")->fetch(PDO::FETCH_NUM)[0]) {
+            $this->assert_exception_message_contains('function max(bytea) does not exist', fn() => $payload()->max('payload'), ActiveRecord\DatabaseException::class);
+            $this->assert_exception_message_contains('function min(bytea) does not exist', fn() => $payload()->min('payload'), ActiveRecord\DatabaseException::class);
+
+            return;
+        }
+
+        $this->assert_same("\x02", $payload()->max('payload'));
+        $this->assert_same("\x01", $payload()->min('payload'));
+        $this->assert_null($payload()->where('label', 'zzz')->max('payload'));
+    }
+
+    // A numeric holds NaN and, from PostgreSQL 14, the infinities (not numeric(20,2), which has no room for them). Their SUM, MIN,
+    // MAX and AVG are the values as text, which is how Postgres returns them, and the average does not try to divide them: the
+    // exact division would refuse them, with a message of its own. An infinity and its opposite make NaN.
+    public function test_a_numeric_nan_and_the_infinities_are_their_own_average(): void
+    {
+        $this->conn->query("INSERT INTO measurements (amount, label) VALUES ('NaN', 'nan')");
+
+        foreach (['sum', 'min', 'max', 'avg', 'average'] as $method) {
+            $this->assert_same('NaN', Measurement::where('label', 'nan')->$method('amount'), "NaN, $method");
+        }
+
+        // an expression that an alias gives the name of the column; two rows of it
+        foreach (['Infinity', '-Infinity'] as $infinity) {
+            $infinite = fn(): ActiveRecord\Query => Measurement::select_raw("'$infinity'::numeric AS amount")->limit(5);
+
+            foreach (['sum', 'min', 'max', 'avg', 'average'] as $method) {
+                $this->assert_same($infinity, $infinite()->$method('amount'), "$infinity, $method");
+            }
+        }
+
+        $both = fn(): ActiveRecord\Query => Measurement::select_raw("CASE id WHEN 1 THEN 'Infinity'::numeric ELSE '-Infinity'::numeric END AS amount")->limit(5);
+        $this->assert_same('Infinity', $both()->max('amount'));
+        $this->assert_same('-Infinity', $both()->min('amount'));
+        $this->assert_same('NaN', $both()->sum('amount'));
+        $this->assert_same('NaN', $both()->avg('amount'));
+
+        // a finite value beside NaN is NaN too, and no row has no average
+        $this->assert_same('NaN', Measurement::where_in('label', ['nan', 'a'])->avg('amount'));
+        $this->assert_null(Measurement::where('label', 'zzz')->avg('amount'));
+    }
+
     // Postgres writes its window as LIMIT n OFFSET m, with an offset alone as OFFSET m (#130)
     public function test_the_window_is_limit_and_offset(): void
     {

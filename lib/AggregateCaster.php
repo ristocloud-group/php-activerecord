@@ -61,6 +61,14 @@ final class AggregateCaster
     private const array FLOATING_TYPES = ['float', 'double', 'real', 'double precision'];
 
     /**
+     * What Postgres writes for a numeric that is not a finite number: NaN, and (from version 14, in a numeric without a
+     * precision) the infinities. They have no digits, so they are not divided: see average().
+     *
+     * @var list<string>
+     */
+    private const array NON_FINITE = ['NaN', 'Infinity', '-Infinity'];
+
+    /**
      * The digits that an average has beyond the scale of its SUM: MySQL's div_precision_increment, 4 by default, which
      * gives an INT column an average of 4 decimals and a DECIMAL(20,2) one of 6.
      */
@@ -118,7 +126,10 @@ final class AggregateCaster
      * digits, a string of the same value (a wrapped query keeps the select of its own, whose expression can be aliased
      * like the column, and 9007199254740993 must stay exact: a float would make it 9007199254740992), and only a float is
      * a float. A float for an INTEGER stays the float it is (SQLite's REAL in an INTEGER column). The text of a float is
-     * read as a float, with Postgres's spellings of NaN and the infinities.
+     * read as a float, with Postgres's spellings of NaN and the infinities; that of a numeric stays text, whatever it is
+     * (see average() for its average). Without a kind, the driver's value is returned as it is, except a stream, which
+     * is read into a string: the Postgres driver returns a bytea as a stream (a min() or a max() of one, from PostgreSQL
+     * 18), where MySQL and SQLite return a blob as a string.
      *
      * @param self::INTEGER|self::DECIMAL|self::FLOATING|null $kind
      * @param 'MIN'|'MAX'|'SUM'|'AVG' $function
@@ -144,7 +155,7 @@ final class AggregateCaster
                 default => self::to_float($value),
             },
             self::FLOATING => self::to_float($value),
-            default => $value,
+            default => is_resource($value) ? stream_get_contents($value) : $value,
         };
     }
 
@@ -160,7 +171,11 @@ final class AggregateCaster
      * bigint, which PDO returns as an int). Only a SUM that is a float has no exact quotient (SQLite stores a REAL in an
      * INTEGER column), and the average is the float $sum / $count.
      *
-     * @throws ActiveRecordException for a SUM that is text which ExactDecimal does not read as a decimal ('NaN', say)
+     * A SUM that is 'NaN', 'Infinity' or '-Infinity' (a Postgres numeric holds them) has no digits to divide: over a
+     * positive COUNT the average is that value, as the AVG of Postgres is, and as the sum, the min and the max of the
+     * column already are.
+     *
+     * @throws ActiveRecordException for a SUM that is text which ExactDecimal does not read as a decimal
      */
     public static function average(mixed $sum, mixed $count): string|float|null
     {
@@ -168,6 +183,10 @@ final class AggregateCaster
 
         if (null === $sum || $count < 1) {
             return null;
+        }
+
+        if (is_string($sum) && in_array($sum, self::NON_FINITE, true)) {
+            return $sum;
         }
 
         if (is_string($sum) || is_int($sum)) {

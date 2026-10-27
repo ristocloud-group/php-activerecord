@@ -212,6 +212,45 @@ class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
         }
     }
 
+    // The Postgres driver returns a bytea as a stream (a min() or a max() of one exists from PostgreSQL 18), where MySQL and
+    // SQLite return a blob as a string: without a kind, a stream is read into the string of its bytes, and any other value
+    // is the driver's, unchanged
+    public function test_a_stream_is_read_into_the_string_of_its_bytes(): void
+    {
+        foreach (["\x01\x02", '', "\x00\xff\x00", str_repeat('ab', 10000)] as $bytes) {
+            $stream = fopen('php://memory', 'r+');
+            fwrite($stream, $bytes);
+            rewind($stream);
+
+            foreach (['MIN', 'MAX'] as $function) {
+                rewind($stream);
+                $this->assert_same($bytes, AggregateCaster::cast(null, $function, $stream), $function . ' of ' . strlen($bytes) . ' bytes');
+            }
+
+            fclose($stream);
+        }
+    }
+
+    // A Postgres numeric that is NaN or infinite has no digits to divide: over a positive count, its average is that value as text,
+    // as the AVG of Postgres gives it, and as the sum, the min and the max of the column are (the cast of a DECIMAL leaves text alone)
+    public function test_the_average_of_a_sum_that_is_not_finite_is_that_value(): void
+    {
+        foreach (['NaN', 'Infinity', '-Infinity'] as $value) {
+            $this->assert_same($value, AggregateCaster::average($value, 3), $value);
+            $this->assert_same($value, AggregateCaster::average($value, '3'), $value);
+            $this->assert_same($value, AggregateCaster::average($value, 1), $value);
+            $this->assert_null(AggregateCaster::average($value, 0), "$value over no value");
+
+            foreach (['MIN', 'MAX', 'SUM'] as $function) {
+                $this->assert_same($value, AggregateCaster::cast(AggregateCaster::DECIMAL, $function, $value), "$function $value");
+            }
+        }
+
+        // what only looks like one is no number, which is refused as any other text
+        $this->assert_refused(fn() => AggregateCaster::average('nan', 3), 'ExactDecimal::divide()', 'nan');
+        $this->assert_refused(fn() => AggregateCaster::average('+Infinity', 3), 'ExactDecimal::divide()', '+Infinity');
+    }
+
     // PHP coerces a float given to a parameter declared int|string before the method runs, so ExactDecimal never sees
     // the float, only the int PHP makes of it (1.5 is 1) and a deprecation. The caller must classify the float first. This
     // pins the premise, so that the tests below cannot pass because the harness misses the deprecation.
