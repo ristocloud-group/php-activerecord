@@ -317,6 +317,128 @@ class QueryAggregateTest extends DatabaseTest
         );
     }
 
+    // MariaDB (in its default mode) and SQLite run an aggregate of a column that the GROUP BY does not group, and read it from
+    // an arbitrary row of each group: parent 2 has the authors 2 and 4, so the MAX of author_id is 3 where it is 4, and the SUM
+    // is 6 where it is 10. MySQL (1055) and Postgres (42803) refuse the statement. min(), max(), sum() and avg() refuse the
+    // column at the call, on every database and before any statement, when the query has no select of its own and only
+    // columns of the model in its groups.
+    public function test_a_grouped_query_refuses_a_column_it_does_not_group(): void
+    {
+        Author::table();
+        AliasedBookReview::table();
+        Book::table();
+        // a relationship names its target class with a leading backslash, under which Table keeps another instance of the table
+        ActiveRecord\Table::load('\\Author');
+
+        foreach (['min', 'max', 'sum', 'avg', 'average'] as $method) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "$method() on Author aggregates 'author_id', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]],
+                GoldenStatements::capture(fn() => Author::group_by('parent_author_id')->$method('author_id')),
+                $method
+            );
+        }
+
+        // whatever else the query has: a HAVING, a window, an order, a DISTINCT, a WHERE, a second group that is not it
+        $refused = [
+            'having' => fn(): Query => Author::group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1]),
+            'window' => fn(): Query => Author::group_by('parent_author_id')->order_by('parent_author_id')->limit(2),
+            'where' => fn(): Query => Author::where('name', '!=', 'Tito')->group_by('parent_author_id'),
+            'distinct' => fn(): Query => Author::distinct()->group_by('parent_author_id'),
+            'two groups' => fn(): Query => Author::group_by('parent_author_id', 'name'),
+            'two calls' => fn(): Query => Author::group_by('parent_author_id')->group_by('name'),
+        ];
+
+        foreach ($refused as $case => $query) {
+            $captured = GoldenStatements::capture(fn() => $query()->sum('author_id'));
+            $this->assert_same([['exception' => ActiveRecordException::class, 'message' => "sum() on Author aggregates 'author_id', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]], $captured, $case);
+        }
+
+        // an alias names its column: score is rating, and reviewed_book is book_id, the column that is grouped
+        $this->assert_same(
+            [['exception' => ActiveRecordException::class, 'message' => "sum() on AliasedBookReview aggregates 'score', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]],
+            GoldenStatements::capture(fn() => AliasedBookReview::group_by('reviewed_book')->sum('score'))
+        );
+        // with joins, the model's columns are told by name and not by their table
+        $this->assert_same(
+            [['exception' => ActiveRecordException::class, 'message' => "max() on Book aggregates 'book_id', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]],
+            GoldenStatements::capture(fn() => Book::joins('author')->group_by('author_id')->max('book_id'))
+        );
+    }
+
+    // A column that the query groups is aggregated over its groups, by whichever name: the groups of parent_author_id are 1, 2
+    // and 3 (the parents of the four authors are 3, 2, 1 and 2), and those of book_id in the reviews 1 and 2
+    public function test_a_grouped_column_is_aggregated_over_its_groups(): void
+    {
+        Author::table();
+
+        $parents = fn(): Query => Author::group_by('parent_author_id');
+        $this->assert_same(6, $parents()->sum('parent_author_id'));
+        $this->assert_same(1, $parents()->min('parent_author_id'));
+        $this->assert_same(3, $parents()->max('parent_author_id'));
+        $this->assert_same('2.0000', $parents()->avg('parent_author_id'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`parent_author_id`) FROM (SELECT `parent_author_id` FROM `authors` GROUP BY `parent_author_id`) AS t')],
+            $this->statements(fn() => $parents()->sum('parent_author_id'))
+        );
+        // one of several groups (a group for each author: 3 + 2 + 1 + 2), and with a HAVING (parent 2 has two authors)
+        $this->assert_same(8, Author::group_by('name', 'parent_author_id')->sum('parent_author_id'));
+        $this->assert_same(2, Author::group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->sum('parent_author_id'));
+
+        // by an alias or an attribute name, which both name the column
+        $reviews = fn(): Query => AliasedBookReview::group_by('reviewed_book');
+        $this->assert_same(3, $reviews()->sum('book_id'));
+        $this->assert_same(3, $reviews()->sum('reviewed_book'));
+        $this->assert_same(2, AliasedBookReview::group_by('book_id')->max('reviewed_book'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`book_id`) FROM (SELECT `book_id` FROM `book_reviews` GROUP BY `book_id`) AS t')],
+            $this->statements(fn() => $reviews()->sum('reviewed_book'))
+        );
+
+        // with joins, the column of the model is the grouped one
+        $this->assert_same(2, Book::joins('author')->group_by('author_id')->max('author_id'));
+        $this->assert_same(3, Book::joins('author')->group_by('author_id')->sum('author_id'));
+    }
+
+    // What cannot be told goes to the database as it is, with the residual that the database decides: a select of the query's
+    // own (which can aggregate the column, or alias it), SQL of group_by_raw() and a qualified name, which this does not read.
+    // The statement is sent in every case (MySQL and Postgres may refuse it, MariaDB and SQLite read an arbitrary row), and
+    // count() never checks its column.
+    public function test_what_cannot_be_told_is_not_refused_and_nor_is_count(): void
+    {
+        Author::table();
+
+        $this->assert_same(
+            $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT `author_id` FROM `authors` GROUP BY `authors`.`parent_author_id`) AS t'),
+            GoldenStatements::capture(fn() => Author::group_by('authors.parent_author_id')->max('author_id'))[0]['sql']
+        );
+        $this->assert_same(
+            $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT `author_id` FROM `authors` GROUP BY parent_author_id) AS t'),
+            GoldenStatements::capture(fn() => Author::group_by_raw('parent_author_id')->max('author_id'))[0]['sql']
+        );
+        $this->assert_same(
+            $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT `parent_author_id`, `author_id` FROM `authors` GROUP BY `parent_author_id`) AS t'),
+            GoldenStatements::capture(fn() => Author::select('parent_author_id', 'author_id')->group_by('parent_author_id')->max('author_id'))[0]['sql']
+        );
+        $this->assert_same(
+            $this->sql('SELECT COUNT(t.`author_id`) FROM (SELECT `author_id` FROM `authors` GROUP BY `parent_author_id`) AS t'),
+            GoldenStatements::capture(fn() => Author::group_by('parent_author_id')->count('author_id'))[0]['sql']
+        );
+    }
+
+    // A select of its own that aggregates per group: the aggregate of the groups' values, which every database runs
+    public function test_a_select_of_its_own_aggregates_the_values_it_gives(): void
+    {
+        $maxima = fn(): Query => Author::select_raw('parent_author_id, MAX(author_id) AS m')->group_by('parent_author_id');
+
+        // the highest author of each parent: 1 for parent 3, 4 for parent 2, 3 for parent 1
+        $this->assert_same(4, $maxima()->max('m'));
+        $this->assert_same(1, $maxima()->min('m'));
+        $this->assert_same(
+            [$this->sql('SELECT MAX(t.`m`) FROM (SELECT parent_author_id, MAX(author_id) AS m FROM `authors` GROUP BY `parent_author_id`) AS t')],
+            $this->statements(fn() => $maxima()->max('m'))
+        );
+    }
+
     // A named column of a model, whatever the window: its type reads the aggregate of the subquery as well
     public function test_a_windowed_query_reads_the_aggregate_by_the_type_of_the_column(): void
     {

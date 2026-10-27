@@ -1879,11 +1879,20 @@ class Query
      * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
      * query's select, so a select of its own must hold it. The statement that ran is left in Table::$last_sql.
      *
+     * The column of a grouped query must be one of its groups. min(), max(), sum() and avg() refuse another at the call,
+     * when they can tell: the query has no select of its own and only columns of the model in its group_by() (names are
+     * compared as the columns they name). MySQL and Postgres refuse such a statement, but MariaDB and SQLite read the
+     * column of an arbitrary row of each group, and give a wrong number silently. A select of its own, or SQL of
+     * group_by_raw(), cannot be read, so the query goes to the database as it is, with that residual; count() does not
+     * check its column either.
+     *
      * <code>
      * $first = Order::where('customer_id', 7)->min('placed_at');
+     * $per_customer = Order::group_by('customer_id')->max('customer_id');
      * </code>
      *
-     * @throws ActiveRecordException for an empty column name, or *, before any statement
+     * @throws ActiveRecordException for an empty column name, or *, or a column that the GROUP BY does not group (as
+     *   above), before any statement
      */
     public function min(string $column): int|string|float|null
     {
@@ -1912,7 +1921,8 @@ class Query
      * value, which is null for no row.
      *
      * SQLite has no exact decimal (it stores a DECIMAL as a REAL), so there the sum of a DECIMAL column is a float, and a
-     * sum of integers beyond PHP_INT_MAX is SQLite's own "integer overflow" error, a DatabaseException.
+     * sum of integers beyond PHP_INT_MAX is SQLite's own "integer overflow" error, a DatabaseException. On a grouped query
+     * the column must be one of the groups, as min() says, and is refused at the call when it can be told that it is not.
      *
      * <code>
      * $total = Order::where('customer_id', 7)->sum('total');
@@ -2487,7 +2497,8 @@ class Query
      * type the connection reports for it, and none for any other name.
      *
      * @return 'integer'|'decimal'|'floating'|null
-     * @throws ActiveRecordException for an empty column name, and for *, which only count() takes
+     * @throws ActiveRecordException for an empty column name, for *, which only count() takes, and for a column that the
+     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column())
      */
     private function aggregate_kind(string $method, string $column): ?string
     {
@@ -2497,6 +2508,8 @@ class Query
         if ('*' === $column) {
             throw new ActiveRecordException(sprintf("%s() takes a column name, not '*', on %s", $method, $this->model_class));
         }
+
+        $compiler->refuse_ungrouped_column($this->state, $column, $method);
 
         return AggregateCaster::kind($compiler->model_column($column), $this->table()->connection()->exact_decimals());
     }

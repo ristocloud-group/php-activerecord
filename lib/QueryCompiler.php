@@ -195,8 +195,11 @@ final class QueryCompiler
      *
      * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
      * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives): MySQL's
-     * ONLY_FULL_GROUP_BY and Postgres refuse any other. With the state's select kept, two result columns of
-     * one name still meet MySQL's and MariaDB's 1060.
+     * ONLY_FULL_GROUP_BY and Postgres refuse any other, and MariaDB and SQLite read it from an arbitrary row of each
+     * group, silently. min(), max(), sum() and avg() refuse it at the call when they can tell (see
+     * refuse_ungrouped_column(); a select of the query's own, or SQL in group_by_raw(), they cannot read); count($column)
+     * does not, and keeps that residual. With the state's select kept, two result columns of one name still meet MySQL's
+     * and MariaDB's 1060.
      *
      * @internal Serves Query; not a supported API.
      * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
@@ -336,6 +339,51 @@ final class QueryCompiler
     public function refuse_empty_column_name(string $name, string $method): void
     {
         $this->refuse_empty('column name', $name, $name, $method);
+    }
+
+    /**
+     * Refuses, at the call, a column that a grouped query does not group, given to min(), max(), sum() or avg() (spec 5.4).
+     * Their statement (see compile_aggregate()) selects the column in a subquery beside the GROUP BY. MySQL
+     * (ONLY_FULL_GROUP_BY, 1055) and Postgres (42803) refuse that statement, but MariaDB in its default mode and SQLite run
+     * it, and read the column of an arbitrary row of each group: a number that is wrong, with no error.
+     *
+     * It is refused only when it can be told that the column is not grouped: the state has a GROUP BY and no select of its
+     * own (a select can aggregate the column, or name it by an alias), every group is a structured column of the model
+     * (SQL of group_by_raw() may group by anything, and so may a qualified name, which this does not read), and so is the
+     * aggregated column, and it is none of them. Names are compared as the columns they name, so an alias, an attribute
+     * name and the column's own name are one (see model_column()). In any other case the query goes to the database as it
+     * is, which may refuse it. count($column) is not checked: its residual is documented (see compile_aggregate()).
+     *
+     * @internal Serves Query; not a supported API.
+     * @param string $method The aggregate the column was given to, for the message of the exception
+     * @throws ActiveRecordException for a column that is not grouped
+     */
+    public function refuse_ungrouped_column(QueryState $state, string $column, string $method): void
+    {
+        if ([] === $state->groups || [] !== $state->selects) {
+            return;
+        }
+
+        $aggregated = $this->model_column($column);
+
+        if (null === $aggregated) {
+            return;
+        }
+
+        foreach ($state->groups as $group) {
+            $grouped = 'column' === $group['type'] ? $this->model_column($group['column']) : null;
+
+            if (null === $grouped || $grouped->name === $aggregated->name) {
+                return;
+            }
+        }
+
+        throw new ActiveRecordException(sprintf(
+            "%s() on %s aggregates '%s', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own",
+            $method,
+            $this->table->class->name,
+            $column,
+        ));
     }
 
     /**
