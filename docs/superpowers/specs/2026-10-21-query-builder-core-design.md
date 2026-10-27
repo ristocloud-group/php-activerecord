@@ -260,8 +260,11 @@ Details settled while building the utilities (Task 16):
   original.
 - **`to_raw_sql()`** is a debug aid, never for execution.
   - It replaces the markers in order with the binds.
-  - Values become literals: strings escaped, numbers as written, `null` as `NULL`, bools quoted `'1'`/`'0'` (Postgres
-    accepts those for a boolean, not a bare `1`), DateTimes formatted as the builder binds them.
+  - Values become literals the way the library binds them, as text through `execute()`. Every non-null scalar
+    (string, number, bool) is written as a quoted string through `Connection::escape()`, so bools become `'1'`/`'0'`
+    and numbers become `'5'`. `null` becomes `NULL`, and DateTimes are formatted as the builder binds them. Postgres
+    refuses a bare `1` against a boolean or a bare `5` against a text column, but accepts the quoted forms, as it
+    accepts the bound text.
   - A marker/bind count mismatch throws.
 - **`with()` and `readonly()` count as builder clauses.** Writes refuse them (§5.5), and so does a where group.
 
