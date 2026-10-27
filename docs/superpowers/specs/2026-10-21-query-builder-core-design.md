@@ -451,6 +451,28 @@ Details settled while building the aggregates (Task 18):
 The argument forms of `update_all` / `delete_all` (bare hash, lists, scalars) are fixed by #145 **before** this
 work (§9). The engine preserves whatever #145 ships.
 
+Details settled while building the write terminals (Task 19):
+
+- **Which clauses a write takes.** `update()` / `delete()` take the builder's where (every form), `order_by` and
+  `limit`. Joins, groups, havings, offset, distinct, select, `from` / `from_raw`, includes and `readonly` are refused at
+  the call with `ActiveRecordException("<method>() cannot use <clause>")`. `insert()` and `upsert()` refuse every
+  clause.
+- **An empty where is refused.** A write whose where calls all rendered no condition (`where([])`, an empty closure
+  group) is refused: a dynamic filter that came out empty must not write every row. A write with no where call at all
+  is an explicit whole-table write (`new_query()->delete()`), and reads are unchanged.
+- **Values.**
+  - Their keys map aliases and #92 attribute names to real columns. The legacy `update_all` set and `upsert` keep
+    today's #92-only mapping.
+  - Values are scalars, `null`, DateTimes or `Stringable` (bound as text). Arrays, enums and other objects are
+    refused.
+  - `insert()` validates its rows (at least one, identical keys, at least one column) and stamps them with one
+    `now()` per call.
+- **The returned count.** `update()`'s count on MySQL/MariaDB is the rows changed, and with `updated_at` set to now
+  that is every matched row.
+- **Limited writes.** Postgres limits a write through the pk subquery (#92). MySQL, MariaDB and SQLite (3.46, compiled
+  with `UPDATE/DELETE … LIMIT`) limit natively. SQLite refuses an order without a limit on a write, as the legacy path
+  does.
+
 ### 5.6 Timestamps: one rule, in the engine
 
 | Statement | `created_at` | `updated_at` |
@@ -481,6 +503,7 @@ the model and the offending input.
 | static `Order::update(...)` / `Order::delete()`, an unsupported clause on a write, empty update values | `ActiveRecordException` |
 | `find` / `find_or_fail` / `where_key` / `where_key_not` on a composite pk | `ActiveRecordException` |
 | an empty column list in `where_all` / `where_any` / `where_none`, a nested array in `where_in` / `where_between` / `where_key`, an empty column name or alias | `ActiveRecordException` |
+| blank raw SQL in `where_raw` / `having_raw` (and `or_` forms), blank or `'0'` in `order_by_raw` / `group_by_raw`, a clause a write cannot take, a write whose where came out empty | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
 | an unknown method through `__callStatic` | `ActiveRecordException("Call to undefined method: …")`, today's message |
