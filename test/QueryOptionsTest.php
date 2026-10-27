@@ -303,6 +303,96 @@ class QueryOptionsTest extends DatabaseTest
         $this->assert_same(1, count(GoldenStatements::capture(fn() => Author::with('books')->pluck('name'))));
     }
 
+    // with() goes with the rest of the query: joins that repeat a row, and a select of the key columns that the
+    // relationships are loaded by. The statements and the models are those of the legacy include option, and what is
+    // loaded is read with no query.
+    public function test_with_goes_with_joins_and_a_select_of_the_key_columns(): void
+    {
+        // a first run reads the schemas of the tables a relationship loads, which a capture would show
+        Author::all(['joins' => ['books'], 'include' => ['books']]);
+        Author::all(['include' => ['books']]);
+
+        $summary = function (array $authors): array {
+            $summary = array_map(fn(Author $author) => [$author->author_id, array_map(fn(Book $book) => $book->book_id, $author->books)], $authors);
+            sort($summary);
+
+            return $summary;
+        };
+        $cases = [
+            // an INNER JOIN, which keeps the authors with a book, and selects the authors' columns only
+            'joins' => [
+                fn() => Author::all(['joins' => ['books'], 'include' => ['books']]),
+                fn() => Author::joins('books')->with('books')->get(),
+                [[1, [1]], [2, [2]]],
+            ],
+            'a select of the key columns' => [
+                fn() => Author::all(['select' => $this->sql('`author_id`, `name`'), 'include' => ['books']]),
+                fn() => Author::select('author_id', 'name')->with('books')->get(),
+                [[1, [1]], [2, [2]], [3, []], [4, []]],
+            ],
+            'joins and a select' => [
+                fn() => Author::all(['joins' => ['books'], 'select' => $this->sql('`authors`.`author_id`, `authors`.`name`'), 'include' => ['books']]),
+                fn() => Author::joins('books')->select('authors.author_id', 'authors.name')->with('books')->get(),
+                [[1, [1]], [2, [2]]],
+            ],
+        ];
+
+        foreach ($cases as $label => [$legacy, $builder, $expected]) {
+            $legacy_models = [];
+            $builder_models = [];
+            $legacy_statements = GoldenStatements::capture(function () use ($legacy, &$legacy_models) {
+                $legacy_models = $legacy();
+            });
+            $builder_statements = GoldenStatements::capture(function () use ($builder, &$builder_models) {
+                $builder_models = $builder();
+            });
+
+            // the query, and the one statement that loads the books
+            $this->assert_same(2, count($builder_statements), $label);
+            $this->assert_same($legacy_statements, $builder_statements, $label);
+            $this->assert_same($expected, $summary($builder_models), $label);
+            $this->assert_same($summary($legacy_models), $summary($builder_models), $label);
+            $this->assert_same([], GoldenStatements::capture(fn() => $summary($builder_models)), $label);
+        }
+    }
+
+    // The relationships are loaded by the keys of the models found. A select that leaves them out, select('name'),
+    // fails with() as it fails the legacy include option: a statement for a NULL key is sent, PHP warns of the
+    // attribute the models lack, and an UndefinedPropertyException is thrown.
+    public function test_with_fails_as_the_legacy_option_does_when_the_select_leaves_the_keys_out(): void
+    {
+        // a first run reads the schemas of the tables a relationship loads, which a capture would show
+        Author::all(['include' => ['books']]);
+
+        $run = function (callable $call): array {
+            $warnings = [];
+            set_error_handler(function (int $level, string $message) use (&$warnings): bool {
+                $warnings[] = $message;
+
+                return true;
+            });
+
+            try {
+                $statements = GoldenStatements::capture($call);
+            } finally {
+                restore_error_handler();
+            }
+
+            return [$statements, array_values(array_unique($warnings))];
+        };
+
+        [$legacy_statements, $legacy_warnings] = $run(fn() => Author::all(['select' => $this->sql('`name`'), 'include' => ['books']]));
+        [$builder_statements, $builder_warnings] = $run(fn() => Author::select('name')->with('books')->get());
+
+        $this->assert_same($legacy_statements, $builder_statements);
+        $this->assert_same($legacy_warnings, $builder_warnings);
+        $this->assert_same(['Undefined array key "author_id"'], $builder_warnings);
+        $this->assert_same(3, count($builder_statements));
+        $this->assert_same($this->sql('SELECT `name` FROM `authors`'), $builder_statements[0]['sql']);
+        $this->assert_same($this->sql('SELECT * FROM `books` WHERE `author_id` IS NULL'), $builder_statements[1]['sql']);
+        $this->assert_same(ActiveRecord\UndefinedPropertyException::class, $builder_statements[2]['exception']);
+    }
+
     // Spec §5.5: a write that carries a clause it cannot use refuses it, and with() is one, as readonly() is. The
     // builder's writes will come through the execute_*() methods that the legacy writes use: they refuse before
     // they send anything.
@@ -828,26 +918,39 @@ class QueryOptionsTest extends DatabaseTest
         $this->assert_null($base->state()->limit);
     }
 
-    // The debug aid of spec §4.2: the SELECT with each value written in place of its marker. A string goes through
-    // Connection::escape(), a number as it is, null as NULL and a bool as the 0 or 1 that the adapter binds.
+    // The debug aid of spec §4.2: the SELECT with each value written in place of its marker, as the quoted text the
+    // library binds for it. A string goes through Connection::escape(), and so does every other scalar: a number is
+    // '5' and a bool '1' or '0'. null is NULL.
     public function test_to_raw_sql_writes_each_value_in_place_of_its_marker(): void
     {
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("O'Neil") . $this->sql(' AND `author_id` > 2'),
+            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("O'Neil") . $this->sql(' AND `author_id` > ') . $this->quoted('2'),
             Author::where('name', "O'Neil")->where('author_id', '>', 2)->to_raw_sql()
         );
         $this->assert_same($this->sql('SELECT * FROM `authors`'), Author::new_query()->to_raw_sql());
         $this->assert_same(Author::where('name', 'Tito')->to_sql(), str_replace($this->quoted('Tito'), '?', Author::where('name', 'Tito')->to_raw_sql()));
 
-        // an int and a float as they are, a numeric string as the string it is, null, true and false
+        // an int and a float, a numeric string, null, true and false: each but null the quoted text that is bound
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE author_id + 1 > 2.5 AND NULL IS NULL AND COALESCE(NULL, 1) = ') . $this->quoted('3') . ' AND 1 = 0',
+            $this->sql('SELECT * FROM `authors` WHERE author_id + ') . $this->quoted('1') . ' > ' . $this->quoted('2.5') . ' AND NULL IS NULL AND COALESCE(NULL, 1) = '
+                . $this->quoted('3') . ' AND ' . $this->quoted('1') . ' = ' . $this->quoted('0'),
             Author::where_raw('author_id + ? > ? AND ? IS NULL AND COALESCE(?, 1) = ? AND ? = ?', [1, 2.5, null, null, '3', true, false])->to_raw_sql()
         );
-        $this->assert_same($this->sql('SELECT 1.0E+25, -7, -0.5 FROM `authors`'), Author::select_raw('?, ?, ?', [1.0e25, -7, -0.5])->to_raw_sql());
-        $this->assert_same($this->sql('SELECT 9223372036854775807, -9223372036854775808 FROM `authors`'), Author::select_raw('?, ?', [PHP_INT_MAX, PHP_INT_MIN])->to_raw_sql());
+        $this->assert_same(
+            $this->sql('SELECT ') . $this->quoted('1.0E+25') . ', ' . $this->quoted('-7') . ', ' . $this->quoted('-0.5') . $this->sql(' FROM `authors`'),
+            Author::select_raw('?, ?, ?', [1.0e25, -7, -0.5])->to_raw_sql()
+        );
+        $this->assert_same(
+            $this->sql('SELECT ') . $this->quoted('9223372036854775807') . ', ' . $this->quoted('-9223372036854775808') . $this->sql(' FROM `authors`'),
+            Author::select_raw('?, ?', [PHP_INT_MAX, PHP_INT_MIN])->to_raw_sql()
+        );
+        // true, false, zero and the empty string are written, none of them as NULL or nothing
+        $this->assert_same(
+            $this->sql('SELECT ') . implode(', ', [$this->quoted('1'), $this->quoted('0'), $this->quoted('0'), $this->quoted('0'), $this->quoted('')]) . $this->sql(' FROM `authors`'),
+            Author::select_raw('?, ?, ?, ?, ?', [true, false, 0, 0.0, ''])->to_raw_sql()
+        );
         // a float as PHP writes it, which is how PDO binds it (the digits that the precision setting keeps)
-        $this->assert_same($this->sql('SELECT ' . (0.1 + 0.2) . ' FROM `authors`'), Author::select_raw('?', [0.1 + 0.2])->to_raw_sql());
+        $this->assert_same($this->sql('SELECT ') . $this->quoted((string) (0.1 + 0.2)) . $this->sql(' FROM `authors`'), Author::select_raw('?', [0.1 + 0.2])->to_raw_sql());
         // a float that is no number is written as its name, in a string
         $this->assert_same(
             $this->sql('SELECT ') . $this->quoted('INF') . ', ' . $this->quoted('-INF') . ', ' . $this->quoted('NAN') . $this->sql(' FROM `authors`'),
@@ -869,11 +972,11 @@ class QueryOptionsTest extends DatabaseTest
     public function test_a_question_mark_in_a_value_is_never_read_as_a_marker(): void
     {
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("what? it's ?") . $this->sql(' AND `author_id` = 3 AND `parent_author_id` = 1'),
+            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("what? it's ?") . $this->sql(' AND `author_id` = ') . $this->quoted('3') . $this->sql(' AND `parent_author_id` = ') . $this->quoted('1'),
             Author::where('name', "what? it's ?")->where('author_id', 3)->where('parent_author_id', 1)->to_raw_sql()
         );
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE `name` IN(') . $this->quoted('?') . ',' . $this->quoted("??'?") . $this->sql(') AND `author_id` = 4'),
+            $this->sql('SELECT * FROM `authors` WHERE `name` IN(') . $this->quoted('?') . ',' . $this->quoted("??'?") . $this->sql(') AND `author_id` = ') . $this->quoted('4'),
             Author::where_in('name', ['?', "??'?"])->where('author_id', 4)->to_raw_sql()
         );
         // a value that holds a marker, and what would end the statement, is still a value
@@ -903,18 +1006,19 @@ class QueryOptionsTest extends DatabaseTest
     public function test_a_question_mark_in_the_sql_is_a_marker_only_where_pdo_reads_one(): void
     {
         $select = $this->sql('SELECT * FROM `authors` WHERE ');
+        $three = $this->quoted('3');
 
-        $this->assert_same($select . "name <> 'what?' AND author_id = 3", Author::where_raw("name <> 'what?' AND author_id = ?", [3])->to_raw_sql());
-        $this->assert_same($select . "name <> 'it''s?' AND author_id = 3", Author::where_raw("name <> 'it''s?' AND author_id = ?", [3])->to_raw_sql());
-        $this->assert_same($select . "name <> 'it\\'s?' AND author_id = 3", Author::where_raw("name <> 'it\\'s?' AND author_id = ?", [3])->to_raw_sql());
-        $this->assert_same($select . 'name <> "what?" AND author_id = 3', Author::where_raw('name <> "what?" AND author_id = ?', [3])->to_raw_sql());
-        $this->assert_same($select . "author_id = /* which? */ 3 -- really?\n", Author::where_raw("author_id = /* which? */ ? -- really?\n", [3])->to_raw_sql());
+        $this->assert_same($select . "name <> 'what?' AND author_id = " . $three, Author::where_raw("name <> 'what?' AND author_id = ?", [3])->to_raw_sql());
+        $this->assert_same($select . "name <> 'it''s?' AND author_id = " . $three, Author::where_raw("name <> 'it''s?' AND author_id = ?", [3])->to_raw_sql());
+        $this->assert_same($select . "name <> 'it\\'s?' AND author_id = " . $three, Author::where_raw("name <> 'it\\'s?' AND author_id = ?", [3])->to_raw_sql());
+        $this->assert_same($select . 'name <> "what?" AND author_id = ' . $three, Author::where_raw('name <> "what?" AND author_id = ?', [3])->to_raw_sql());
+        $this->assert_same($select . 'author_id = /* which? */ ' . $three . " -- really?\n", Author::where_raw("author_id = /* which? */ ? -- really?\n", [3])->to_raw_sql());
         $this->assert_same($select . 'name ? ' . $this->quoted('x'), Author::where_raw('name ?? ?', ['x'])->to_raw_sql());
         $this->assert_same($select . 'name = ' . $this->quoted('x') . ' AND x ? y', Author::where_raw('name = ? AND x ?? y', ['x'])->to_raw_sql());
         // an opening quote that is never closed is no string
-        $this->assert_same($select . "name = 'x AND author_id = 3", Author::where_raw("name = 'x AND author_id = ?", [3])->to_raw_sql());
+        $this->assert_same($select . "name = 'x AND author_id = " . $three, Author::where_raw("name = 'x AND author_id = ?", [3])->to_raw_sql());
         // a minus and a slash that open no comment are what they are
-        $this->assert_same($select . 'author_id - 1 / 3 = 3', Author::where_raw('author_id - 1 / ? = ?', [3, 3])->to_raw_sql());
+        $this->assert_same($select . 'author_id - 1 / ' . $three . ' = ' . $three, Author::where_raw('author_id - 1 / ? = ?', [3, 3])->to_raw_sql());
     }
 
     // A statement whose markers and values do not match cannot be written, and the error says so rather than guess
@@ -955,7 +1059,9 @@ class QueryOptionsTest extends DatabaseTest
     }
 
     // Run, the SQL that to_raw_sql() writes finds the rows that the query finds: the values are written as the
-    // database reads them (quotes, backslashes, a ?, a date), on every adapter
+    // database reads them (quotes, backslashes, a ?, a date), on every adapter. A bool, a number against a text
+    // column and a number against an integer column are among them: Postgres refuses them bare ('boolean =
+    // integer', 'character varying = integer') and takes the quoted text that the library binds for them.
     public function test_the_raw_sql_finds_the_rows_the_query_finds(): void
     {
         $tricky = "O'Neil? \\ \"q\" %_";
@@ -963,29 +1069,42 @@ class QueryOptionsTest extends DatabaseTest
         $host = Host::create(['id' => 50, 'name' => $tricky]);
         $day = new DateTime('2026-01-02 10:00:00');
 
-        // each query, and the attribute that tells its rows apart
+        // each query, the attribute that tells its rows apart, and whether it finds any (it must run either way)
         $queries = [
-            [Host::where('name', $tricky), 'id'],
-            [Host::where_in('name', [$tricky, 'Funny Guy', "x'y"]), 'id'],
-            [Host::where('name', '!=', $tricky)->where('name', 'like', 'Funny%'), 'id'],
-            [Host::where_like('name', "O'Neil?%")->where_not_null('name'), 'id'],
-            [Host::where_like('name', "O'Neil?%", true)->where_not_like('name', 'x%', true), 'id'],
-            [Host::where_raw('name = ? AND id = ?', [$tricky, $host->id]), 'id'],
-            [Host::where_raw('name = COALESCE(?, name)', [null]), 'id'],
-            [Host::where_not_in('id', [1, 2, 3])->where_between('id', [1, $host->id]), 'id'],
+            [Host::where('name', $tricky), 'id', true],
+            [Host::where_in('name', [$tricky, 'Funny Guy', "x'y"]), 'id', true],
+            [Host::where('name', '!=', $tricky)->where('name', 'like', 'Funny%'), 'id', true],
+            [Host::where_like('name', "O'Neil?%")->where_not_null('name'), 'id', true],
+            [Host::where_like('name', "O'Neil?%", true)->where_not_like('name', 'x%', true), 'id', true],
+            [Host::where_raw('name = ? AND id = ?', [$tricky, $host->id]), 'id', true],
+            [Host::where_raw('name = COALESCE(?, name)', [null]), 'id', true],
+            [Host::where_not_in('id', [1, 2, 3])->where_between('id', [1, $host->id]), 'id', true],
             // the title the fixture stores holds a backslash before each double quote
-            [Event::where('title', '1320 Records Presents A \"Live PA Set\" By STS9 with'), 'id'],
-            [DatedCount::where('day', $day), 'hits'],
-            [DatedCount::where('at', $day), 'hits'],
-            [DatedCount::where_between('day', [new DateTime('2026-01-01'), $day]), 'hits'],
-            [DatedCount::where_raw('seen_at IS NULL AND hits >= ?', [2]), 'hits'],
-            [Author::where('author_id', '>', 1)->where(fn(Query $q) => $q->where('name', 'George W. Bush')->or_where('name', 'Uncle Bob'))->limit(5), 'author_id'],
-            [Author::where_any(['name', 'some_text'], 'Tito')->where_key([1, 2, 99]), 'author_id'],
+            [Event::where('title', '1320 Records Presents A \"Live PA Set\" By STS9 with'), 'id', true],
+            [DatedCount::where('day', $day), 'hits', true],
+            [DatedCount::where('at', $day), 'hits', true],
+            [DatedCount::where_between('day', [new DateTime('2026-01-01'), $day]), 'hits', true],
+            [DatedCount::where_raw('seen_at IS NULL AND hits >= ?', [2]), 'hits', true],
+            [Author::where('author_id', '>', 1)->where(fn(Query $q) => $q->where('name', 'George W. Bush')->or_where('name', 'Uncle Bob'))->limit(5), 'author_id', true],
+            [Author::where_any(['name', 'some_text'], 'Tito')->where_key([1, 2, 99]), 'author_id', true],
+            // a bool against a boolean column: the venues are available, and none is retired
+            [Venue::where('is_available', true), 'id', true],
+            [Venue::where('is_available', false), 'id', false],
+            [Venue::where('is_retired', false), 'id', true],
+            [Venue::where('is_retired', true), 'id', false],
+            // a number against a text column, which finds nothing (the names are no numbers)
+            [Author::where('name', 5), 'author_id', false],
+            [Author::where_in('name', [5, 6.5, true]), 'author_id', false],
+            // a number against an integer column, and a float against a decimal one
+            [Author::where('author_id', 2), 'author_id', true],
+            [Author::where('author_id', '>', 1)->where_in('author_id', [2, 3, 99])->where_between('author_id', [1, 3]), 'author_id', true],
+            [Book::where('special', 0.0), 'book_id', true],
+            [Book::where('special', 0.5), 'book_id', false],
         ];
 
-        foreach ($queries as $i => [$query, $key]) {
+        foreach ($queries as $i => [$query, $key, $finds]) {
             $found = array_map(fn(Model $model) => (string) $model->$key, $query->get());
-            $this->assert_true([] !== $found, "the query $i finds a row");
+            $this->assert_same($finds, [] !== $found, "the query $i " . ($finds ? 'finds a row' : 'finds none'));
 
             $sth = $this->conn->query($query->to_raw_sql());
             $ran = [];
@@ -1006,12 +1125,12 @@ class QueryOptionsTest extends DatabaseTest
     {
         $query = $this->rich_query();
 
-        // each marker of to_sql() taken in turn, the values none of which holds a ?
+        // each marker of to_sql() taken in turn, the values none of which holds a ? or is null
         $expected = $query->to_sql();
         $from = 0;
 
         foreach ($query->get_bindings() as $value) {
-            $literal = is_string($value) ? $this->quoted($value) : (string) $value;
+            $literal = $this->quoted((string) $value);
             $at = strpos($expected, '?', $from);
             $this->assert_true(false !== $at);
             $expected = substr_replace($expected, $literal, $at, 1);

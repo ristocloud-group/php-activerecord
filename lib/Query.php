@@ -1341,6 +1341,10 @@ class Query
      * them as the legacy option takes them. A terminal that needs no model (count(), exists(), value(), pluck())
      * loads nothing.
      *
+     * The relationships are loaded by the keys of the models found, so a select that leaves those columns out,
+     * select('name')->with('books'), fails exactly as the legacy 'include' option does: a statement for a NULL key
+     * is sent, PHP warns of the attribute the models lack, and an UndefinedPropertyException is thrown.
+     *
      * <code>
      * $books = Book::with('author.books')->get();
      * </code>
@@ -1518,16 +1522,19 @@ class Query
 
     /**
      * The SELECT the query sends with its values written in it, each bind marker replaced, in order, by the next
-     * value of get_bindings(): to read a statement, or to run it by hand, for debugging only. The query itself
-     * always sends its values bound, never written in the statement.
+     * value of get_bindings() as the quoted text the query binds for it: to read a statement, or to run it by
+     * hand, for debugging only. The query itself always sends its values bound, never written in the statement.
      *
-     * - A string is written as Connection::escape() quotes it, and so is a date and time, in the format the
-     *   query binds it (a date for a DATE column that it is compared with, else a date and time).
-     * - An int is written as it is, and a float as PHP writes it, which is how PDO binds it (to the digits that the
-     *   precision setting keeps); INF, -INF and NAN as the strings 'INF', '-INF' and 'NAN'. null is NULL, and a
-     *   bool the 0 or 1 that the adapter binds: Postgres refuses a boolean column compared with 1, where the
-     *   query's bound text '1' is accepted.
-     * - An object that has a text (__toString()) is written as that string, and no other object is a value.
+     * - Every value that is not null is a string through Connection::escape(), as the library binds it, as text:
+     *   a string as it is; an int as '5'; a float as PHP writes it (to the digits that the precision setting
+     *   keeps; INF, -INF and NAN by name); a bool as '1' or '0'; a date and time as the query binds it (a date for
+     *   a DATE column that it is compared with, else a date and time); an object that has a text (__toString())
+     *   as that text. No other object is a value.
+     * - null is NULL.
+     *
+     * Quoted so, the statement runs by hand on every adapter as the bound one does: Postgres refuses a bare 1
+     * against a boolean column, or a bare 5 against a text column, and takes '1' and '5' as it takes the text that
+     * is bound.
      *
      * The markers are those PDO reads: a ? outside a string and a comment, so the ? of a string of SQL written
      * by hand is no marker, and ?? is a ? of the statement. What is written in place of a marker is never read
@@ -2705,6 +2712,7 @@ class Query
             $last = count($path) - 1;
 
             foreach ($path as $i => $name) {
+                // the throw narrows the type for PHPStan: get_relationship(..., true) throws for an undeclared name
                 $relationship = $table->get_relationship($name, true)
                     ?? throw new RelationshipException(sprintf('Relationship named %s has not been declared for class: %s', $name, $table->class->getName()));
 
@@ -2823,7 +2831,8 @@ class Query
     }
 
     /**
-     * $value as SQL: what to_raw_sql() writes in place of a bind marker (see to_raw_sql()).
+     * $value as SQL: what to_raw_sql() writes in place of a bind marker (see to_raw_sql()). Every value that is
+     * not null is the quoted text that the library binds for it.
      *
      * @throws ActiveRecordException for a value that is no SQL
      */
@@ -2831,12 +2840,10 @@ class Query
     {
         return match (true) {
             null === $value => 'NULL',
-            is_bool($value) => $value ? '1' : '0',
-            is_int($value) => (string) $value,
-            is_float($value) && is_finite($value) => (string) $value,
+            is_bool($value) => $connection->escape($value ? '1' : '0'),
             // a number that is none, by name: PHP 8.5 warns when it is cast to a string
-            is_float($value) => $connection->escape(is_nan($value) ? 'NAN' : ($value > 0 ? 'INF' : '-INF')),
-            is_string($value), $value instanceof \Stringable => $connection->escape((string) $value),
+            is_float($value) && !is_finite($value) => $connection->escape(is_nan($value) ? 'NAN' : ($value > 0 ? 'INF' : '-INF')),
+            is_scalar($value), $value instanceof \Stringable => $connection->escape((string) $value),
             default => throw new ActiveRecordException(sprintf('to_raw_sql() cannot write a %s as SQL, in %s', get_debug_type($value), $this->model_class)),
         };
     }
