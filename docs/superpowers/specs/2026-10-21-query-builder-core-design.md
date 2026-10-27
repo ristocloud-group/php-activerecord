@@ -414,7 +414,10 @@ Details settled while building the aggregates (Task 18):
   its own and only structured group columns refuse an aggregated column that is not grouped. MariaDB's default
   mode and SQLite would pick an arbitrary row per group. With a select of its own or a raw group it is allowed and
   documented.
-- **Postgres `bytea`.** A `min`/`max` over it arrives as a stream, which is read into a string.
+- **Postgres `bytea`.** A `min`/`max` over it arrives as a stream, which is read into a string. `MIN`/`MAX` of bytea
+  exist from PostgreSQL 18; earlier versions refuse them with a `DatabaseException`.
+- **An expression aliased with a model column's name** is classified by that column's kind. On SQLite, where
+  DECIMAL is floating, an exact integer under such a name reads as a float.
 
 ### 5.5 Writes
 
