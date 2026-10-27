@@ -413,7 +413,8 @@ Details settled while building the aggregates (Task 18):
 - **An ungrouped column under GROUP BY is refused.** `sum`/`min`/`max`/`avg` on a grouped query with no select of
   its own and only structured group columns refuse an aggregated column that is not grouped. MariaDB's default
   mode and SQLite would pick an arbitrary row per group. With a select of its own or a raw group it is allowed and
-  documented.
+  documented. Groups that cover the model's whole primary key (every column of a composite one) are not refused: each
+  group is one row, every column depends on the groups, and MySQL and Postgres accept the statement.
 - **Postgres `bytea`.** A `min`/`max` over it arrives as a stream, which is read into a string. `MIN`/`MAX` of bytea
   exist from PostgreSQL 18; earlier versions refuse them with a `DatabaseException`.
 - **An expression aliased with a model column's name** is classified by that column's kind. On SQLite, where

@@ -194,12 +194,12 @@ final class QueryCompiler
      *   beside a HAVING.
      *
      * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
-     * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives): MySQL's
-     * ONLY_FULL_GROUP_BY and Postgres refuse any other, and MariaDB and SQLite read it from an arbitrary row of each
-     * group, silently. min(), max(), sum() and avg() refuse it at the call when they can tell (see
-     * refuse_ungrouped_column(); a select of the query's own, or SQL in group_by_raw(), they cannot read); count($column)
-     * does not, and keeps that residual. With the state's select kept, two result columns of one name still meet MySQL's
-     * and MariaDB's 1060.
+     * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives, or the groups be the
+     * model's whole primary key, on which every column depends): MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any
+     * other, and MariaDB and SQLite read it from an arbitrary row of each group, silently. min(), max(), sum() and avg()
+     * refuse it at the call when they can tell (see refuse_ungrouped_column(); a select of the query's own, or SQL in
+     * group_by_raw(), they cannot read); count($column) does not, and keeps that residual. With the state's select kept,
+     * two result columns of one name still meet MySQL's and MariaDB's 1060.
      *
      * @internal Serves Query; not a supported API.
      * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
@@ -354,6 +354,10 @@ final class QueryCompiler
      * name and the column's own name are one (see model_column()). In any other case the query goes to the database as it
      * is, which may refuse it. count($column) is not checked: its residual is documented (see compile_aggregate()).
      *
+     * Nor is a column refused when the groups cover the primary key of the model (Table::$pk), every column of a composite
+     * one: each group is then one row of the table, and every column of it depends on the groups. MySQL and Postgres accept
+     * that, and no database reads a row of its own choice (see covers_primary_key()).
+     *
      * @internal Serves Query; not a supported API.
      * @param string $method The aggregate the column was given to, for the message of the exception
      * @throws ActiveRecordException for a column that is not grouped
@@ -370,16 +374,24 @@ final class QueryCompiler
             return;
         }
 
+        $grouped_names = [];
+
         foreach ($state->groups as $group) {
             $grouped = 'column' === $group['type'] ? $this->model_column($group['column']) : null;
 
             if (null === $grouped || $grouped->name === $aggregated->name) {
                 return;
             }
+
+            $grouped_names[$grouped->name] = true;
+        }
+
+        if ($this->covers_primary_key($grouped_names)) {
+            return;
         }
 
         throw new ActiveRecordException(sprintf(
-            "%s() on %s aggregates '%s', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own",
+            "%s() on %s aggregates '%s', which the GROUP BY of the query does not group: MariaDB (default mode) and SQLite pick an arbitrary row per group; MySQL and Postgres refuse it unless the groups cover the primary key. Group by it, or give the query a select of its own",
             $method,
             $this->table->class->name,
             $column,
@@ -1003,6 +1015,33 @@ final class QueryCompiler
         $this->model_column_keys ??= array_fill_keys(array_map($connection->column_name_key(...), $this->model_column_names()), true);
 
         return isset($this->model_column_keys[$connection->column_reference_key($reference)]);
+    }
+
+    /**
+     * Whether the columns that a query groups by, $grouped (their real names as the keys), hold every column of the model's
+     * primary key (Table::$pk). Each column of the key is read by the one rule of model_column(), as the groups are, so that an
+     * attribute name or an alias of it counts as the column. A table without a primary key has none to cover, and neither does
+     * one whose key names no column of the model: they are never covered. The key is the model's, which is the table's own
+     * unless the model declares another: one that the database does not know for a key leaves the statement to it, which may
+     * refuse it.
+     *
+     * @param array<string, true> $grouped
+     */
+    private function covers_primary_key(array $grouped): bool
+    {
+        if ([] === $this->table->pk) {
+            return false;
+        }
+
+        foreach ($this->table->pk as $name) {
+            $column = $this->model_column($name);
+
+            if (null === $column || !isset($grouped[$column->name])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

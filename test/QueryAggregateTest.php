@@ -45,6 +45,18 @@ class QueryAggregateTest extends DatabaseTest
     }
 
     /**
+     * What GoldenStatements::capture() gives for $method() of $column of $model, where the GROUP BY of the query does not group
+     * the column and is not the whole primary key either (see QueryCompiler::refuse_ungrouped_column()): the exception, and no
+     * statement before it.
+     *
+     * @return list<array{exception: class-string<\Throwable>, message: string}>
+     */
+    private function refusal(string $method, string $model, string $column): array
+    {
+        return [['exception' => ActiveRecordException::class, 'message' => "$method() on $model aggregates '$column', which the GROUP BY of the query does not group: MariaDB (default mode) and SQLite pick an arbitrary row per group; MySQL and Postgres refuse it unless the groups cover the primary key. Group by it, or give the query a select of its own"]];
+    }
+
+    /**
      * Gives the two measurements the values of big that the boundary tests sum.
      */
     private function set_big(int|string $first, int|string $second): void
@@ -340,7 +352,8 @@ class QueryAggregateTest extends DatabaseTest
 
     // MariaDB (in its default mode) and SQLite run an aggregate of a column that the GROUP BY does not group, and read it from
     // an arbitrary row of each group: parent 2 has the authors 2 and 4, so the MAX of author_id is 3 where it is 4, and the SUM
-    // is 6 where it is 10. MySQL (1055) and Postgres (42803) refuse the statement. min(), max(), sum() and avg() refuse the
+    // is 6 where it is 10. MySQL (1055) and Postgres (42803) refuse the statement, unless the groups are the whole primary key
+    // (see test_groups_over_the_whole_primary_key_let_any_column_be_aggregated). min(), max(), sum() and avg() refuse the
     // column at the call, on every database and before any statement, when the query has no select of its own and only
     // columns of the model in its groups.
     public function test_a_grouped_query_refuses_a_column_it_does_not_group(): void
@@ -353,7 +366,7 @@ class QueryAggregateTest extends DatabaseTest
 
         foreach (['min', 'max', 'sum', 'avg', 'average'] as $method) {
             $this->assert_same(
-                [['exception' => ActiveRecordException::class, 'message' => "$method() on Author aggregates 'author_id', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]],
+                $this->refusal($method, 'Author', 'author_id'),
                 GoldenStatements::capture(fn() => Author::group_by('parent_author_id')->$method('author_id')),
                 $method
             );
@@ -371,17 +384,17 @@ class QueryAggregateTest extends DatabaseTest
 
         foreach ($refused as $case => $query) {
             $captured = GoldenStatements::capture(fn() => $query()->sum('author_id'));
-            $this->assert_same([['exception' => ActiveRecordException::class, 'message' => "sum() on Author aggregates 'author_id', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]], $captured, $case);
+            $this->assert_same($this->refusal('sum', 'Author', 'author_id'), $captured, $case);
         }
 
         // an alias names its column: score is rating, and reviewed_book is book_id, the column that is grouped
         $this->assert_same(
-            [['exception' => ActiveRecordException::class, 'message' => "sum() on AliasedBookReview aggregates 'score', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]],
+            $this->refusal('sum', 'AliasedBookReview', 'score'),
             GoldenStatements::capture(fn() => AliasedBookReview::group_by('reviewed_book')->sum('score'))
         );
         // with joins, the model's columns are told by name and not by their table
         $this->assert_same(
-            [['exception' => ActiveRecordException::class, 'message' => "max() on Book aggregates 'book_id', which the GROUP BY of the query does not group: MySQL and Postgres refuse that, and MariaDB and SQLite read an arbitrary row of each group. Group by it, or give the query a select of its own"]],
+            $this->refusal('max', 'Book', 'book_id'),
             GoldenStatements::capture(fn() => Book::joins('author')->group_by('author_id')->max('book_id'))
         );
     }
@@ -418,6 +431,96 @@ class QueryAggregateTest extends DatabaseTest
         // with joins, the column of the model is the grouped one
         $this->assert_same(2, Book::joins('author')->group_by('author_id')->max('author_id'));
         $this->assert_same(3, Book::joins('author')->group_by('author_id')->sum('author_id'));
+    }
+
+    // Groups that are the whole primary key are one row of the table each, and every other column of it depends on them. MySQL
+    // (1055) and Postgres (42803) refuse a column that depends on nothing grouped, and this one does, so every database runs
+    // the statement and none reads a row of its own choice: no column is refused, by whichever names the key is given. The
+    // parents of the four authors are 3, 2, 1 and 2; dated_counts is keyed by (day, at), and its hits are 1 and 2.
+    public function test_groups_over_the_whole_primary_key_let_any_column_be_aggregated(): void
+    {
+        Author::table();
+        Book::table();
+        DatedCount::table();
+        AliasedDatedCount::table();
+
+        $authors = fn(): Query => Author::group_by('author_id');
+        $this->assert_same(8, $authors()->sum('parent_author_id'));
+        $this->assert_same(3, $authors()->max('parent_author_id'));
+        $this->assert_same(1, $authors()->min('parent_author_id'));
+        $this->assert_same('2.0000', $authors()->avg('parent_author_id'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`parent_author_id`) FROM (SELECT `parent_author_id` FROM `authors` GROUP BY `author_id`) AS t')],
+            $this->statements(fn() => $authors()->sum('parent_author_id'))
+        );
+
+        // the key with another group, in either order; with a HAVING, which every group of one row meets; with a window, the
+        // first two authors (parents 3 and 2)
+        $this->assert_same(8, Author::group_by('name', 'author_id')->sum('parent_author_id'));
+        $this->assert_same(3, Author::group_by('author_id', 'name')->max('parent_author_id'));
+        $this->assert_same(8, $authors()->having_raw('COUNT(*) = ?', [1])->sum('parent_author_id'));
+        $this->assert_same(5, $authors()->order_by('author_id')->limit(2)->sum('parent_author_id'));
+
+        // with joins, the key and the column are the model's, and an exact decimal is as the database keeps it (SQLite stores a
+        // REAL, and its sum is a float)
+        foreach ([1 => '1.50', 2 => '2.25'] as $id => $special) {
+            $values = [$special, $id];
+            $this->conn->query('UPDATE books SET special = ? WHERE book_id = ?', $values);
+        }
+
+        $exact = $this->conn->exact_decimals();
+        $books = fn(): Query => Book::joins('author')->group_by('book_id');
+        $this->assert_same($exact ? '3.75' : 3.75, $books()->sum('special'));
+        $this->assert_sql_has('SELECT SUM(t.special) FROM (SELECT books.special FROM books INNER JOIN', Book::table()->last_sql);
+        $this->assert_sql_has('GROUP BY books.book_id) AS t', Book::table()->last_sql);
+        $this->assert_same($exact ? '2.25' : 2.25, $books()->max('special'));
+        $this->assert_same($exact ? '1.50' : 1.5, $books()->min('special'));
+
+        // a composite key is covered whole, in either order, and an alias of one of its columns is that column
+        $this->assert_same(3, DatedCount::group_by('day', 'at')->sum('hits'));
+        $this->assert_same(2, DatedCount::group_by('at', 'day')->max('hits'));
+        $this->assert_same(3, AliasedDatedCount::group_by('happened_on', 'at')->sum('hits'));
+    }
+
+    // Less than the whole key is no key: a column that is not the key, however different its values are (the four authors' names
+    // are all different), tells the database nothing about the others, nor does a part of a composite key, by its name or by an
+    // alias, nor does any group of a table that has no key. MariaDB and SQLite would read an arbitrary row of each group, so the
+    // column is refused as before.
+    public function test_groups_that_are_not_the_whole_primary_key_still_refuse_the_other_columns(): void
+    {
+        Author::table();
+        DatedCount::table();
+        AliasedDatedCount::table();
+        PklessItem::table();
+
+        $this->assert_same(
+            $this->refusal('sum', 'Author', 'parent_author_id'),
+            GoldenStatements::capture(fn() => Author::group_by('name')->sum('parent_author_id'))
+        );
+
+        // dated_counts is keyed by (day, at)
+        $this->assert_same(
+            $this->refusal('sum', 'DatedCount', 'hits'),
+            GoldenStatements::capture(fn() => DatedCount::group_by('day')->sum('hits'))
+        );
+        $this->assert_same(
+            $this->refusal('max', 'DatedCount', 'hits'),
+            GoldenStatements::capture(fn() => DatedCount::group_by('at')->max('hits'))
+        );
+        $this->assert_same(
+            $this->refusal('max', 'DatedCount', 'at'),
+            GoldenStatements::capture(fn() => DatedCount::group_by('day')->max('at'))
+        );
+        $this->assert_same(
+            $this->refusal('sum', 'AliasedDatedCount', 'hits'),
+            GoldenStatements::capture(fn() => AliasedDatedCount::group_by('happened_on')->sum('hits'))
+        );
+
+        // pkless_items has no key
+        $this->assert_same(
+            $this->refusal('sum', 'PklessItem', 'code'),
+            GoldenStatements::capture(fn() => PklessItem::group_by('name')->sum('code'))
+        );
     }
 
     // What cannot be told goes to the database as it is, with the residual that the database decides: a select of the query's

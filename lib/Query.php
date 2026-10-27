@@ -1879,12 +1879,13 @@ class Query
      * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
      * query's select, so a select of its own must hold it. The statement that ran is left in Table::$last_sql.
      *
-     * The column of a grouped query must be one of its groups. min(), max(), sum() and avg() refuse another at the call,
-     * when they can tell: the query has no select of its own and only columns of the model in its group_by() (names are
-     * compared as the columns they name). MySQL and Postgres refuse such a statement, but MariaDB and SQLite read the
-     * column of an arbitrary row of each group, and give a wrong number silently. A select of its own, or SQL of
-     * group_by_raw(), cannot be read, so the query goes to the database as it is, with that residual; count() does not
-     * check its column either.
+     * The column of a grouped query must be one of its groups, unless the groups are the whole primary key of the model
+     * (each group is then one row of the table, and any column may be aggregated). min(), max(), sum() and avg() refuse
+     * any other at the call, when they can tell: the query has no select of its own and only columns of the model in its
+     * group_by() (names are compared as the columns they name). MySQL and Postgres refuse such a statement, but MariaDB
+     * and SQLite read the column of an arbitrary row of each group, and give a wrong number silently. A select of its
+     * own, or SQL of group_by_raw(), cannot be read, so the query goes to the database as it is, with that residual;
+     * count() does not check its column either.
      *
      * <code>
      * $first = Order::where('customer_id', 7)->min('placed_at');
