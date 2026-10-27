@@ -134,14 +134,6 @@ class Query
         'doesnt_exist',
     ];
 
-    /**
-     * What to_raw_sql() reads in the SQL of a statement, as PDO reads it: a string in single or double quotes (in
-     * which a backslash escapes the next character), and a comment (from -- to the end of the line, or a block
-     * comment), which are left as they are; and ?? and ?, the longer first. A ? outside the strings and the
-     * comments is a bind marker, and ?? stands for a ? of the statement.
-     */
-    private const string BIND_MARKER = '/\'(?:[^\'\\\\]++|\\\\.)*+\'|"(?:[^"\\\\]++|\\\\.)*+"|--[^\r\n]*+|\/\*.*?\*\/|\?\??/s';
-
     private QueryState $state;
 
     private ?Table $table = null;
@@ -1358,9 +1350,9 @@ class Query
      */
     public function with(string|array ...$relations): static
     {
-        $paths = $this->relationship_paths(__FUNCTION__, $relations);
+        $paths = $this->include_tree()->relationship_paths(__FUNCTION__, $relations);
         $this->refuse_undeclared_relationships($paths);
-        $this->state->includes = self::including($this->state->includes, $paths);
+        $this->state->includes = IncludeTree::including($this->state->includes, $paths);
 
         return $this;
     }
@@ -1382,8 +1374,8 @@ class Query
     {
         $includes = $this->state->includes;
 
-        foreach ($this->relationship_paths(__FUNCTION__, $relations) as $path) {
-            $includes = self::excluding($includes, $path);
+        foreach ($this->include_tree()->relationship_paths(__FUNCTION__, $relations) as $path) {
+            $includes = IncludeTree::excluding($includes, $path);
         }
 
         $this->state->includes = $includes;
@@ -1401,9 +1393,9 @@ class Query
      */
     public function with_only(string|array ...$relations): static
     {
-        $paths = $this->relationship_paths(__FUNCTION__, $relations);
+        $paths = $this->include_tree()->relationship_paths(__FUNCTION__, $relations);
         $this->refuse_undeclared_relationships($paths);
-        $this->state->includes = self::including([], $paths);
+        $this->state->includes = IncludeTree::including([], $paths);
 
         return $this;
     }
@@ -1548,31 +1540,7 @@ class Query
      */
     public function to_raw_sql(): string
     {
-        $table = $this->table();
-        $sql = $this->to_sql_builder();
-        $values = $table->format_date_bind_values($sql->select_bind_values());
-        $connection = $table->connection();
-        $markers = 0;
-
-        $raw = preg_replace_callback(self::BIND_MARKER, function (array $match) use (&$markers, $values, $connection): string {
-            if ('?' !== $match[0]) {
-                // a string and a comment as they are, and ?? as the ? it stands for
-                return '??' === $match[0] ? '?' : $match[0];
-            }
-
-            // a marker that has no value is counted, and the statement refused below
-            return $this->sql_literal($values[$markers++] ?? null, $connection);
-        }, $sql->to_s());
-
-        if (null === $raw) {
-            throw new ActiveRecordException(sprintf('to_raw_sql() could not read the SELECT of %s: %s', $this->model_class, preg_last_error_msg()));
-        }
-
-        if ($markers !== count($values)) {
-            throw new ActiveRecordException(sprintf('to_raw_sql() found %d bind markers in the SELECT of %s, for %d values', $markers, $this->model_class, count($values)));
-        }
-
-        return $raw;
+        return (new RawSqlWriter($this->table(), $this->model_class))->write($this->to_sql_builder());
     }
 
     /**
@@ -2625,79 +2593,6 @@ class Query
     }
 
     /**
-     * The path of every relationship that the arguments of with(), without() or with_only() ($method) name: each a
-     * dotted name, or a list in which an entry is a dotted name, or a name with a list of its own (see
-     * listed_paths()). A path is the names from the model's relationship to the one it names, in order.
-     *
-     * @param array<string|array<mixed>> $relations
-     * @return list<list<string>>
-     * @throws ActiveRecordException for an empty name, or a list in no form that is read
-     */
-    private function relationship_paths(string $method, array $relations): array
-    {
-        $paths = [];
-
-        foreach ($relations as $relation) {
-            $paths = [...$paths, ...(is_array($relation) ? $this->listed_paths($method, $relation, []) : [$this->dotted_path($method, $relation)])];
-        }
-
-        return $paths;
-    }
-
-    /**
-     * The paths of a list of relationships as the legacy 'include' option takes it, under the path $prefix: an
-     * entry with an int key is a name, and one with a string key is a name with a list of the relationships loaded
-     * under it. A name with an empty list is loaded alone.
-     *
-     * @param array<mixed> $list
-     * @param list<string> $prefix
-     * @return list<list<string>>
-     * @throws ActiveRecordException for an empty name, or an entry in no such form
-     */
-    private function listed_paths(string $method, array $list, array $prefix): array
-    {
-        $paths = [];
-
-        foreach ($list as $key => $entry) {
-            if (is_int($key) && is_string($entry)) {
-                $paths[] = [...$prefix, ...$this->dotted_path($method, $entry)];
-            } elseif (is_string($key) && is_array($entry)) {
-                $path = [...$prefix, ...$this->dotted_path($method, $key)];
-                $paths = [...$paths, ...([] === $entry ? [$path] : $this->listed_paths($method, $entry, $path))];
-            } else {
-                throw new ActiveRecordException(sprintf(
-                    '%s() takes a relationship name, or a list of them in which a name may hold a list, not %s at key %s, on %s',
-                    $method,
-                    get_debug_type($entry),
-                    var_export($key, true),
-                    $this->model_class,
-                ));
-            }
-        }
-
-        return $paths;
-    }
-
-    /**
-     * The names of a dotted relationship name ('author.books'), in order.
-     *
-     * @return list<string>
-     * @throws ActiveRecordException for a name that is empty, or has an empty part
-     */
-    private function dotted_path(string $method, string $name): array
-    {
-        $path = explode('.', $name);
-
-        foreach ($path as $part) {
-            if ('' === trim($part)) {
-                throw new ActiveRecordException(sprintf("Empty relationship name: '%s' in %s() on %s", $name, $method, $this->model_class));
-            }
-        }
-
-        return $path;
-    }
-
-    /**
      * Refuses a path that names a relationship that its model does not declare, with the RelationshipException
      * that the legacy 'include' option throws for it: the first name is the model's, and each one after it the
      * relationship's before it, whose model is loaded to look for it.
@@ -2724,128 +2619,12 @@ class Query
     }
 
     /**
-     * $tree, the relationships a query eager loads, with each of $paths in it. A relationship is a list entry
-     * while nothing is loaded under it, and a key with the list of what is once something is, where it was first
-     * given; each is in the tree once.
-     *
-     * @param array<int|string, mixed> $tree
-     * @param list<list<string>> $paths
-     * @return array<int|string, mixed>
+     * The reader of the arguments of with(), without() and with_only(), and the rules by which they change the
+     * relationships the query loads (see IncludeTree).
      */
-    private static function including(array $tree, array $paths): array
+    private function include_tree(): IncludeTree
     {
-        foreach ($paths as $path) {
-            $tree = self::include_path($tree, $path);
-        }
-
-        return $tree;
-    }
-
-    /**
-     * $tree with the relationship that $path names in it, and those before it in the path as its parents.
-     *
-     * @param array<int|string, mixed> $tree
-     * @param list<string> $path
-     * @return array<int|string, mixed>
-     */
-    private static function include_path(array $tree, array $path): array
-    {
-        $name = $path[0];
-        $rest = array_slice($path, 1);
-        $included = [];
-        $found = false;
-
-        foreach ($tree as $key => $entry) {
-            if (!self::is_include($key, $entry, $name)) {
-                self::add_include($included, $key, $entry);
-            } elseif ([] === $rest) {
-                // it is loaded already, with whatever is loaded under it
-                self::add_include($included, $key, $entry);
-                $found = true;
-            } else {
-                // a name that is loaded alone becomes the parent of the others, in its place
-                $included[$name] = self::include_path(is_array($entry) ? $entry : [], $rest);
-                $found = true;
-            }
-        }
-
-        if (!$found) {
-            if ([] === $rest) {
-                $included[] = $name;
-            } else {
-                $included[$name] = self::include_path([], $rest);
-            }
-        }
-
-        return $included;
-    }
-
-    /**
-     * $tree without the relationship that $path names, and what is loaded under it. A relationship that loses all
-     * that was loaded under it stays in the tree, with an empty list.
-     *
-     * @param array<int|string, mixed> $tree
-     * @param list<string> $path
-     * @return array<int|string, mixed>
-     */
-    private static function excluding(array $tree, array $path): array
-    {
-        $name = $path[0];
-        $rest = array_slice($path, 1);
-        $included = [];
-
-        foreach ($tree as $key => $entry) {
-            if (!self::is_include($key, $entry, $name)) {
-                self::add_include($included, $key, $entry);
-            } elseif ([] !== $rest) {
-                // what is under it: a relationship loaded alone has none, so nothing is taken off
-                self::add_include($included, $key, is_array($entry) ? self::excluding($entry, $rest) : $entry);
-            }
-        }
-
-        return $included;
-    }
-
-    /**
-     * Whether an entry of an include tree ($key and $entry as a foreach gives them) is the relationship $name: a
-     * key that is a name, or an entry that is.
-     */
-    private static function is_include(int|string $key, mixed $entry, string $name): bool
-    {
-        return is_string($key) ? $key === $name : $entry === $name;
-    }
-
-    /**
-     * Adds an entry of an include tree to $included, as it was: a name with its list keeps its key, and a name
-     * alone is a list entry, which takes the next place of the list.
-     *
-     * @param array<int|string, mixed> $included
-     */
-    private static function add_include(array &$included, int|string $key, mixed $entry): void
-    {
-        if (is_string($key)) {
-            $included[$key] = $entry;
-        } else {
-            $included[] = $entry;
-        }
-    }
-
-    /**
-     * $value as SQL: what to_raw_sql() writes in place of a bind marker (see to_raw_sql()). Every value that is
-     * not null is the quoted text that the library binds for it.
-     *
-     * @throws ActiveRecordException for a value that is no SQL
-     */
-    private function sql_literal(mixed $value, Connection $connection): string
-    {
-        return match (true) {
-            null === $value => 'NULL',
-            is_bool($value) => $connection->escape($value ? '1' : '0'),
-            // a number that is none, by name: PHP 8.5 warns when it is cast to a string
-            is_float($value) && !is_finite($value) => $connection->escape(is_nan($value) ? 'NAN' : ($value > 0 ? 'INF' : '-INF')),
-            is_scalar($value), $value instanceof \Stringable => $connection->escape((string) $value),
-            default => throw new ActiveRecordException(sprintf('to_raw_sql() cannot write a %s as SQL, in %s', get_debug_type($value), $this->model_class)),
-        };
+        return new IncludeTree($this->model_class);
     }
 
     /**
