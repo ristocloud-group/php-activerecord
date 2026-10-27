@@ -262,14 +262,12 @@ Details settled while building the utilities (Task 16):
   original.
 - **`to_raw_sql()`** is a debug aid, never for execution.
   - It replaces the markers in order with the binds.
-  - Values become literals the way the library binds them, as text through `execute()`. Every non-null scalar
-    (string, number, bool) is written as a quoted string through `Connection::escape()`, so bools become `'1'`/`'0'`
-    and numbers become `'5'`. `null` becomes `NULL`, and DateTimes are formatted as the builder binds them. Postgres
-    refuses a bare `1` against a boolean or a bare `5` against a text column, but accepts the quoted forms, as it
-    accepts the bound text.
-  - Residual, SQLite only: SQLite binds ints as INTEGER, so a raw comparison of two literals such as
-    `where_raw('? = 1', [1])` is true when bound, but its raw text `'1' = 1` is false. Comparisons with a column
-    are unaffected.
+  - Each value becomes the literal the adapter binds. Everything is quoted text through `Connection::escape()`, as
+    `execute()` sends it, except a value the adapter binds as an integer, which is written bare: on SQLite, ints and
+    bools turned into ints. `null` becomes `NULL`, and DateTimes are formatted as the builder binds them.
+  - So the raw text runs by hand as the bound statement does on every adapter. Postgres refuses a bare `1` against a
+    boolean or a bare `5` against a text column. SQLite compares a quoted `'1'` with an integer expression
+    differently from the bound integer.
   - A marker/bind count mismatch throws.
 - **`with()` and `readonly()` count as builder clauses.** Writes refuse them (§5.5), and so does a where group.
 
