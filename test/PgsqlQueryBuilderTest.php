@@ -128,12 +128,12 @@ class PgsqlQueryBuilderTest extends DatabaseTest
 
     // Spec §5.4, §10: the raw types this adapter reports for the columns of the measurements, which classify their
     // aggregates. Postgres gives the first word of format_type(): 'numeric' for decimal too, 'double' for double
-    // precision and float8, and 'int' for integer. (real and float4 are (STRING, 'real'): the type mapping has no such
-    // key, so the raw type alone makes a column floating; see AggregateCasterTest.)
+    // precision and float8, and 'int' for integer. The real column (single, real or float4) is (STRING, 'real'): the type
+    // mapping has no such key, so the raw type alone makes a column floating.
     public function test_the_raw_types_of_the_measurements(): void
     {
         $this->assert_same(
-            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'numeric'], 'ratio' => [Column::DECIMAL, 'double'], 'label' => [Column::STRING, 'varchar']],
+            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'numeric'], 'ratio' => [Column::DECIMAL, 'double'], 'single' => [Column::STRING, 'real'], 'label' => [Column::STRING, 'varchar']],
             array_map(fn(Column $column): array => [$column->type, $column->raw_type], Measurement::table()->columns)
         );
     }
@@ -250,6 +250,23 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(3, Book::joins('author')->sum('authors.author_id'));
         $this->assert_same('1.5000000000000000', Book::joins('author')->avg('authors.author_id'));
         $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_same(2, Book::joins('author')->max('authors.author_id'));
+    }
+
+    // An expression that the select names has no model column either: Postgres types a SUM of an expression of INTs as a bigint, an
+    // int to PDO, its AVG as a numeric, a string of 16 decimals, and its MIN and MAX as ints. qty is 1 and 2, so doubled is 2 and 4.
+    public function test_an_expression_alias_gives_the_values_postgres_returns(): void
+    {
+        $doubled = fn(): ActiveRecord\Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
+
+        $this->assert_same(6, $doubled()->sum('doubled'));
+        $this->assert_same('3.0000000000000000', $doubled()->avg('doubled'));
+        $this->assert_same('3.0000000000000000', $doubled()->average('doubled'));
+        $this->assert_same(2, $doubled()->min('doubled'));
+        $this->assert_same(4, $doubled()->max('doubled'));
+        // no row: NULL, where a column of the model has a 0 of its type
+        $this->assert_null($doubled()->where('label', 'zzz')->sum('doubled'));
+        $this->assert_null($doubled()->where('label', 'zzz')->avg('doubled'));
     }
 
     // A float8 holds NaN and the infinities, which Postgres writes as text ('NaN', 'Infinity', '-Infinity') where PHP 8.3's

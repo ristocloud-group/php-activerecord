@@ -155,12 +155,12 @@ class SqliteQueryBuilderTest extends DatabaseTest
 
     // Spec §5.4, §10: the raw types this adapter reports for the columns of the measurements, which classify their
     // aggregates. SQLite gives the first word of the declared type, lower-cased: 'decimal' for DECIMAL(20,2), 'double'
-    // for DOUBLE (and DOUBLE PRECISION), 'int' for INT and INTEGER. A column declared REAL is (STRING, 'real'): the type
-    // mapping has no such key, so the raw type alone makes it floating (see AggregateCasterTest).
+    // for DOUBLE (and DOUBLE PRECISION), 'int' for INT and INTEGER. A column declared REAL (single) is (STRING, 'real'): the
+    // type mapping has no such key, so the raw type alone makes it floating.
     public function test_the_raw_types_of_the_measurements(): void
     {
         $this->assert_same(
-            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'decimal'], 'ratio' => [Column::DECIMAL, 'double'], 'label' => [Column::STRING, 'varchar']],
+            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'decimal'], 'ratio' => [Column::DECIMAL, 'double'], 'single' => [Column::STRING, 'real'], 'label' => [Column::STRING, 'varchar']],
             array_map(fn(Column $column): array => [$column->type, $column->raw_type], Measurement::table()->columns)
         );
     }
@@ -235,6 +235,33 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same(1.75, $this->strict_call(fn() => Measurement::average('qty')));
         $this->assert_same(1.5, $this->strict_call(fn() => Measurement::where('label', 'a')->sum('qty')));
         $this->assert_same(1.5, $this->strict_call(fn() => Measurement::where('label', 'a')->avg('qty')));
+    }
+
+    // A column that is not the model's has no type to read by, so its aggregates are the driver's values, with SQLite's types: a
+    // SUM of integers is an int, an AVG is a float, a MIN and a MAX are ints
+    public function test_a_column_that_is_not_the_models_is_the_value_sqlite_returns(): void
+    {
+        $this->assert_same(3, Book::joins('author')->sum('authors.author_id'));
+        $this->assert_same(3, Book::joins('author')->sum('author_id'));
+        $this->assert_same(1.5, Book::joins('author')->avg('authors.author_id'));
+        $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_same(2, Book::joins('author')->max('authors.author_id'));
+    }
+
+    // An expression that the select names has no model column either: SQLite's SUM of integers is an int, its AVG a float, its MIN
+    // and MAX ints. qty is 1 and 2, so doubled is 2 and 4.
+    public function test_an_expression_alias_gives_the_values_sqlite_returns(): void
+    {
+        $doubled = fn(): ActiveRecord\Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
+
+        $this->assert_same(6, $doubled()->sum('doubled'));
+        $this->assert_same(3.0, $doubled()->avg('doubled'));
+        $this->assert_same(3.0, $doubled()->average('doubled'));
+        $this->assert_same(2, $doubled()->min('doubled'));
+        $this->assert_same(4, $doubled()->max('doubled'));
+        // no row: NULL, where a column of the model has a 0 of its type
+        $this->assert_null($doubled()->where('label', 'zzz')->sum('doubled'));
+        $this->assert_null($doubled()->where('label', 'zzz')->avg('doubled'));
     }
 
     // SQLite's SUM of integers is an int, and so the AVG of an integer column is exact here too, as everywhere

@@ -163,11 +163,11 @@ class MysqlQueryBuilderTest extends DatabaseTest
 
     // Spec §5.4, §10: the raw types this adapter reports for the columns of the measurements, which classify their
     // aggregates. MySQL and MariaDB give the first word of SHOW COLUMNS' type: 'decimal' for DECIMAL, NUMERIC, DEC and
-    // FIXED, 'double' for DOUBLE, REAL and DOUBLE PRECISION, 'float' for FLOAT.
+    // FIXED, 'double' for DOUBLE, REAL and DOUBLE PRECISION, 'float' for FLOAT (single, a Column::DECIMAL like the others).
     public function test_the_raw_types_of_the_measurements(): void
     {
         $this->assert_same(
-            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'decimal'], 'ratio' => [Column::DECIMAL, 'double'], 'label' => [Column::STRING, 'varchar']],
+            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'decimal'], 'ratio' => [Column::DECIMAL, 'double'], 'single' => [Column::DECIMAL, 'float'], 'label' => [Column::STRING, 'varchar']],
             array_map(fn(Column $column): array => [$column->type, $column->raw_type], Measurement::table()->columns)
         );
         $this->assert_same([Column::INTEGER, 'bigint'], [BigId::table()->columns['id']->type, BigId::table()->columns['id']->raw_type]);
@@ -306,6 +306,23 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(3, Book::joins('author')->sum('author_id'));
         $this->assert_same('1.5000', Book::joins('author')->avg('authors.author_id'));
         $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_same(2, Book::joins('author')->max('authors.author_id'));
+    }
+
+    // An expression that the select names has no model column either: MySQL types a SUM or an AVG of an expression of INTs as
+    // a DECIMAL, a string, and its MIN and MAX as ints. qty is 1 and 2, so doubled is 2 and 4.
+    public function test_an_expression_alias_gives_the_values_mysql_returns(): void
+    {
+        $doubled = fn(): ActiveRecord\Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
+
+        $this->assert_same('6', $doubled()->sum('doubled'));
+        $this->assert_same('3.0000', $doubled()->avg('doubled'));
+        $this->assert_same('3.0000', $doubled()->average('doubled'));
+        $this->assert_same(2, $doubled()->min('doubled'));
+        $this->assert_same(4, $doubled()->max('doubled'));
+        // no row: NULL, where a column of the model has a 0 of its type
+        $this->assert_null($doubled()->where('label', 'zzz')->sum('doubled'));
+        $this->assert_null($doubled()->where('label', 'zzz')->avg('doubled'));
     }
 
     // Review Focus 3: a BIGINT UNSIGNED beyond PHP_INT_MAX stays exact (#44), in a MAX, a SUM and the AVG of it: the

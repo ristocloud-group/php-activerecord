@@ -67,7 +67,7 @@ class QueryAggregateTest extends DatabaseTest
         // the kind of each column, where the database keeps the digits of a decimal; SQLite does not, and its DECIMAL is floating
         $exact = $this->conn->exact_decimals();
         $this->assert_same(
-            ['id' => 'integer', 'qty' => 'integer', 'big' => 'integer', 'amount' => $exact ? 'decimal' : 'floating', 'ratio' => 'floating', 'label' => null],
+            ['id' => 'integer', 'qty' => 'integer', 'big' => 'integer', 'amount' => $exact ? 'decimal' : 'floating', 'ratio' => 'floating', 'single' => 'floating', 'label' => null],
             array_map(fn(ActiveRecord\Column $column): ?string => AggregateCaster::kind($column, $exact), $columns)
         );
     }
@@ -151,6 +151,26 @@ class QueryAggregateTest extends DatabaseTest
         $this->assert_true(abs(Measurement::average('ratio') - 0.15) < 1e-12);
     }
 
+    // A single-precision column is floating whatever its raw type says: FLOAT on MySQL and MariaDB (a Column::DECIMAL), real on
+    // Postgres and REAL on SQLite, which the type mapping has no entry for, so they are a Column::STRING with the raw type real.
+    // The values are exact in single precision, so every adapter gives the same floats (PHP 8.3's Postgres driver gives them
+    // as text, PHP 8.5's as floats).
+    public function test_a_single_precision_column_is_floating(): void
+    {
+        $this->conn->query('UPDATE measurements SET single = 0.5 WHERE id = 1');
+        $this->conn->query('UPDATE measurements SET single = 0.25 WHERE id = 2');
+
+        $this->assert_same(0.75, $this->strict_call(fn() => Measurement::sum('single')));
+        $this->assert_same(0.25, $this->strict_call(fn() => Measurement::min('single')));
+        $this->assert_same(0.5, $this->strict_call(fn() => Measurement::max('single')));
+        $this->assert_same(0.375, $this->strict_call(fn() => Measurement::avg('single')));
+        $this->assert_same(0.375, $this->strict_call(fn() => Measurement::average('single')));
+        $this->assert_same(0.0, $this->strict_call(fn() => Measurement::where('label', 'zzz')->sum('single')));
+        $this->assert_null(Measurement::where('label', 'zzz')->max('single'));
+        $this->assert_null(Measurement::where('label', 'zzz')->avg('single'));
+        $this->assert_same(0.5, $this->strict_call(fn() => Measurement::order_by('id')->limit(1)->sum('single')));
+    }
+
     // A float never reaches ExactDecimal, whose int|string parameters PHP would give an int for it (1.5 is 1, with a
     // deprecation). A floating column is a float whatever the adapter gives (PHP 8.3's Postgres driver gives a float8 as a
     // string) and is never read as an exact one, which would raise the deprecation, or refuse the text. Any diagnostic
@@ -168,13 +188,13 @@ class QueryAggregateTest extends DatabaseTest
         $this->assert_same(0.0, $this->strict_call(fn() => Measurement::where('label', 'zzz')->sum('ratio')));
     }
 
-    // Spec §5.4, last column: a column that is not the model's names no type, so its aggregates are the driver's
+    // Spec §5.4, last column: a column that is not the model's names no type, so its aggregates are the driver's. The MIN and the
+    // MAX of an INT are an int on every adapter; the SUM and the AVG are typed by each (MySQL's SUM is a DECIMAL string,
+    // Postgres's AVG a numeric string, SQLite's AVG a float), and each adapter file pins its own.
     public function test_non_model_column_returns_the_driver_value(): void
     {
-        $this->assert_equals(1, Book::joins('author')->min('authors.author_id'));
-        $this->assert_equals(2, Book::joins('author')->max('authors.author_id'));
-        $this->assert_equals(3, Book::joins('author')->sum('authors.author_id'));
-        $this->assert_equals(1.5, Book::joins('author')->avg('authors.author_id'));
+        $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_same(2, Book::joins('author')->max('authors.author_id'));
         // no row: the driver's NULL, where a column of the model has a 0 of its type
         $none = fn(): Query => Book::joins('author')->where('books.book_id', 99);
         $this->assert_null($none()->sum('authors.author_id'));
@@ -307,10 +327,11 @@ class QueryAggregateTest extends DatabaseTest
             $this->statements(fn() => Measurement::group_by('qty')->sum('qty'))
         );
 
-        // the caller's select stays where an alias of it is the aggregated column: no model column is named doubled
+        // the caller's select stays where an alias of it is the aggregated column: no model column is named doubled, so the
+        // driver's values (the adapter files pin the types of the SUM and the AVG, which differ)
         $doubled = fn(): Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
-        $this->assert_equals(10, $doubled()->sum('doubled'));
-        $this->assert_equals(4, $doubled()->max('doubled'));
+        $this->assert_same(4, $doubled()->max('doubled'));
+        $this->assert_same(2, $doubled()->min('doubled'));
         $this->assert_same(
             [$this->sql('SELECT SUM(t.`doubled`) FROM (') . $this->conn->limit($this->sql('SELECT qty * 2 AS doubled FROM `measurements` ORDER BY `id` ASC'), null, 10) . ') AS t'],
             $this->statements(fn() => $doubled()->sum('doubled'))
@@ -419,6 +440,11 @@ class QueryAggregateTest extends DatabaseTest
             $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT `parent_author_id`, `author_id` FROM `authors` GROUP BY `parent_author_id`) AS t'),
             GoldenStatements::capture(fn() => Author::select('parent_author_id', 'author_id')->group_by('parent_author_id')->max('author_id'))[0]['sql']
         );
+        // nor is the aggregated column, when it is a name that no column of the model has (a qualified one, a joined table's)
+        $this->assert_same(
+            $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT `authors`.`author_id` FROM `authors` GROUP BY `parent_author_id`) AS t'),
+            GoldenStatements::capture(fn() => Author::group_by('parent_author_id')->max('authors.author_id'))[0]['sql']
+        );
         $this->assert_same(
             $this->sql('SELECT COUNT(t.`author_id`) FROM (SELECT `author_id` FROM `authors` GROUP BY `parent_author_id`) AS t'),
             GoldenStatements::capture(fn() => Author::group_by('parent_author_id')->count('author_id'))[0]['sql']
@@ -436,6 +462,33 @@ class QueryAggregateTest extends DatabaseTest
         $this->assert_same(
             [$this->sql('SELECT MAX(t.`m`) FROM (SELECT parent_author_id, MAX(author_id) AS m FROM `authors` GROUP BY `parent_author_id`) AS t')],
             $this->statements(fn() => $maxima()->max('m'))
+        );
+    }
+
+    // An alias attribute names its column in a wrapped query too: the subquery selects the real column, and t's column of that
+    // name is aggregated, as the column's type reads it (score is rating, an INT: 5, 3 and 4 in the order of the reviews)
+    public function test_an_alias_attribute_in_a_wrapped_query(): void
+    {
+        AliasedBookReview::table();
+
+        $reviews = fn(): Query => AliasedBookReview::order_by('id');
+        $this->assert_same(8, $reviews()->limit(2)->sum('score'));
+        $this->assert_same(3, $reviews()->limit(2)->min('score'));
+        $this->assert_same(5, $reviews()->limit(2)->max('score'));
+        $this->assert_same('4.0000', $reviews()->limit(2)->avg('score'));
+        $this->assert_same(7, $reviews()->offset(1)->sum('score'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`rating`) FROM (') . $this->conn->limit($this->sql('SELECT `rating` FROM `book_reviews` ORDER BY `id` ASC'), null, 2) . ') AS t'],
+            $this->statements(fn() => $reviews()->limit(2)->sum('score'))
+        );
+
+        // distinct, with the alias in the select, and the attribute name of the column in the aggregate, or the other way round
+        $this->assert_same(12, AliasedBookReview::distinct()->select('score')->sum('score'));
+        $this->assert_same(12, AliasedBookReview::distinct()->select('score')->sum('rating'));
+        $this->assert_same(12, AliasedBookReview::distinct()->select('rating')->sum('score'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`rating`) FROM (SELECT DISTINCT `rating` FROM `book_reviews`) AS t')],
+            $this->statements(fn() => AliasedBookReview::distinct()->select('score')->sum('score'))
         );
     }
 

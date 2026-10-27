@@ -14,7 +14,8 @@ use ActiveRecord\ExactDecimal;
  * The (type, raw_type) pairs are those the adapters report (see the adapter tests, which pin them against the
  * database): MySQL and MariaDB 'float', 'double' and 'decimal' for REAL, DOUBLE PRECISION, NUMERIC, DEC and FIXED
  * too, Postgres 'double' for float8, 'numeric' for decimal, and for real (float4) the pair (STRING, 'real'), SQLite
- * the first word of the declared type, REAL included (STRING, 'real').
+ * the first word of the declared type, REAL included (STRING, 'real'). The single column of measurements is a live one
+ * of each of those, and the aggregates of it are tested on the four adapters (QueryAggregateTest).
  */
 class AggregateCasterTest extends SnakeCase_PHPUnit_Framework_TestCase
 {

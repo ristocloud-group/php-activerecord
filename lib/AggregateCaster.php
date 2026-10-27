@@ -27,6 +27,13 @@ namespace ActiveRecord;
  * with a deprecation). So a float that the driver returns for an exact column (SQLite stores a REAL in an INTEGER column
  * when the value has a fraction) is returned as it is.
  *
+ * What the drivers give that no kind covers is kept, never lost or hidden:
+ * - a boolean column is an INTEGER (a count of the trues, and the ints 0 and 1), where MySQL's SUM would be a string;
+ * - a Postgres numeric that is NaN or infinite stays its text, and is its own average (it has no digits to divide);
+ * - a stream, which the Postgres driver returns for a bytea (PostgreSQL 18 has its MIN and MAX), is read into the string
+ *   of its bytes, as MySQL and SQLite give a blob;
+ * - an int under a DECIMAL is its digits, an expression's value that an alias names like the column.
+ *
  * It needs no database, so that the whole table of §5.4 is unit tested with the values each driver gives.
  *
  * @internal Serves Query; not a supported API.
