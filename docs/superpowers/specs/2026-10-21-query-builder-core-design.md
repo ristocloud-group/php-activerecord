@@ -377,7 +377,7 @@ The engine knows the aggregated column when the argument is a model column (§5.
 | `min` / `max` / `sum` | `int` when the exact value fits `[PHP_INT_MIN, PHP_INT_MAX]` (decided with `ExactDecimal`), else the exact digits as a string | the exact string as the database returns it (scale kept) | `float` | the driver's value, unchanged |
 | `sum` of no rows | `0` | `'0'` | `0.0` | the driver's value |
 | `min` / `max` of no rows | `null` | `null` | `null` | the driver's value |
-| `avg` | `SELECT SUM(col), COUNT(col)`, then the **exact long division** of `ExactDecimal` at scale **SUM's scale + 4, half-up**, which is MySQL's AVG rule (`'1.5000'`, `'1.6667'`); no rows → `null` | the same division (SUM keeps the column's scale on MySQL and Postgres) | the database's `AVG`, as `float` | the driver's value |
+| `avg` | `SELECT SUM(col), COUNT(col)`, then the **exact long division** of `ExactDecimal` at scale **SUM's scale + 4, half-up**. The scale is MySQL's AVG scale rule (`'1.5000'`, `'1.6667'`). The rounding is half-up on every adapter. MySQL/MariaDB's own AVG truncates instead when its result scale is 9, 18 or 27, measured on MySQL 9.7 and MariaDB 11.4 (Task 17); the engine rounds consistently, so on those scales it can differ from MySQL's AVG in the last digit; no rows → `null` | the same division (SUM keeps the column's scale on MySQL and Postgres) | the database's `AVG`, as `float` | the driver's value |
 
 The results are therefore identical on MySQL, MariaDB and Postgres, and on SQLite for integer columns. The
 documented SQLite exceptions are: DECIMAL columns are REAL storage, so the floating path applies; and a SUM
