@@ -147,6 +147,8 @@ on MySQL and SQLite. Only `find()` passes `mapped_names`. Twenty-two monolith mo
   and normalizes the arguments into condition shapes, and `ConditionCompiler` renders them. Every condition goes
   through them: `where*`, `JoinClause`'s `where*`, `having*`. Building shapes elsewhere would skip a rule, e.g. the
   Postgres `::text` cast of the LIKE operators.
+- **`lib/IncludeTree.php`, `lib/RawSqlWriter.php` (new, `@internal`).** Pure helpers of `Query`: the include-tree
+  rules of `with` / `without` / `with_only`, and the literal writer of `to_raw_sql()`.
 - **`lib/JoinClause.php` (new).** The closure form of joins (`on`, `or_on`, `where`…), with bound values.
 - **`lib/ExactDecimal.php` (new, `@internal`).** It takes the three private helpers of
   `Validations` (#175) — `to_exact_decimal()`, `compare_exact_decimals()`, `exact_integer_digits()` — and adds an
@@ -265,6 +267,9 @@ Details settled while building the utilities (Task 16):
     and numbers become `'5'`. `null` becomes `NULL`, and DateTimes are formatted as the builder binds them. Postgres
     refuses a bare `1` against a boolean or a bare `5` against a text column, but accepts the quoted forms, as it
     accepts the bound text.
+  - Residual, SQLite only: SQLite binds ints as INTEGER, so a raw comparison of two literals such as
+    `where_raw('? = 1', [1])` is true when bound, but its raw text `'1' = 1` is false. Comparisons with a column
+    are unaffected.
   - A marker/bind count mismatch throws.
 - **`with()` and `readonly()` count as builder clauses.** Writes refuse them (§5.5), and so does a where group.
 
