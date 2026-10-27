@@ -100,6 +100,27 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same([], $statements);
     }
 
+    // to_raw_sql() writes each value as the adapter binds it (spec §4.2): as quoted text, which Postgres takes for a
+    // boolean and for a text column as it takes the text that is bound, where it refuses the bare literals
+    public function test_the_raw_sql_writes_every_value_as_quoted_text_which_postgres_takes_for_any_type(): void
+    {
+        foreach ([5, -7, true, false, 2.5, '5', null] as $value) {
+            $this->assert_false($this->conn->binds_as_integer($value));
+        }
+
+        // a bool against a boolean column, a number against a text column, a number against an integer one
+        foreach ([Venue::where('is_available', true), Venue::where('is_available', false), Venue::where('is_retired', false), Author::where('name', 5), Author::where('author_id', 2)] as $i => $query) {
+            $this->assert_same(count($query->get()), count($this->conn->query($query->to_raw_sql())->fetchAll()), "the query $i: " . $query->to_raw_sql());
+        }
+
+        $this->assert_same('SELECT * FROM "venues" WHERE "is_available" = \'1\'', Venue::where('is_available', true)->to_raw_sql());
+        $this->assert_same('SELECT * FROM "authors" WHERE "name" = \'5\'', Author::where('name', 5)->to_raw_sql());
+
+        // what the bare literals would have done
+        $this->assert_exception_message_contains('operator does not exist', fn() => $this->conn->query('SELECT * FROM venues WHERE is_available = 1'), ActiveRecord\DatabaseException::class);
+        $this->assert_exception_message_contains('operator does not exist', fn() => $this->conn->query('SELECT * FROM authors WHERE name = 5'), ActiveRecord\DatabaseException::class);
+    }
+
     // Postgres writes its window as LIMIT n OFFSET m, with an offset alone as OFFSET m (#130)
     public function test_the_window_is_limit_and_offset(): void
     {

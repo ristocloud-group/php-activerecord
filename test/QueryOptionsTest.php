@@ -36,6 +36,21 @@ class QueryOptionsTest extends DatabaseTest
     }
 
     /**
+     * $value as to_raw_sql() writes it on this connection, which is as the adapter binds it: SQLite binds an int, and a
+     * bool that turns into one, as an integer, which is written bare; the other adapters, and every other value on
+     * SQLite, are bound as text, which is written quoted (a bool as '1' or '0'). The adapter is told by its protocol,
+     * not by the hook that the writer asks.
+     */
+    private function bound(int|float|string|bool $value): string
+    {
+        if ('sqlite' === $this->conn->protocol && (is_int($value) || is_bool($value))) {
+            return (string) (int) $value;
+        }
+
+        return $this->quoted(is_bool($value) ? ($value ? '1' : '0') : (string) $value);
+    }
+
+    /**
      * The class and the message of what $call throws, or null when it throws nothing.
      *
      * @return array{class-string<Throwable>, string}|null
@@ -303,9 +318,9 @@ class QueryOptionsTest extends DatabaseTest
         $this->assert_same(1, count(GoldenStatements::capture(fn() => Author::with('books')->pluck('name'))));
     }
 
-    // with() goes with the rest of the query: joins that repeat a row, and a select of the key columns that the
-    // relationships are loaded by. The statements and the models are those of the legacy include option, and what is
-    // loaded is read with no query.
+    // with() goes with the rest of the query: joins, which keep the authors that have a book, and a select of the key
+    // columns that the relationships are loaded by. The statements and the models are those of the legacy include
+    // option, and what is loaded is read with no query.
     public function test_with_goes_with_joins_and_a_select_of_the_key_columns(): void
     {
         // a first run reads the schemas of the tables a relationship loads, which a capture would show
@@ -918,39 +933,40 @@ class QueryOptionsTest extends DatabaseTest
         $this->assert_null($base->state()->limit);
     }
 
-    // The debug aid of spec §4.2: the SELECT with each value written in place of its marker, as the quoted text the
-    // library binds for it. A string goes through Connection::escape(), and so does every other scalar: a number is
-    // '5' and a bool '1' or '0'. null is NULL.
+    // The debug aid of spec §4.2: the SELECT with each value written in place of its marker, as the adapter binds it.
+    // A string goes through Connection::escape(), and so does every other scalar that the adapter binds as text: on
+    // MySQL, MariaDB and Postgres a number is '5' and a bool '1' or '0', on SQLite a float and a numeric string too; the
+    // int that SQLite binds as an integer, and the bool that turns into one, are bare. null is NULL.
     public function test_to_raw_sql_writes_each_value_in_place_of_its_marker(): void
     {
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("O'Neil") . $this->sql(' AND `author_id` > ') . $this->quoted('2'),
+            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("O'Neil") . $this->sql(' AND `author_id` > ') . $this->bound(2),
             Author::where('name', "O'Neil")->where('author_id', '>', 2)->to_raw_sql()
         );
         $this->assert_same($this->sql('SELECT * FROM `authors`'), Author::new_query()->to_raw_sql());
         $this->assert_same(Author::where('name', 'Tito')->to_sql(), str_replace($this->quoted('Tito'), '?', Author::where('name', 'Tito')->to_raw_sql()));
 
-        // an int and a float, a numeric string, null, true and false: each but null the quoted text that is bound
+        // an int and a float, a numeric string, null, true and false, each as it is bound
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE author_id + ') . $this->quoted('1') . ' > ' . $this->quoted('2.5') . ' AND NULL IS NULL AND COALESCE(NULL, 1) = '
-                . $this->quoted('3') . ' AND ' . $this->quoted('1') . ' = ' . $this->quoted('0'),
+            $this->sql('SELECT * FROM `authors` WHERE author_id + ') . $this->bound(1) . ' > ' . $this->bound(2.5) . ' AND NULL IS NULL AND COALESCE(NULL, 1) = '
+                . $this->bound('3') . ' AND ' . $this->bound(true) . ' = ' . $this->bound(false),
             Author::where_raw('author_id + ? > ? AND ? IS NULL AND COALESCE(?, 1) = ? AND ? = ?', [1, 2.5, null, null, '3', true, false])->to_raw_sql()
         );
         $this->assert_same(
-            $this->sql('SELECT ') . $this->quoted('1.0E+25') . ', ' . $this->quoted('-7') . ', ' . $this->quoted('-0.5') . $this->sql(' FROM `authors`'),
+            $this->sql('SELECT ') . $this->bound(1.0e25) . ', ' . $this->bound(-7) . ', ' . $this->bound(-0.5) . $this->sql(' FROM `authors`'),
             Author::select_raw('?, ?, ?', [1.0e25, -7, -0.5])->to_raw_sql()
         );
         $this->assert_same(
-            $this->sql('SELECT ') . $this->quoted('9223372036854775807') . ', ' . $this->quoted('-9223372036854775808') . $this->sql(' FROM `authors`'),
+            $this->sql('SELECT ') . $this->bound(PHP_INT_MAX) . ', ' . $this->bound(PHP_INT_MIN) . $this->sql(' FROM `authors`'),
             Author::select_raw('?, ?', [PHP_INT_MAX, PHP_INT_MIN])->to_raw_sql()
         );
         // true, false, zero and the empty string are written, none of them as NULL or nothing
         $this->assert_same(
-            $this->sql('SELECT ') . implode(', ', [$this->quoted('1'), $this->quoted('0'), $this->quoted('0'), $this->quoted('0'), $this->quoted('')]) . $this->sql(' FROM `authors`'),
+            $this->sql('SELECT ') . implode(', ', [$this->bound(true), $this->bound(false), $this->bound(0), $this->bound(0.0), $this->bound('')]) . $this->sql(' FROM `authors`'),
             Author::select_raw('?, ?, ?, ?, ?', [true, false, 0, 0.0, ''])->to_raw_sql()
         );
         // a float as PHP writes it, which is how PDO binds it (the digits that the precision setting keeps)
-        $this->assert_same($this->sql('SELECT ') . $this->quoted((string) (0.1 + 0.2)) . $this->sql(' FROM `authors`'), Author::select_raw('?', [0.1 + 0.2])->to_raw_sql());
+        $this->assert_same($this->sql('SELECT ') . $this->bound(0.1 + 0.2) . $this->sql(' FROM `authors`'), Author::select_raw('?', [0.1 + 0.2])->to_raw_sql());
         // a float that is no number is written as its name, in a string
         $this->assert_same(
             $this->sql('SELECT ') . $this->quoted('INF') . ', ' . $this->quoted('-INF') . ', ' . $this->quoted('NAN') . $this->sql(' FROM `authors`'),
@@ -972,11 +988,11 @@ class QueryOptionsTest extends DatabaseTest
     public function test_a_question_mark_in_a_value_is_never_read_as_a_marker(): void
     {
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("what? it's ?") . $this->sql(' AND `author_id` = ') . $this->quoted('3') . $this->sql(' AND `parent_author_id` = ') . $this->quoted('1'),
+            $this->sql('SELECT * FROM `authors` WHERE `name` = ') . $this->quoted("what? it's ?") . $this->sql(' AND `author_id` = ') . $this->bound(3) . $this->sql(' AND `parent_author_id` = ') . $this->bound(1),
             Author::where('name', "what? it's ?")->where('author_id', 3)->where('parent_author_id', 1)->to_raw_sql()
         );
         $this->assert_same(
-            $this->sql('SELECT * FROM `authors` WHERE `name` IN(') . $this->quoted('?') . ',' . $this->quoted("??'?") . $this->sql(') AND `author_id` = ') . $this->quoted('4'),
+            $this->sql('SELECT * FROM `authors` WHERE `name` IN(') . $this->quoted('?') . ',' . $this->quoted("??'?") . $this->sql(') AND `author_id` = ') . $this->bound(4),
             Author::where_in('name', ['?', "??'?"])->where('author_id', 4)->to_raw_sql()
         );
         // a value that holds a marker, and what would end the statement, is still a value
@@ -1006,7 +1022,7 @@ class QueryOptionsTest extends DatabaseTest
     public function test_a_question_mark_in_the_sql_is_a_marker_only_where_pdo_reads_one(): void
     {
         $select = $this->sql('SELECT * FROM `authors` WHERE ');
-        $three = $this->quoted('3');
+        $three = $this->bound(3);
 
         $this->assert_same($select . "name <> 'what?' AND author_id = " . $three, Author::where_raw("name <> 'what?' AND author_id = ?", [3])->to_raw_sql());
         $this->assert_same($select . "name <> 'it''s?' AND author_id = " . $three, Author::where_raw("name <> 'it''s?' AND author_id = ?", [3])->to_raw_sql());
@@ -1100,6 +1116,13 @@ class QueryOptionsTest extends DatabaseTest
             [Author::where('author_id', '>', 1)->where_in('author_id', [2, 3, 99])->where_between('author_id', [1, 3]), 'author_id', true],
             [Book::where('special', 0.0), 'book_id', true],
             [Book::where('special', 0.5), 'book_id', false],
+            // a comparison that names no column, where SQLite tells the integer it binds from the text it would be
+            // quoted as: a function of a column, a number against a number, an aggregate in a HAVING
+            [Author::where_raw('LENGTH(name) = ?', [14]), 'author_id', true],
+            [Author::where_raw('? = 1', [1]), 'author_id', true],
+            [Author::where_raw('? = 1', [true]), 'author_id', true],
+            [Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1]), 'parent_author_id', true],
+            [Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [0]), 'parent_author_id', true],
         ];
 
         foreach ($queries as $i => [$query, $key, $finds]) {
@@ -1130,7 +1153,7 @@ class QueryOptionsTest extends DatabaseTest
         $from = 0;
 
         foreach ($query->get_bindings() as $value) {
-            $literal = $this->quoted((string) $value);
+            $literal = $this->bound($value);
             $at = strpos($expected, '?', $from);
             $this->assert_true(false !== $at);
             $expected = substr_replace($expected, $literal, $at, 1);

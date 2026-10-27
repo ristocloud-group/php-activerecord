@@ -1514,19 +1514,23 @@ class Query
 
     /**
      * The SELECT the query sends with its values written in it, each bind marker replaced, in order, by the next
-     * value of get_bindings() as the quoted text the query binds for it: to read a statement, or to run it by
-     * hand, for debugging only. The query itself always sends its values bound, never written in the statement.
+     * value of get_bindings() as the adapter binds it: to read a statement, or to run it by hand, for debugging
+     * only. The query itself always sends its values bound, never written in the statement.
      *
-     * - Every value that is not null is a string through Connection::escape(), as the library binds it, as text:
-     *   a string as it is; an int as '5'; a float as PHP writes it (to the digits that the precision setting
-     *   keeps; INF, -INF and NAN by name); a bool as '1' or '0'; a date and time as the query binds it (a date for
-     *   a DATE column that it is compared with, else a date and time); an object that has a text (__toString())
-     *   as that text. No other object is a value.
+     * - A value that the adapter binds as an integer is written bare (see Connection::binds_as_integer()): on SQLite
+     *   an int, and a bool, which turns into one.
+     * - Every other value that is not null is the quoted text that is bound, a string through
+     *   Connection::escape(): a string as it is; on MySQL, MariaDB and Postgres, which bind every value as text,
+     *   an int as '5' and a bool as '1' or '0'; a float as PHP writes it (to the digits that the precision setting
+     *   keeps; INF, -INF and NAN by name); a date and time as the query binds it (a date for a DATE column that it
+     *   is compared with, else a date and time); an object that has a text (__toString()) as that text. No other
+     *   object is a value.
      * - null is NULL.
      *
-     * Quoted so, the statement runs by hand on every adapter as the bound one does: Postgres refuses a bare 1
+     * Written so, the statement runs by hand as the bound one does on every adapter: Postgres refuses a bare 1
      * against a boolean column, or a bare 5 against a text column, and takes '1' and '5' as it takes the text that
-     * is bound.
+     * is bound; SQLite compares an integer bound as one with an integer expression, where the quoted text never
+     * equals it.
      *
      * The markers are those PDO reads: a ? outside a string and a comment, so the ? of a string of SQL written
      * by hand is no marker, and ?? is a ? of the statement. What is written in place of a marker is never read

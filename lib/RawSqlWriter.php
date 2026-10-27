@@ -8,7 +8,8 @@ namespace ActiveRecord;
 
 /**
  * Writes a SELECT with the values it binds in it, for Query::to_raw_sql(): each bind marker of the SQL of an
- * SQLBuilder is replaced, in order, by the next of its bind values, as the quoted text the library binds for it. The
+ * SQLBuilder is replaced, in order, by the next of its bind values, as the adapter binds it: a value that the
+ * connection binds as an integer bare (see Connection::binds_as_integer()), every other value as quoted text. The
  * markers are read as PDO reads them, in one pass, so what is written is never read again.
  *
  * @internal Serves Query; not a supported API.
@@ -63,8 +64,9 @@ final class RawSqlWriter
     }
 
     /**
-     * $value as SQL: what to_raw_sql() writes in place of a bind marker (see to_raw_sql()). Every value that is
-     * not null is the quoted text that the library binds for it.
+     * $value as SQL: what to_raw_sql() writes in place of a bind marker (see to_raw_sql()), as the adapter binds it.
+     * A value that the connection binds as an integer is written bare (a bool as the 0 or 1 it turns into), and
+     * every other value that is not null as the quoted text that is bound.
      *
      * @throws ActiveRecordException for a value that is no SQL
      */
@@ -72,6 +74,7 @@ final class RawSqlWriter
     {
         return match (true) {
             null === $value => 'NULL',
+            $connection->binds_as_integer($value) => (string) (int) $value,
             is_bool($value) => $connection->escape($value ? '1' : '0'),
             // a number that is none, by name: PHP 8.5 warns when it is cast to a string
             is_float($value) && !is_finite($value) => $connection->escape(is_nan($value) ? 'NAN' : ($value > 0 ? 'INF' : '-INF')),

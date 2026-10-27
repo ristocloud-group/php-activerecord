@@ -71,14 +71,27 @@ class SqliteAdapter extends Connection
 
         foreach ($values as $i => $value) {
             $type = match (true) {
-                is_int($value)  => PDO::PARAM_INT,
-                null === $value => PDO::PARAM_NULL,
-                default         => PDO::PARAM_STR,
+                $this->binds_as_integer($value) => PDO::PARAM_INT,
+                null === $value                 => PDO::PARAM_NULL,
+                default                         => PDO::PARAM_STR,
             };
             $sth->bindValue($i + 1, $value, $type);
         }
 
         return $sth->execute();
+    }
+
+    /**
+     * Whether bind_values() binds $value as an integer: an int, and a bool, which it turns into one first. Everything
+     * else is bound as text, a float and a numeric string included, or as NULL. Query::to_raw_sql() writes what is bound
+     * as an integer bare, and the rest quoted, since SQLite never equals the text '1' to the integer 1, nor an integer
+     * expression to a number written as text.
+     *
+     * @internal Serves bind_values() and Query::to_raw_sql(); not a supported API.
+     */
+    public function binds_as_integer(mixed $value): bool
+    {
+        return is_int($value) || is_bool($value);
     }
 
     public function limit($sql, $offset, $limit)

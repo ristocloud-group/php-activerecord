@@ -403,6 +403,19 @@ abstract class Connection
     }
 
     /**
+     * Whether bind_values() binds $value as an integer, which Query::to_raw_sql() then writes bare, as the adapter binds
+     * it, where every other value is written as the quoted text it binds. Never by default: execute() binds every value
+     * as text, a bool turned into the int 0 or 1 first, and null as NULL. An adapter that binds by type overrides it, with
+     * the rule of its own bind_values().
+     *
+     * @internal Serves Query::to_raw_sql() and the adapters' bind_values(); not a supported API.
+     */
+    public function binds_as_integer(mixed $value): bool
+    {
+        return false;
+    }
+
+    /**
      * Execute a query that returns maximum of one row with one field and return it.
      *
      * @param string $sql Raw SQL string to execute.

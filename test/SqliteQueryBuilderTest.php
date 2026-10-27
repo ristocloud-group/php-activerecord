@@ -85,6 +85,68 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_false($everyone(4)->exists());
     }
 
+    // to_raw_sql() writes each value as the adapter binds it (spec §4.2). SQLite binds an int, and a bool that turns into
+    // one, as an INTEGER, and every other value as text, so the text of a statement finds what the bound one finds where
+    // a value meets an expression and no column: quoted, the integer 1 never equals the text '1', and a number is less
+    // than any text, so `c > '1'` finds nothing. Parent 2 is the one of two authors, parents 1 and 3 of one each, and
+    // 'George W. Bush' is the name of 14 characters.
+    public function test_the_raw_sql_of_a_comparison_that_names_no_column_finds_the_bound_rows(): void
+    {
+        $groups = fn(int $more_than): ActiveRecord\Query => Author::select_raw('COUNT(*) AS c')->group_by('parent_author_id')->having('c', '>', $more_than);
+
+        foreach ([1 => 1, 0 => 3, 2 => 0] as $more_than => $found) {
+            $this->assert_same($found, count($groups($more_than)->get()), "bound, c > $more_than");
+            $this->assert_same($found, count($this->conn->query($groups($more_than)->to_raw_sql())->fetchAll()), "raw, c > $more_than");
+        }
+
+        $this->assert_same('SELECT COUNT(*) AS c FROM `authors` GROUP BY `parent_author_id` HAVING `c` > 1', $groups(1)->to_raw_sql());
+
+        $length = Author::where_raw('length(name) = ?', [14]);
+        $this->assert_same(['George W. Bush'], array_map(fn(Author $author): string => $author->name, $length->get()));
+        $this->assert_same('SELECT * FROM `authors` WHERE length(name) = 14', $length->to_raw_sql());
+        $this->assert_same(1, count($this->conn->query($length->to_raw_sql())->fetchAll()));
+
+        // a literal against a literal, true and 1 alike: both are bound as the integer 1
+        foreach ([1, true] as $one) {
+            $query = Author::where_raw('? = 1', [$one]);
+            $this->assert_same(4, count($query->get()));
+            $this->assert_same('SELECT * FROM `authors` WHERE 1 = 1', $query->to_raw_sql());
+            $this->assert_same(4, count($this->conn->query($query->to_raw_sql())->fetchAll()));
+        }
+
+        // a float, and a numeric string, are bound as text and written as text, so they do not equal an integer in either
+        $this->assert_same(0, count(Author::where_raw('? = 1', [1.0])->get()));
+        $this->assert_same("SELECT * FROM `authors` WHERE '1' = 1", Author::where_raw('? = 1', [1.0])->to_raw_sql());
+        $this->assert_same(0, count($this->conn->query(Author::where_raw('? = 1', ['1'])->to_raw_sql())->fetchAll()));
+    }
+
+    // The text and the bound value have one storage class, whatever the value: the adapter binds an int, and a bool that
+    // turns into one, as an integer (written bare), null as NULL, and everything else as text, a float and a numeric
+    // string included (written quoted). The hook that tells them is the adapter's, and agrees with how it binds.
+    public function test_the_raw_literal_has_the_storage_class_of_the_bound_value(): void
+    {
+        $text = new class {
+            public function __toString(): string
+            {
+                return '9';
+            }
+        };
+        $values = [0, 1, -7, PHP_INT_MAX, PHP_INT_MIN, true, false, 0.0, 1.0, 2.5, -0.5, 1.0e25, '0', '1', '', ' 5', 'x', "it's", null, $text];
+
+        foreach ($values as $i => $value) {
+            $expected = match (true) {
+                is_int($value) || is_bool($value) => 'integer',
+                null === $value => 'null',
+                default => 'text',
+            };
+            $query = Author::select_raw('typeof(?) AS t', [$value])->limit(1);
+
+            $this->assert_same($expected, $query->get()[0]->t, "bound, value $i");
+            $this->assert_same($expected, $this->conn->query($query->to_raw_sql())->fetch(PDO::FETCH_NUM)[0], "raw, value $i: " . $query->to_raw_sql());
+            $this->assert_same('integer' === $expected, $this->conn->binds_as_integer($value), "binds_as_integer(), value $i");
+        }
+    }
+
     // SQLite needs a LIMIT before an OFFSET: an offset alone goes with an unbounded one, LIMIT -1 (#130)
     public function test_the_window_is_limit_with_an_offset_before_the_count(): void
     {

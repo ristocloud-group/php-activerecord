@@ -119,6 +119,35 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_false($everyone(4)->exists());
     }
 
+    // to_raw_sql() writes each value as the adapter binds it (spec §4.2), and PDO sends MySQL and MariaDB every value as
+    // text: the raw text is the quoted text, an int and a bool included, which they convert as they convert the bound
+    // one, so the rows are the bound query's, a function of a column and the alias of a HAVING among them
+    public function test_the_raw_sql_writes_every_value_as_quoted_text(): void
+    {
+        foreach ([5, -7, true, false, 2.5, '5', null] as $value) {
+            $this->assert_false($this->conn->binds_as_integer($value));
+        }
+
+        $this->assert_same(
+            "SELECT * FROM `authors` WHERE `author_id` = '2' AND `parent_author_id` IN('1','2') AND `name` != '0'",
+            Author::where('author_id', 2)->where_in('parent_author_id', [1, 2])->where('name', '!=', false)->to_raw_sql()
+        );
+
+        $groups = fn(int $more_than): ActiveRecord\Query => Author::select_raw('COUNT(*) AS c')->group_by('parent_author_id')->having('c', '>', $more_than);
+
+        foreach ([1 => 1, 0 => 3, 2 => 0] as $more_than => $found) {
+            $this->assert_same($found, count($groups($more_than)->get()), "bound, c > $more_than");
+            $this->assert_same($found, count($this->conn->query($groups($more_than)->to_raw_sql())->fetchAll()), "raw, c > $more_than");
+        }
+
+        $this->assert_same("SELECT COUNT(*) AS c FROM `authors` GROUP BY `parent_author_id` HAVING `c` > '1'", $groups(1)->to_raw_sql());
+
+        $length = Author::where_raw('length(name) = ?', [14]);
+        $this->assert_same(1, count($length->get()));
+        $this->assert_same("SELECT * FROM `authors` WHERE length(name) = '14'", $length->to_raw_sql());
+        $this->assert_same(1, count($this->conn->query($length->to_raw_sql())->fetchAll()));
+    }
+
     // MySQL has no OFFSET without LIMIT: the window of the builder is the adapter's own, an offset alone going with
     // the largest row count (#130), and the largest integers are exact in it
     public function test_the_window_is_limit_with_an_offset_before_the_count(): void
