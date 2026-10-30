@@ -1017,6 +1017,10 @@ class Model
      * not find() or any other legacy finder, so what a subclass overrides in those is not run.
      * It is not query() either, which runs a raw SQL statement.
      *
+     * Inside an instance method, call this one: a call such as static::where(...) made on the class from
+     * an instance method reaches {@link __call()}, not {@link __callStatic()}, and __call() answers "Call
+     * to undefined method: where". static::new_query()->where(...) is the call that works there.
+     *
      * @return Query<static>
      */
     public static function new_query(): Query
@@ -2022,6 +2026,11 @@ class Model
      * describe them. A static update() or delete() is refused, since it would write every row: use
      * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
      * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
+     *
+     * The forwarding answers a call made where no instance of the class is at hand: from outside, or from
+     * a static method. Inside an instance method, static::where(...) (or self::where(...), or the class's
+     * own name) reaches {@link __call()} instead, which answers "Call to undefined method: where": use
+     * static::new_query()->where(...) there.
      *
      * @param string $method Name of method
      * @param mixed $args Method args
