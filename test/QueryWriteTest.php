@@ -526,6 +526,34 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same([2 => 'First', 3 => 'Bill Clinton', 4 => 'Last'], $this->names_by_id());
     }
 
+    // SQL written by hand that holds a statement terminator, a ; outside its strings and comments, is refused at the call
+    // (QueryCompiler::refuse_statement_terminator()), so no write of it runs: MySQL, MariaDB and SQLite ended the statement
+    // there and wrote every row the WHERE matched, without the ORDER BY and the LIMIT, and Postgres refused it. A ; in a
+    // string, a comment or a bound value is none, and the limited write writes the one row it picks
+    public function test_a_raw_fragment_that_holds_a_statement_terminator_never_writes(): void
+    {
+        Author::table();
+
+        foreach ([
+            'where_raw' => [fn() => Author::where_raw('author_id > 0;')->order_by('author_id')->limit(1)->delete(), 'author_id > 0;'],
+            'or_where_raw' => [fn() => Author::where('author_id', 1)->or_where_raw('author_id > 0;')->limit(1)->update(['name' => 'Z']), 'author_id > 0;'],
+            'order_by_raw' => [fn() => Author::order_by_raw('author_id;')->limit(1)->delete(), 'author_id;'],
+        ] as $method => [$write, $sql]) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "SQL '$sql' in $method() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture($write),
+                $method
+            );
+        }
+
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        $this->assert_same(1, Author::where_raw("name != 'a;b'")->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(1, Author::where_raw('author_id > 0 /* ; */')->order_by('author_id')->limit(1)->update(['name' => 'Commented']));
+        $this->assert_same(1, Author::where_raw('name != ?', ['a;b'])->order_by_raw('author_id DESC -- ;')->limit(1)->update(['name' => 'Bound']));
+        $this->assert_same([2 => 'Commented', 3 => 'Bill Clinton', 4 => 'Bound'], $this->names_by_id());
+    }
+
     // A limited write on an adapter that can apply the limit neither way, with no LIMIT on UPDATE and DELETE and no
     // limited_rows_condition(), is refused before any statement, as the legacy writes are (QueryEngineTest): without the
     // limit it would write every row it matches. No adapter of the library is one

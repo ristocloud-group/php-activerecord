@@ -95,6 +95,14 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same([2, 3, 4], $ids(Author::order_by('author_id')->get()));
     }
 
+    // A ; in a # comment, or in an identifier in backticks, is no statement terminator: the SQL is sent, and the comment
+    // and the identifier are read as MySQL and MariaDB read them (a ; outside them is refused at the call, QueryWhereTest)
+    public function test_a_semicolon_in_a_hash_comment_or_a_backtick_identifier_is_sent(): void
+    {
+        $this->assert_same(1, Author::where_raw('author_id > 0 # a;b')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(['2'], array_map(fn(Author $author): string => (string) $author->{'a;b'}, Author::select_raw('author_id AS `a;b`')->order_by('author_id')->limit(1)->get()));
+    }
+
     // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the
     // order is an order like any other, and the database runs it
     public function test_in_random_order_is_rand(): void

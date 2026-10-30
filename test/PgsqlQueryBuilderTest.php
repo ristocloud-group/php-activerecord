@@ -95,6 +95,21 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(['Tito'], array_map(fn(Author $author): string => $author->name, Author::select('name')->group_by('name')->having('name', 'ilike', 't%')->get()));
     }
 
+    // A ; in a dollar-quoted string ($$...$$, $tag$...$tag$) or in an identifier in double quotes is no statement
+    // terminator: the SQL is sent, and Postgres reads the string and the identifier (a ; outside them is refused at the call,
+    // QueryWhereTest). A $1 opens no dollar quote, and a ; after it is refused
+    public function test_a_semicolon_in_a_dollar_quoted_string_is_sent(): void
+    {
+        $names = fn(array $authors): array => array_map(fn(Author $author): string => $author->name, $authors);
+        Author::new_query()->insert(['name' => 'a;b']);
+
+        $this->assert_same(['a;b'], $names(Author::where_raw('name = $$a;b$$')->get()));
+        $this->assert_same(['a;b'], $names(Author::where_raw('name IN($tag$a;b$tag$, $$;$$)')->get()));
+        $this->assert_same(1, Author::where_raw('name != $$a;b$$')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(['George W. Bush'], array_map(fn(Author $author): string => $author->{'a;b'}, Author::select_raw('name AS "a;b"')->order_by('author_id')->limit(1)->get()));
+        $this->assert_exception_message_contains("SQL 'name = $1;' in where_raw() on Author holds a statement terminator (;)", fn() => Author::where_raw('name = $1;'), ActiveRecord\ActiveRecordException::class);
+    }
+
     // Spec §5.3: a value that an INTEGER pk can never equal fails the statement on Postgres (22P02) and aborts the
     // transaction, so a find looks it up in no statement, as the legacy finders by pk do (#92). The table is loaded
     // first: a table read cold adds its schema read to the capture.

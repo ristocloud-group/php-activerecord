@@ -263,8 +263,8 @@ class Query
      * Selects an SQL expression besides what the query selects, sent as written, with the values of its
      * bind markers. A select() replaces it, its values included. SQL that holds -- or # is followed by a
      * newline, so that a line comment at its end cannot run on over the rest of the statement (see
-     * QueryCompiler::raw_fragment()). It has the warning of where_raw(): never from user input, and no statement
-     * terminator, which would cut off the clauses that follow.
+     * QueryCompiler::raw_fragment()). It has the warning of where_raw(): never from user input. SQL that holds a
+     * statement terminator (;) outside its strings and comments is refused at the call, as where_raw() refuses it.
      *
      * <code>
      * Author::select('name')->select_raw('LENGTH(name) > ? AS long_name', [10])->get();
@@ -272,9 +272,11 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator, and the query is left as it was
      */
     public function select_raw(string $sql, array $bindings = []): static
     {
+        $this->compiler()->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->selects[] = ['raw' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -324,8 +326,8 @@ class Query
      * Reads the rows from a FROM written in SQL, a subquery for instance, sent as written, with the
      * values of its bind markers. It names its rows itself, so no column of the model gets a table then
      * (see QueryCompiler::column()). It replaces a from(). SQL that holds -- or # is followed by a newline,
-     * as select_raw() says. It has the warning of where_raw(): never from user input, and no statement terminator,
-     * which would cut off the clauses that follow.
+     * as select_raw() says. It has the warning of where_raw(): never from user input. SQL that holds a statement
+     * terminator (;) outside its strings and comments is refused at the call, as where_raw() refuses it.
      *
      * <code>
      * Book::from_raw('(SELECT * FROM books WHERE book_id > ?) books', [10])->get();
@@ -333,9 +335,11 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator, and the query is left as it was
      */
     public function from_raw(string $sql, array $bindings = []): static
     {
+        $this->compiler()->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->from = null;
         $this->state->from_alias = null;
         $this->state->from_raw = $sql;
@@ -453,11 +457,14 @@ class Query
      * SQLBuilder would leave it out, and an update() or a delete() of the query would write every row. SQL that holds
      * -- or # is followed by a newline, as select_raw() says.
      *
+     * SQL that holds a statement terminator (;) outside its strings, its quoted identifiers and its comments is refused
+     * too (see QueryCompiler::refuse_statement_terminator()): MySQL, MariaDB and SQLite would end the statement there, which
+     * cuts off the clauses that follow it, on a write its ORDER BY and LIMIT, so a limited write would touch every row it
+     * matches; Postgres refuses the statement. A ; in a string ('a;b'), a comment or a bound value is sent as it is.
+     *
      * Warning: the SQL is sent as written, so it must never come from user input. A line comment at its end (--, or #
      * on MySQL and MariaDB) ends at the newline that follows it, where the legacy 'conditions' option sends its SQL as
-     * given and the comment cuts off what follows. It must not hold a statement terminator (;): MySQL, MariaDB and SQLite
-     * end the statement there, which cuts off the clauses that follow it, on a write its ORDER BY and LIMIT, so a limited
-     * write would touch every row it matches; Postgres refuses the statement.
+     * given and the comment cuts off what follows.
      *
      * <code>
      * Author::where_raw('LENGTH(name) > ?', [3])->get();
@@ -465,7 +472,8 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
-     * @throws ActiveRecordException at the call, for SQL that is empty or only whitespace, and the query is left as it was
+     * @throws ActiveRecordException at the call, for SQL that is empty or only whitespace, or that holds a statement
+     *   terminator, and the query is left as it was
      */
     public function where_raw(string $sql, array $bindings = []): static
     {
@@ -473,8 +481,8 @@ class Query
     }
 
     /**
-     * Adds a condition written in SQL as where_raw() does, ORed, with the same warning: the SQL is sent as written, and
-     * must not hold a statement terminator.
+     * Adds a condition written in SQL as where_raw() does, ORed, with the same warning (the SQL is sent as written) and
+     * the same refusals, of SQL that is blank or holds a statement terminator.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -926,7 +934,9 @@ class Query
      * their relationship's name as alias. See Table::create_joins().
      *
      * Warning: an entry that holds "JOIN " (in any case) is sent to the database as raw SQL, and must never
-     * come from user input. left_joins() takes relationship names only, and refuses a fragment.
+     * come from user input. A fragment that holds a statement terminator (;) outside its strings and comments is
+     * refused at the call, as where_raw() refuses it. left_joins() takes relationship names only, and refuses a
+     * fragment.
      *
      * The join of a relationship is the legacy join SQL, unchanged, so it has the limits of the legacy
      * 'joins' option, and the database refuses the first three:
@@ -946,11 +956,21 @@ class Query
      * @return $this
      * @throws RelationshipException at the call, for a name that is no relationship of the model, and the query
      *   is left as it was
-     * @throws ActiveRecordException at the call, for an entry that is not a string
+     * @throws ActiveRecordException at the call, for an entry that is not a string, or a JOIN fragment that holds a
+     *   statement terminator, and the query is left as it was
      */
     public function joins(string|array $relationships_or_sql): static
     {
-        return $this->add_relationship_joins($this->relationship_names(__FUNCTION__, $relationships_or_sql), 'INNER');
+        $names = $this->relationship_names(__FUNCTION__, $relationships_or_sql);
+
+        // a JOIN fragment is SQL written by hand, as Table::create_joins_of_type() tells it from a relationship name
+        foreach ($names as $name) {
+            if (false !== stripos($name, 'JOIN ')) {
+                $this->compiler()->refuse_statement_terminator($name, __FUNCTION__ . '()');
+            }
+        }
+
+        return $this->add_relationship_joins($names, 'INNER');
     }
 
     /**
@@ -1031,11 +1051,11 @@ class Query
      * list over its marker, as select_raw() and from_raw() do not: write one marker for each value. SQL that is
      * empty or only whitespace is refused, and so is 0, the position of no column, which SQLBuilder would leave out
      * where the database refuses it (see QueryCompiler::refuse_blank_sql()). SQL that holds -- or # is followed by
-     * a newline, as select_raw() says.
+     * a newline, as select_raw() says. SQL that holds a statement terminator (;) outside its strings and comments is
+     * refused, as where_raw() refuses it: the clauses that follow it in the statement would be cut off, its LIMIT and
+     * OFFSET, so a limited write would touch every row it matches.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not hold a statement
-     * terminator (;): the clauses that follow it in the statement would be cut off, its LIMIT and OFFSET, so a limited
-     * write would touch every row it matches (see where_raw()).
+     * Warning: the SQL is sent as written, so it must never come from user input.
      *
      * <code>
      * Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])->get();
@@ -1043,12 +1063,14 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
-     * @throws ActiveRecordException at the call, for SQL that is empty, only whitespace or 0, and the query is left as
-     *   it was
+     * @throws ActiveRecordException at the call, for SQL that is empty, only whitespace or 0, or that holds a statement
+     *   terminator, and the query is left as it was
      */
     public function order_by_raw(string $sql, array $bindings = []): static
     {
-        $this->compiler()->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler = $this->compiler();
+        $compiler->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->orders[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -1151,11 +1173,11 @@ class Query
      * Groups the rows by an SQL expression, sent as written, with the values of its bind markers, after the groups
      * the query already has. A value that is a list is not spread over its marker, as in order_by_raw(): write one
      * marker for each value. SQL that is empty, only whitespace or 0 is refused, as order_by_raw() refuses it. SQL
-     * that holds -- or # is followed by a newline, as select_raw() says.
+     * that holds -- or # is followed by a newline, as select_raw() says. SQL that holds a statement terminator (;)
+     * outside its strings and comments is refused, as where_raw() refuses it: the clauses that follow it in the
+     * statement (its HAVING, ORDER BY, LIMIT and OFFSET) would be cut off.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not hold a statement
-     * terminator (;): the clauses that follow it in the statement (its HAVING, ORDER BY, LIMIT and OFFSET) would be
-     * cut off (see where_raw()).
+     * Warning: the SQL is sent as written, so it must never come from user input.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -1163,7 +1185,9 @@ class Query
      */
     public function group_by_raw(string $sql, array $bindings = []): static
     {
-        $this->compiler()->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler = $this->compiler();
+        $compiler->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->groups[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -1212,11 +1236,12 @@ class Query
      * is beside it, with the values of its bind markers. As in where_raw(), a value that is a list is spread over
      * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?), and the condition
      * "0" is sent, in parentheses. SQL that is empty or only whitespace is refused, as where_raw() refuses it. SQL
-     * that holds -- or # is followed by a newline, as select_raw() says.
+     * that holds -- or # is followed by a newline, as select_raw() says. SQL that holds a statement terminator (;)
+     * outside its strings and comments is refused, as where_raw() refuses it: the clauses that follow it in the
+     * statement (its ORDER BY, LIMIT and OFFSET) would be cut off.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not hold a statement
-     * terminator (;): the clauses that follow it in the statement (its ORDER BY, LIMIT and OFFSET) would be cut off
-     * (see where_raw()). A HAVING without a GROUP BY needs SQLite 3.39 or later, as having() says.
+     * Warning: the SQL is sent as written, so it must never come from user input. A HAVING without a GROUP BY needs
+     * SQLite 3.39 or later, as having() says.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();
@@ -1232,8 +1257,8 @@ class Query
     }
 
     /**
-     * Adds a condition written in SQL to the HAVING as having_raw() does, ORed, with the same warning: the SQL is sent
-     * as written, and must not hold a statement terminator.
+     * Adds a condition written in SQL to the HAVING as having_raw() does, ORed, with the same warning (the SQL is sent as
+     * written) and the same refusals, of SQL that is blank or holds a statement terminator.
      *
      * @param array<mixed> $bindings
      * @return $this

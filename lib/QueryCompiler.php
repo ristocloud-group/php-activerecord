@@ -144,7 +144,8 @@ final class QueryCompiler
      * comment (# on MySQL and MariaDB), which would otherwise run to the end of the statement and swallow what is
      * written after the fragment: the ORDER BY and LIMIT of a limited write, which would then write every row it
      * matches, or the parenthesis that closes a group. The newline ends the comment. SQL without them is written as
-     * given. The legacy options never come here: their SQL is sent as given.
+     * given. A statement terminator (;) would end the statement as surely: the methods refuse it at the call (see
+     * refuse_statement_terminator()). The legacy options never come here: their SQL is sent as given.
      *
      * @internal Serves QueryCompiler and ConditionCompiler; not a supported API.
      */
@@ -390,6 +391,32 @@ final class QueryCompiler
 
         if ($position && '0' === trim($sql)) {
             throw new ActiveRecordException(sprintf("SQL '%s' in %s() on %s names the column at position 0, which no statement has: positions start at 1", $sql, $method, $this->table->class->name));
+        }
+    }
+
+    /**
+     * Refuses SQL written by hand that holds a statement terminator, a ; outside its strings, its quoted identifiers and
+     * its comments (see RawSqlWriter::holds_statement_terminator()), given to $source: a builder method that sends its SQL
+     * as written (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(), group_by_raw(), having_raw(),
+     * order_by_raw() and the or_ forms), at the call (spec §5.7). MySQL and MariaDB end the statement there and run what
+     * follows it as another statement, whose error is never read, and SQLite drops what follows it: either way the clauses
+     * after it are lost, those of a limited write its ORDER BY and its LIMIT, so it writes every row it matches. Postgres
+     * refuses the statement. A ; in a string, a quoted identifier, a comment or a bound value is no terminator, and a
+     * value is bound with a ? marker.
+     *
+     * @internal Serves Conditions and Query; not a supported API.
+     * @param string $source Where the SQL was given, for the message of the exception: "where_raw()", ...
+     * @throws ActiveRecordException
+     */
+    public function refuse_statement_terminator(string $sql, string $source): void
+    {
+        if (RawSqlWriter::holds_statement_terminator($sql)) {
+            throw new ActiveRecordException(sprintf(
+                "SQL '%s' in %s on %s holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker",
+                $sql,
+                $source,
+                $this->table->class->name,
+            ));
         }
     }
 
