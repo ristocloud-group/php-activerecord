@@ -289,11 +289,23 @@ multibyte MySQL charsets (`gbk`, `big5`, `sjis` / `cp932`, `gb18030`) are not co
 still deletes every row. `update_all()` takes an options hash with `set`; a hash `set` also sets `updated_at`, unless it
 gives one or the model class is suspended with `without_timestamps()`, and a string `set` is sent as written (see
 [Timestamps](#timestamps)). A key gives `updated_at` by its column's name or attribute name, also pre-quoted or qualified
-with the model's table (`` '`authors`.`updated_at`' ``), and the column is then assigned once, the value given. The other
+with the model's table (`` '`authors`.`updated_at`' ``), and the column is then assigned once, the value given: MySQL and
+MariaDB take a qualified column in a `SET`, and Postgres and SQLite refuse it, as before. The other
 finder options are ignored, as before. An argument that could be misread throws `ActiveRecordException` before any SQL
 runs: a positional list (write `['conditions' => ['name = ?', 'Tito']]`), a hash mixing option keys with other keys
 (`Unknown key(s): …`), an int, float or bool, and, for `update_all()`, a key beside `set` that is not an option, such as a
 column name, or an argument without `set`.
+
+**A statement terminator in the `conditions` SQL throws.** The SQL of the `conditions` option, a string
+(`'author_id > 1'`) or the first element of a positional list (`['author_id > ?', 1]`), must not hold a `;` outside its
+string literals and comments: `find` / `all` / `first` / `last`, `count`, `exists`, `update_all` and `delete_all` throw
+`ActiveRecordException` before any SQL runs, and so does the load of a relationship whose declared `conditions` hold one
+(every database refused its statement before). MySQL, MariaDB and SQLite end the statement there and drop what follows
+it, the `order` and the `limit` among it, so a limited `update_all()` or `delete_all()` wrote every row it matched and a
+find read every row; Postgres refuses the statement. A `;` with nothing after it is refused as well. A `;` in a string
+literal (`"name = 'a;b'"`), in a comment or in a bound value (`['name = ?', 'a;b']`) is sent as before. The other options
+(`select`, `joins`, `from`, `group`, `having`, `order`), the `$where` of a direct `Table::update()` / `Table::delete()`
+and `find_by_sql()` send their SQL as written, unread. The rule is the builder's (see [Conditions](#conditions)).
 
 ## Query builder ##
 
@@ -339,8 +351,9 @@ $all_open = $open->get();                       // the limit was set on the clon
 ```
 
 A query refuses what it cannot read at the call that gives it, not when it runs: an unknown operator, a negative `limit`,
-an empty column name, a relationship the model does not declare, ... Those are `ActiveRecordException`s (or a subclass,
-such as `RelationshipException`), and a database error is still a `DatabaseException`.
+an empty column name, SQL written by hand that holds a statement terminator, a relationship the model does not
+declare, ... Those are `ActiveRecordException`s (or a subclass, such as `RelationshipException`), and a database error is
+still a `DatabaseException`.
 
 What a static call such as `Invoice::something()` reaches:
 
@@ -466,9 +479,16 @@ Invoice::where('status', 'open')
 verbatim, with the values of its `?` markers bound, so it must never come from user input. A fragment that holds `--` or
 `#` is followed by a newline in the statement, so a line comment at its end (`--`, or `#` on MySQL and MariaDB) stops
 there and cannot cut off the clauses that follow it, which on a write include its `ORDER BY` and `LIMIT`. The legacy
-`conditions` option sends its SQL as given, so a comment at its end still cuts them off there. A fragment must not hold a
-statement terminator (`;`): MySQL, MariaDB and SQLite end the statement there, so the clauses that follow it are cut off
-and a limited write touches every row it matches; Postgres refuses the statement. `where_raw`, `or_where_raw`, `having_raw`
+`conditions` option sends its SQL as given, so a comment at its end still cuts them off there. **A fragment that holds a
+statement terminator is refused at the call**: a `;` outside its string literals (`'...'`, with `''` and `\` escapes),
+its quoted identifiers (`"..."`, `` `...` ``), its comments (`--`, `#`, `/* */`) and its Postgres dollar-quoted strings
+(`$$...$$`, `$tag$...$tag$`) throws `ActiveRecordException`, which names the method. MySQL, MariaDB and SQLite would end
+the statement there, so the clauses that follow it would be cut off and a limited write would touch every row it matches;
+Postgres refuses the statement. A `;` in a string (`where_raw("note = 'a;b'")`), an identifier, a comment or a bound
+value (`where_raw('note = ?', ['a;b'])`) is sent as written. The legacy `conditions` option refuses one too (see
+[Hash conditions](#hash-conditions)). The rule reads the quoting of every database at once, so a `;` that one of them reads
+outside a comment or a string can pass: MySQL and MariaDB read a `--` with no space after it as two minus signs
+(`0--1;`), and SQLite reads no backslash escape in a string (`'C:\' ;`). `where_raw`, `or_where_raw`, `having_raw`
 and `or_having_raw` refuse SQL that is empty or only whitespace at the call, and `order_by_raw` and `group_by_raw` refuse
 `0` too, which would name a column position that no statement has: the statement would otherwise leave the clause out, and
 a write could touch rows it was not asked to.
@@ -572,8 +592,9 @@ them. It is not forwarded statically (see above).
 
 `when($value, $callback, $default = null)` calls the callback when the value is truthy, and `unless()` when it is falsy: the
 shape of an optional filter (`$default`, when there is one, is called in the other case). A `when()` or `unless()` that
-runs neither is a filter that came out empty: an `update()` or a `delete()` with no other where condition is then refused
-(see [Writing](#writing)), and a read is unchanged. A Closure value is called first, and the callback is given the query
+runs neither is a filter that came out empty, and the writes refuse it: an `update()` or a `delete()` with no other where
+condition, and an `insert()` or an `upsert()`, which take no clause (see [Writing](#writing)); a read is unchanged. A
+Closure value is called first, and the callback is given the query
 and the value. If it returns a `Query` on the same model, that query goes on (a fork, for instance); any other return is
 ignored, where Eloquent uses any non-null result. `tap($callback)` calls back and returns the query.
 
@@ -618,7 +639,8 @@ Invoice::where('status', 'open')->count();                  // 3
   `offset` is counted as a subquery, `SELECT COUNT(*) FROM (...) AS t`, so a grouped query counts its groups and a limited
   one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)`
   counts the column's non-null values, and after `distinct()` with no select of the query's own its distinct non-null
-  values (Eloquent's `COUNT(DISTINCT column)`); `count()` after `distinct()` counts distinct rows. On a grouped query
+  values (Eloquent's `COUNT(DISTINCT column)`), with the refusal of a window ordered by another column that the
+  [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. On a grouped query
   the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
 
 ### Aggregates ###
@@ -640,8 +662,11 @@ Postgres, and on SQLite for integer columns:
 | floating (`FLOAT`, `DOUBLE`, `REAL`) | a `float` | `0.0` | the database's `AVG`, a `float` |
 | anything else: text, a date, a joined table's column, the alias of an expression | the driver's value | the driver's | the driver's |
 
-The column is read by the name you aggregate: the alias of an expression named like a column of the model
-(`select_raw('qty * 2 AS qty')->sum('qty')`) is read by that column's type, and any other alias gives the driver's value.
+The column is read by the name you aggregate. A query aggregated as a subquery (grouped, distinct or windowed, below)
+keeps its select there, so the alias of an expression named like a column of the model is what is aggregated, read by
+that column's type: `select_raw('total_cents * 2 AS total_cents')->order_by('id')->limit(10)->sum('total_cents')` is the
+`int` 144002. Any other alias gives the driver's value. A query aggregated in place drops its select, as Eloquent's
+aggregates do: `select_raw('total_cents * 2 AS total_cents')->sum('total_cents')` sums the column, 72001.
 `min`, `max` and `avg` of no row are `null`. An exact `avg` is the SUM divided by the COUNT in PHP, an exact long division
 rounded half up at the scale of the SUM plus 4 (`'1.5000'` for the integers 1 and 2, `'12000.1667'` above), where the
 databases' own AVG differ in type and scale.
@@ -652,6 +677,14 @@ databases' own AVG differ in type and scale.
   aggregates every row. After `distinct()` with no select of the query's own, the subquery selects `DISTINCT col`, so
   `sum()` and `avg()` run over the column's distinct values, Eloquent's `SUM(DISTINCT col)` and `AVG(DISTINCT col)`
   (`min()` and `max()` are the same either way); with a select of its own they run over the distinct rows it selects.
+- **A distinct aggregate refuses a window ordered by another column.** With a `limit` or an `offset`, the order of the
+  query picks the distinct values in that subquery, and `SELECT DISTINCT col` cannot be ordered by another column: MySQL
+  and Postgres refuse it, and MariaDB and SQLite pick the values arbitrarily. So
+  `distinct()->order_by('id')->limit(2)->sum('total_cents')` (and `count('total_cents')`) throws
+  `ActiveRecordException` at the call. Order by the aggregated column, by any of its names
+  (`distinct()->order_by_desc('total_cents')->limit(2)->sum('total_cents')` sums the two biggest distinct amounts), or
+  give the query a select of its own. Without a window the order is dropped. SQL of `order_by_raw()` is not read, and
+  goes to the database as it is, as does `in_random_order()`, which Postgres refuses there.
 - On a grouped query, aggregating a column that the groups do not group is refused at the call, as MariaDB and SQLite would
   silently read an arbitrary row of each group: group by it, give the query a select of its own, or group by the whole
   primary key (each group is then one row, and any column may be aggregated). It is refused only when the query can be
@@ -675,13 +708,14 @@ Invoice::new_query()->update(['note' => null]);                         // every
   groups, havings, an offset, `distinct()`, a `select()`, `from()`, `with()` and `readonly()` (`update() cannot use joins,
   ...`). `insert()` and `upsert()` take no clause.
 - **A write with no where condition writes every row**, up to its `limit()`: `Invoice::new_query()->delete()`, and also a
-  chain of `order_by()` or `limit()` alone (`Invoice::order_by('id')->delete()` deletes every row,
-  `Invoice::limit(2)->delete()` two). The static forwarding refuses `update` and `delete`, so a bare `Invoice::update([...])`
-  never writes.
+  chain of `order_by()` or `limit()` alone (`Invoice::order_by('id')->delete()` deletes every row on MySQL, MariaDB and
+  Postgres, where SQLite refuses an `ORDER BY` without a `LIMIT` on a write; `Invoice::limit(2)->delete()` deletes two).
+  The static forwarding refuses `update` and `delete`, so a bare `Invoice::update([...])` never writes.
 - **A write whose where calls all came out empty is refused**: `where([])`, an empty closure group or `where_null([])` mean
   a filter that came out empty, and it must not write every row. A `when()` or `unless()` that ran neither its callback
   nor a default is refused the same way: with `$ids = []`,
-  `Invoice::when($ids, fn(ActiveRecord\Query $query, array $ids) => $query->where_key($ids))->delete()` is refused. Reads
+  `Invoice::when($ids, fn(ActiveRecord\Query $query, array $ids) => $query->where_key($ids))->delete()` is refused, and
+  `insert()` and `upsert()`, which take no clause, refuse it too, naming the `when()` or `unless()`. Reads
   are unchanged (`where([])->get()` returns every row), and so is a write with no where call at all. A negation of an empty list is not empty but "all except none" (see
   [Conditions](#conditions)): `where_not_in('id', [])`, `where_key_not([])` and `where_not(['id' => []])` match every row,
   and a write with them touches every row, by design.
@@ -772,7 +806,8 @@ Code ported from the Laravel documentation works by changing the method case, ex
   returns 0 with an offset.
 - **Aggregates are exact** and normalized by column type (`avg` is an exact string), where Laravel returns the driver's
   value (or 0) with no cast. **`sum`, `min`, `max` and `avg` of a grouped, distinct or windowed query aggregate its result
-  rows**, where Eloquent ignores the `limit`, and a grouped aggregate of an ungrouped column is refused at the call. After
+  rows**, where Eloquent ignores the `limit`, and a grouped aggregate of an ungrouped column is refused at the call, as is
+  a distinct one in a window ordered by another column. After
   `distinct()` with a select of the query's own they aggregate the distinct rows it selects, where Eloquent aggregates the
   column's distinct values (with no select of its own, both do).
 - **`exists()` selects `1`**, so an aggregate select cannot make it true when no row matches. Eloquent keeps the select,
@@ -787,6 +822,8 @@ Code ported from the Laravel documentation works by changing the method case, ex
 - **A static `update` or `delete` is refused**, a write takes only a where, `order_by()` and `limit()`, and a write whose
   where calls all came out empty, or whose `when()` or `unless()` skipped its callback, is refused, where Eloquent writes
   every row (see [Writing](#writing)).
+- **SQL written by hand that holds a statement terminator is refused** at the call (a `;` outside its strings and
+  comments, see [Conditions](#conditions)), where Eloquent sends it.
 - The exceptions are this library's: `RecordNotFound` for `first_or_fail()`, `find_or_fail()` and `sole()` (Eloquent's
   `ModelNotFoundException`) and `MultipleRecordsFound` for `sole()`. The terminals return arrays, where Eloquent returns
   Collections.
