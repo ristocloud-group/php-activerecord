@@ -611,6 +611,31 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(['created_at' => null, 'updated_at' => self::GIVEN], $this->stamps_of('Quoted'));
     }
 
+    // A key qualified with the model's table is its column too: updated_at is assigned once, the value
+    // given, which is the statement master sent. MySQL and MariaDB write a qualified column of a SET;
+    // Postgres and SQLite refuse one, as they always did
+    public function test_update_all_keeps_an_updated_at_given_qualified_with_its_table(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        Author::table();
+        $q = $this->conn->quote_name(...);
+        $key = $q('authors') . '.' . $q('updated_at');
+
+        $statements = GoldenStatements::capture(fn() => Author::update_all(['set' => ['name' => 'Qualified', $key => self::GIVEN], 'conditions' => ['author_id' => 1]]));
+
+        $this->assert_same(
+            ['sql' => sprintf('UPDATE %s SET %s=?, %s=? WHERE %s=?', $q('authors'), $q('name'), $key, $q('author_id')), 'values' => ['Qualified', self::GIVEN, 1]],
+            $statements[0]
+        );
+
+        if ($this->conn instanceof ActiveRecord\MysqlAdapter) {
+            $this->assert_count(1, $statements);
+            $this->assert_same(['created_at' => null, 'updated_at' => self::GIVEN], $this->stamps_of('Qualified'));
+        } else {
+            $this->assert_same(ActiveRecord\DatabaseException::class, $statements[1]['exception'] ?? null);
+        }
+    }
+
     // The same rule for a row Table::insert() writes, which MySQL refused for naming the column twice
     // (1110): the value given is kept, and only created_at is added
     public function test_a_direct_insert_keeps_an_updated_at_given_in_another_case(): void
@@ -627,6 +652,31 @@ class QueryEngineTest extends DatabaseTest
             $insert();
             $this->assert_sql_has('INSERT INTO authors(name,UPDATED_AT,created_at) VALUES(?,?,?)', Author::table()->last_sql);
             $this->assert_same(['created_at' => self::FROZEN, 'updated_at' => self::GIVEN], $this->stamps_of('Cased'));
+        }
+    }
+
+    // And for a created_at qualified with the model's table: it is kept, and only updated_at is added.
+    // Postgres and SQLite refuse a qualified column in an INSERT, as they always did
+    public function test_a_direct_insert_keeps_a_created_at_given_qualified_with_its_table(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        Author::table();
+        $q = $this->conn->quote_name(...);
+        $key = $q('authors') . '.' . $q('created_at');
+        $data = ['name' => 'Qualified', $key => self::GIVEN];
+
+        $statements = GoldenStatements::capture(fn() => Author::table()->insert($data));
+
+        $this->assert_same(
+            ['sql' => sprintf('INSERT INTO %s(%s,%s,%s) VALUES(?,?,?)', $q('authors'), $q('name'), $key, $q('updated_at')), 'values' => ['Qualified', self::GIVEN, self::FROZEN]],
+            $statements[0]
+        );
+
+        if ($this->conn instanceof ActiveRecord\MysqlAdapter) {
+            $this->assert_count(1, $statements);
+            $this->assert_same(['created_at' => self::GIVEN, 'updated_at' => self::FROZEN], $this->stamps_of('Qualified'));
+        } else {
+            $this->assert_same(ActiveRecord\DatabaseException::class, $statements[1]['exception'] ?? null);
         }
     }
 

@@ -120,9 +120,9 @@ final class Timestamps
      * included. A suspended class, and a table without the column, get nothing.
      *
      * The keys of the row are column names or attribute names; a column name is read as the
-     * database reads it, regardless of case where it matches names that way, or pre-quoted. The
-     * rest of the row is returned as it was, and a column added is named by its own name (see
-     * columns()).
+     * database reads it, regardless of case where it matches names that way, pre-quoted, or
+     * qualified with the table's name (`authors`.`created_at`). The rest of the row is returned
+     * as it was, and a column added is named by its own name (see columns()).
      *
      * A statement of several rows reads the clock once and gives that time as $now to each of them,
      * so that they do not straddle a second: without $now, every call reads now() itself.
@@ -180,15 +180,16 @@ final class Timestamps
         // to a column that differs from it by case only ('updated_at' to 'UPDATED_AT'): the inflected
         // name finds that column. A key also names a column as the database reads it, regardless of
         // case there and pre-quoted by its text ('UPDATED_AT' and '`updated_at`' are the column
-        // updated_at on MySQL, see Connection::column_reference_key()). A column the data has must not
-        // be added again: MySQL refuses an INSERT that names a column twice, Postgres an UPDATE that
-        // assigns one twice, and where an UPDATE does it the later value overwrites the one given.
+        // updated_at on MySQL, see Connection::column_reference_key()), and qualified with the table's
+        // own name (see own_column()). A column the data has must not be added again: MySQL refuses an
+        // INSERT that names a column twice, Postgres an UPDATE that assigns one twice, and where an
+        // UPDATE does it the later value overwrites the one given.
         if ([] !== $missing) {
             $connection = $table->connection();
             $given = [];
 
             foreach (array_keys($data) as $key) {
-                $key = (string) $key;
+                $key = self::own_column($table, $connection, (string) $key);
                 $column = $table->columns[$table->real_column_name($key)] ?? $table->get_column_by_inflected_name($key);
 
                 if (null !== $column) {
@@ -214,5 +215,30 @@ final class Timestamps
         }
 
         return $data;
+    }
+
+    /**
+     * $key without the name of $table before it: a key of two parts whose first is the table's name, quoted
+     * or not (`authors`.`updated_at`, authors.updated_at, "authors"."updated_at" on Postgres, see
+     * Connection::split_name_parts()), names the column of its second part, which is returned as written. Any
+     * other key is returned as it is: one qualified with another table names no column of $table.
+     */
+    private static function own_column(Table $table, Connection $connection, string $key): string
+    {
+        $q = $connection::$QUOTE_CHARACTER;
+        $parts = str_contains($key, '.') ? Connection::split_name_parts($key, $q) : null;
+
+        if (null === $parts || 2 !== count($parts)) {
+            return $key;
+        }
+
+        [[$qualifier, $quoted], [$column]] = $parts;
+
+        if ($quoted) {
+            // `a``b` is the name a`b
+            $qualifier = str_replace($q . $q, $q, substr($qualifier, 1, -1));
+        }
+
+        return $qualifier === $table->table ? $column : $key;
     }
 }

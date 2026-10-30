@@ -1169,8 +1169,9 @@ class Model
      * </code>
      *
      * A 'set' hash also sets updated_at to the current time when the table has that column and the
-     * hash gives it no value; without_timestamps() suspends that. A 'set' string is sent as it is
-     * written, and sets nothing more.
+     * hash gives it no value (a key gives it one by the column's name or attribute name, pre-quoted
+     * or qualified with the model's table too); without_timestamps() suspends that. A 'set' string
+     * is sent as it is written, and sets nothing more.
      *
      * An options array takes the following parameters:
      *

@@ -456,6 +456,36 @@ class TimestampsTest extends DatabaseTest
         $this->assert_same(['name' => 'x', 'UPDATED_AT' => self::FROZEN], Timestamps::apply_to_update($table, OddTimestamp::class, ['name' => 'x']));
     }
 
+    // A key qualified with the table's own name is the column of its other part, quoted or not: the
+    // timestamp it gives is kept, and not added again. A key qualified with another table is not a
+    // column of this one
+    public function test_a_key_qualified_with_the_table_names_its_column(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        $table = Author::table();
+        $q = $this->conn->quote_name(...);
+
+        foreach ([$q('authors') . '.' . $q('updated_at'), 'authors.updated_at', 'authors.' . $q('updated_at')] as $key) {
+            $this->assert_same(['name' => 'x', $key => self::GIVEN], Timestamps::apply_to_update($table, Author::class, ['name' => 'x', $key => self::GIVEN]), $key);
+        }
+
+        foreach ([$q('authors') . '.' . $q('created_at'), 'authors.created_at'] as $key) {
+            $this->assert_same(
+                ['name' => 'x', $key => self::GIVEN, 'updated_at' => self::FROZEN],
+                Timestamps::apply_to_insert($table, Author::class, ['name' => 'x', $key => self::GIVEN]),
+                $key
+            );
+        }
+
+        foreach ([$q('books') . '.' . $q('updated_at'), 'books.updated_at'] as $key) {
+            $this->assert_same(
+                ['name' => 'x', $key => self::GIVEN, 'updated_at' => self::FROZEN],
+                Timestamps::apply_to_update($table, Author::class, ['name' => 'x', $key => self::GIVEN]),
+                $key
+            );
+        }
+    }
+
     public function test_apply_to_update_gives_a_set_the_database_takes(): void
     {
         $table = OddTimestamp::table();
