@@ -693,6 +693,20 @@ class QueryEngineTest extends DatabaseTest
         }
     }
 
+    // Empty conditions are no WHERE, and raise no error at all: the engine reads them with is_hash(), which raised an
+    // "Undefined array key 0" warning under @ for [], which an error handler is called for all the same (strict_call()'s,
+    // or one that logs every error). The finders and delete_all() raised it on master too, and update_all() since it
+    // runs through the engine
+    public function test_empty_conditions_raise_no_error(): void
+    {
+        $this->assert_same(4, count($this->strict_call(fn() => Author::all(['conditions' => []]))));
+        $this->assert_same(4, (int) $this->strict_call(fn() => Author::count(['conditions' => []])));
+        $this->assert_true($this->strict_call(fn() => Author::exists(['conditions' => []])));
+        $this->assert_same(4, $this->strict_call(fn() => Author::update_all(['set' => ['name' => 'Every'], 'conditions' => []])));
+        $this->assert_same(4, $this->strict_call(fn() => Author::delete_all(['conditions' => []])));
+        $this->assert_same(0, (int) Author::count());
+    }
+
     // Spec §6.2.5: an empty set is refused before any SQL. The updated_at of the rule must not make a
     // SET of it, which would write every row
     public function test_update_all_with_an_empty_set_sends_no_statement(): void
