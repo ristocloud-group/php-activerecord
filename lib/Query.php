@@ -1514,8 +1514,9 @@ class Query
      * hands back another query on the model, as in Eloquent, which is then the query that goes on, a fork for
      * instance (see clone()). Anything else that the callback returns is of no use to the chain, and is left out.
      *
-     * When neither the callback nor a default runs, the filter came out empty: an update() or a delete() of the query
-     * with no other where condition is refused, as after where([]), where Eloquent writes every row. A read is
+     * When neither the callback nor a default runs, the filter came out empty, and the writes refuse it: an update() or
+     * a delete() of the query with no other where condition, as after where([]), where Eloquent writes every row, and
+     * an insert() or an upsert(), which take no clause, with a message that names the when() or unless(). A read is
      * unchanged, and a write of every row says so with new_query(): Author::new_query()->delete().
      *
      * <code>
@@ -2079,8 +2080,9 @@ class Query
      * it then, and the caller commits or rolls them back. They run on the connection of the model's Table, not on the
      * one a subclass's connection() returns, and the last one is left in Table::$last_sql.
      *
-     * An insert takes no clause of the query, and refuses any (spec §5.5). It is not forwarded statically: Author::insert()
-     * is no call of the builder, Author::new_query()->insert() is.
+     * An insert takes no clause of the query, and refuses any (spec §5.5), a when() or an unless() that skipped its
+     * callback included, which the refusal names. It is not forwarded statically: Author::insert() is no call of the
+     * builder, Author::new_query()->insert() is.
      *
      * <code>
      * Author::new_query()->insert([['name' => 'Tito'], ['name' => 'Bob']]);
@@ -2353,8 +2355,9 @@ class Query
      * It runs on the connection of the Table, as Table::upsert() always did, and never calls
      * Model::connection(), the hook a subclass can override and update_all() and delete_all() take
      * theirs from. The last statement it sent is left in Table::$last_sql. An upsert takes the rows to
-     * write and no clause of the query: a query that holds one (a where, an order, a join...) is refused
-     * (spec §5.5), as Model::upsert() and Table::upsert() never hold one.
+     * write and no clause of the query: a query that holds one (a where, an order, a join, a when() or
+     * an unless() that skipped its callback...) is refused (spec §5.5), as Model::upsert() and
+     * Table::upsert() never hold one.
      *
      * @param list<array<string, mixed>> $values
      * @param string|list<string> $unique_by
@@ -3104,8 +3107,9 @@ class Query
     /**
      * What when() and unless() do: the callback runs when the truth of $value is $when (true for when(), false for
      * unless()), else the default does, if there is one. A Closure given as the value is called with the query, and
-     * what it returns is the value. When neither runs, the query remembers it as it remembers a where call that added
-     * no condition (QueryState::$empty_where): the filter came out empty, and a write with no other condition is refused.
+     * what it returns is the value. When neither runs, the query remembers it (QueryState::$skipped_when): the filter
+     * came out empty, and the writes refuse it, an update() or a delete() with no other condition as after a where call
+     * that added none, an insert() or an upsert() as a clause.
      *
      * @param callable(static, mixed): mixed $callback
      * @param (callable(static, mixed): mixed)|null $default
@@ -3117,7 +3121,7 @@ class Query
         $run = $when === (bool) $value ? $callback : $default;
 
         if (null === $run) {
-            $this->state->empty_where = true;
+            $this->state->skipped_when = true;
 
             return $this;
         }
@@ -3214,9 +3218,10 @@ class Query
         $query->table = $this->table;
         $callback($query);
 
-        // a where call that added no condition is a where clause too: the group holds what the others added, and is
-        // left out without any, which the query it goes in remembers (see add_wheres())
-        $held = QueryCompiler::held_fields($query->state, ['wheres', 'empty_where']);
+        // a where call that added no condition, and a when() or an unless() that skipped its callback, are where clauses
+        // too: the group holds what the others added, and is left out without any, which the query it goes in
+        // remembers (see add_wheres())
+        $held = QueryCompiler::held_fields($query->state, ['wheres', 'empty_where', 'skipped_when']);
 
         if ([] !== $held) {
             throw new ActiveRecordException(sprintf('A where() group can only hold where clauses: the one given to %s() on %s also holds %s', $method, $this->model_class, implode(', ', $held)));

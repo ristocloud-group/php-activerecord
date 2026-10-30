@@ -382,6 +382,35 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same([2, 3, 4], array_keys($this->names_by_id()));
     }
 
+    // An insert() and an upsert() take no clause, and refuse a when() or an unless() that skipped its callback as they
+    // refuse where([]) (see test_insert_and_upsert_refuse_every_clause()), with a message that names the when() or unless(),
+    // not a where the caller never wrote. One whose callback ran and added nothing leaves no clause
+    public function test_insert_and_upsert_refuse_a_when_or_unless_that_skipped_its_callback(): void
+    {
+        $by_ids = fn(Query $query, mixed $ids): Query => $query->where_key($ids);
+        $skipped = 'a when() or unless() that skipped its callback';
+
+        foreach ([
+            'when([])' => fn() => Author::when([], $by_ids),
+            'unless(true)' => fn() => Author::unless(true, fn(Query $q) => $q->where('author_id', 1)),
+            'a clone' => fn() => Author::when(false, $by_ids)->clone(),
+        ] as $name => $query) {
+            $this->assert_same([ActiveRecordException::class, "insert() cannot use $skipped, on Author: it takes no clause"], $this->thrown(fn() => $query()->insert(['name' => 'x'])), "insert() after $name");
+            $this->assert_same([ActiveRecordException::class, "upsert() cannot use $skipped, on Author: it takes no clause"], $this->thrown(fn() => $query()->upsert([['author_id' => 1, 'name' => 'x']], 'author_id')), "upsert() after $name");
+        }
+
+        // beside an empty where call, both; beside a where, the where too
+        $this->assert_same([ActiveRecordException::class, "insert() cannot use where or $skipped, on Author: it takes no clause"], $this->thrown(fn() => Author::where([])->when(false, $by_ids)->insert(['name' => 'x'])));
+        $this->assert_same([ActiveRecordException::class, "upsert() cannot use where or $skipped, on Author: it takes no clause"], $this->thrown(fn() => Author::when(false, $by_ids)->where('author_id', 1)->upsert([['author_id' => 1, 'name' => 'x']], 'author_id')));
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        // a callback that ran and added nothing, and a default that ran, leave no clause (the upsert of a new id 9 first:
+        // MySQL's counter, which the fixtures do not reset, could give that id to the insert)
+        $this->assert_same(1, Author::when(false, $by_ids, fn(Query $q) => $q)->upsert([['author_id' => 9, 'name' => 'Upserted']], 'author_id'));
+        $this->assert_true(Author::when(true, fn(Query $q) => $q)->insert(['name' => 'Ran']));
+        $this->assert_same(['Ran', 'Upserted'], array_map(fn(Author $author): string => $author->name, Author::all(['conditions' => ['name' => ['Ran', 'Upserted']], 'order' => 'name'])));
+    }
+
     // The where of a write names its columns by the rule of every clause (spec §5.1): an alias and an attribute name
     // are the columns they stand for (#92, #144). So do the keys of the values (spec §5.5, see
     // test_the_keys_of_the_values_read_aliases()), and a DateTime is bound in the format of its column: a DATE as a date

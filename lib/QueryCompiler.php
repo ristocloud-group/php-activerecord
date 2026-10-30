@@ -22,12 +22,12 @@ final class QueryCompiler
     /**
      * The fields of a state that an UPDATE and a DELETE compile (see apply_write_clauses()): the legacy options of the
      * legacy writes, or the where, the order and the limit of the builder, which pick the rows they write (a where call
-     * that added no condition among them, see refuse_empty_where()). Every other field is refused (see
-     * refuse_unwritable_clauses()).
+     * that added no condition among them, and a when() or an unless() that skipped its callback, see
+     * refuse_empty_where()). Every other field is refused (see refuse_unwritable_clauses()).
      *
      * @var list<string>
      */
-    private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'empty_where', 'orders', 'limit'];
+    private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'empty_where', 'skipped_when', 'orders', 'limit'];
 
     /**
      * The name a refusal gives a field of a state, where it is not the field's own: the builder method, or the family
@@ -42,6 +42,7 @@ final class QueryCompiler
         'from_bindings' => 'from_raw',
         'wheres' => 'where',
         'empty_where' => 'where',
+        'skipped_when' => 'a when() or unless() that skipped its callback',
         'groups' => 'group_by',
         'havings' => 'having',
         'orders' => 'order_by',
@@ -429,7 +430,8 @@ final class QueryCompiler
      * reads, or every row. A clause is a field of the state, other than those of $writable, that is not as in a new state,
      * so a clause undone (readonly(false), distinct(false)) is none, and a field that QueryState gains later is refused
      * until a write compiles it. An UPDATE and a DELETE take the where, the order and the limit (see compile_update() and
-     * compile_delete()); an INSERT and an UPSERT, which write the rows they are given, take none.
+     * compile_delete()); an INSERT and an UPSERT, which write the rows they are given, take none, and name a when() or an
+     * unless() that skipped its callback as such, not as a where the caller never wrote.
      *
      * @internal Serves Query; not a supported API.
      * @param list<string> $writable The fields of the state that the statement of $method compiles
@@ -449,7 +451,8 @@ final class QueryCompiler
 
         $takes = [];
 
-        foreach (array_diff($writable, ['legacy']) as $field) {
+        // the legacy options and a skipped when() are no clause a write takes: the where stands for it
+        foreach (array_diff($writable, ['legacy', 'skipped_when']) as $field) {
             $takes[self::CLAUSE_NAMES[$field] ?? $field] = true;
         }
 
@@ -1286,16 +1289,16 @@ final class QueryCompiler
     /**
      * Refuses the write $method of a state whose where calls all added no condition (see QueryState::$empty_where):
      * where([]), a closure that adds none, where_null([]), or a when() or an unless() that ran neither its callback nor a
-     * default. Its WHERE is empty, so it would write every row, where the calls meant it to write by conditions, those of
-     * a filter that came empty for instance: where($filters) with no filter, when($ids, ...) with no id. A write of every
-     * row calls no where method, Author::new_query()->delete(), and a read of such a query is that of every row, as spec
-     * §5.2 has it.
+     * default (QueryState::$skipped_when). Its WHERE is empty, so it would write every row, where the calls meant it to
+     * write by conditions, those of a filter that came empty for instance: where($filters) with no filter, when($ids, ...)
+     * with no id. A write of every row calls no where method, Author::new_query()->delete(), and a read of such a query
+     * is that of every row, as spec §5.2 has it.
      *
      * @throws ActiveRecordException
      */
     private function refuse_empty_where(QueryState $state, string $method): void
     {
-        if ($state->empty_where && [] === $state->wheres) {
+        if (($state->empty_where || $state->skipped_when) && [] === $state->wheres) {
             $model = $this->table->class->name;
 
             throw new ActiveRecordException(sprintf(
