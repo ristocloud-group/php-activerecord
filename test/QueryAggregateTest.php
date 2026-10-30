@@ -350,6 +350,50 @@ class QueryAggregateTest extends DatabaseTest
         );
     }
 
+    // With distinct() and no select of the query's own, the aggregate of a column runs over the column's distinct values:
+    // the subquery selects DISTINCT that column, where it selected DISTINCT *, every row, which a primary key keeps apart.
+    // So sum() and avg() are Eloquent's SUM(DISTINCT col) and AVG(DISTINCT col), avg exact at the SUM's scale plus 4 as
+    // always, and count() of the column its COUNT(DISTINCT col); min() and max() are the same either way, and count() of the
+    // rows is unchanged. A window stays on the subquery, where it picks values, and a select of the query's own is
+    // aggregated as before, over the distinct rows it gives
+    public function test_a_distinct_aggregate_of_a_column_runs_over_its_distinct_values(): void
+    {
+        Measurement::table();
+        $this->third_row();
+
+        // qty: 1, 2, 2
+        $this->assert_same(3, Measurement::distinct()->sum('qty'));
+        $this->assert_same('1.5000', Measurement::distinct()->avg('qty'));
+        $this->assert_same('1.5000', Measurement::distinct()->average('qty'));
+        $this->assert_same(1, Measurement::distinct()->min('qty'));
+        $this->assert_same(2, Measurement::distinct()->max('qty'));
+        $this->assert_same(2, Measurement::distinct()->count('qty'));
+        $this->assert_same(3, Measurement::distinct()->count());
+        $this->assert_same([5, '1.6667'], [Measurement::new_query()->sum('qty'), Measurement::new_query()->avg('qty')]);
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`qty`), COUNT(t.`qty`) FROM (SELECT DISTINCT `qty` FROM `measurements`) AS t')],
+            $this->statements(fn() => Measurement::distinct()->avg('qty'))
+        );
+        $this->assert_same(
+            [$this->sql('SELECT MAX(t.`qty`) FROM (SELECT DISTINCT `qty` FROM `measurements`) AS t')],
+            $this->statements(fn() => Measurement::distinct()->max('qty'))
+        );
+
+        // a qualified name (the driver's value, which no model column reads: a string on MySQL and MariaDB), a where, a window
+        $this->assert_same(3, (int) Measurement::distinct()->sum('measurements.qty'));
+        $this->assert_same(2, Measurement::distinct()->where('id', '>', 1)->sum('qty'));
+        $this->assert_same(1, Measurement::distinct()->order_by('qty')->limit(1)->sum('qty'));
+
+        // an alias attribute: score is rating, 5, 3 and 4, and 3 again
+        AliasedBookReview::create(['book_id' => 2, 'rating' => 3]);
+        $this->assert_same(12, AliasedBookReview::distinct()->sum('score'));
+        $this->assert_same('4.0000', AliasedBookReview::distinct()->avg('score'));
+        $this->assert_same(15, AliasedBookReview::new_query()->sum('score'));
+
+        // a select of its own: the distinct rows of qty and label are the three rows
+        $this->assert_same(5, Measurement::distinct()->select('qty', 'label')->sum('qty'));
+    }
+
     // MariaDB (in its default mode) and SQLite run an aggregate of a column that the GROUP BY does not group, and read it from
     // an arbitrary row of each group: parent 2 has the authors 2 and 4, so the MAX of author_id is 3 where it is 4, and the SUM
     // is 6 where it is 10. MySQL (1055) and Postgres (42803) refuse the statement, unless the groups are the whole primary key

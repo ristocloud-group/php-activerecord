@@ -280,7 +280,9 @@ class Query
     }
 
     /**
-     * Selects each row once (SELECT DISTINCT), or with false every row again.
+     * Selects each row once (SELECT DISTINCT), or with false every row again. With no select of the query's own, a
+     * count() or another aggregate of a column runs over that column's distinct values, as Eloquent's distinct() does
+     * (see min()).
      *
      * @return $this
      */
@@ -1894,7 +1896,10 @@ class Query
      *
      * The aggregate is that of the rows of the result, as count() counts them: a query that is grouped, distinct or
      * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
-     * query's select, so a select of its own must hold it. The statement that ran is left in Table::$last_sql.
+     * query's select, so a select of its own must hold it. A distinct query with no select of its own selects the
+     * column alone, so its aggregate runs over the column's distinct values: Eloquent's SUM(DISTINCT col) and
+     * AVG(DISTINCT col) for sum() and avg(), where min() and max() are the same either way. The statement that ran is
+     * left in Table::$last_sql.
      *
      * The column of a grouped query must be one of its groups, unless the groups are the whole primary key of the model
      * (each group is then one row of the table, and any column may be aggregated). min(), max(), sum() and avg() refuse
@@ -1936,7 +1941,8 @@ class Query
      * while the sum fits PHP_INT_MIN to PHP_INT_MAX and else its exact digits, which MySQL, MariaDB and Postgres sum into
      * a wider number; a DECIMAL as the exact string, its scale kept; a float for a float column. NULLs are not summed, and
      * the sum of no value is 0 of that type: 0, '0' or 0.0. A column that is no column of the model gives the driver's
-     * value, which is null for no row.
+     * value, which is null for no row. After distinct(), with no select of the query's own, it sums the column's distinct
+     * values (see min()).
      *
      * SQLite has no exact decimal (it stores a DECIMAL as a REAL), so there the sum of a DECIMAL column is a float, and a
      * sum of integers beyond PHP_INT_MAX is SQLite's own "integer overflow" error, a DatabaseException. On a grouped query
@@ -1961,7 +1967,8 @@ class Query
      * '1.6667' for the INT column of qty 1, 2, 2, and '617283945061.730000' for a DECIMAL(20,2). So it is the same on every
      * database, and exact beyond what a float keeps, where the databases' own AVG differ in scale and type (see
      * ExactDecimal). The average of a float column is the database's own, as a float. A column that is no column of
-     * the model gives the driver's AVG as it is.
+     * the model gives the driver's AVG as it is. After distinct(), with no select of the query's own, it averages the
+     * column's distinct values: '1.5000' for qty 1, 2, 2 (see min()).
      *
      * SQLite has no exact decimal, so there the average of a DECIMAL column is a float.
      *
