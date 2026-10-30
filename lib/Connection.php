@@ -775,8 +775,9 @@ abstract class Connection
      * For an adapter without LIMIT/ORDER BY on UPDATE and DELETE (see
      * accepts_limit_and_order_for_update_and_delete()): a WHERE condition that keeps the
      * statement to the first $limit rows in $order, which replaces the statement's own
-     * WHERE. Null by default: the statement is built without the limit and the order, as
-     * it always has been (#92).
+     * WHERE. Null by default: SQLBuilder then refuses the limited statement (an
+     * ActiveRecordException), which it could only build without the limit, writing every
+     * row it matches. An order without a limit is left out, as it always has been (#92).
      *
      * @internal Serves SQLBuilder; not a supported API.
      * @param string $table The table as the statement names it (already quoted)

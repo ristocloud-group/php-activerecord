@@ -967,6 +967,51 @@ class QueryEngineTest extends DatabaseTest
         }
     }
 
+    // A limited UPDATE or DELETE is refused, before any SQL, on an adapter that can keep it to its limit
+    // neither way, with no LIMIT on UPDATE and DELETE and no limited_rows_condition(): sent without the
+    // limit it would write every row it matches. An order without a limit is left out, as it always was:
+    // it cannot widen a write. No adapter of the library is one: MySQL, MariaDB and SQLite take the LIMIT,
+    // and Postgres has the condition
+    public function test_a_write_limit_the_adapter_cannot_apply_is_refused(): void
+    {
+        $table = new Table('Author');
+        $table->conn = new class extends ActiveRecord\Connection {
+            // no database: the statements are refused, or only rendered
+            public function __construct() {}
+
+            public function limit($sql, $offset, $limit)
+            {
+                return "$sql LIMIT $limit";
+            }
+
+            public function query_column_info($table)
+            {
+                throw new LogicException('not read');
+            }
+
+            public function query_for_tables()
+            {
+                throw new LogicException('not read');
+            }
+
+            public function set_encoding($charset) {}
+
+            public function native_database_types()
+            {
+                return [];
+            }
+        };
+        $refused = 'cannot apply the limit of an UPDATE or a DELETE';
+
+        $this->assert_exception_message_contains($refused, fn() => Query::from_options($table, ['conditions' => ['author_id' => 1], 'limit' => 1])->execute_delete(), ActiveRecord\ActiveRecordException::class);
+        $this->assert_exception_message_contains($refused, fn() => Query::from_options($table, ['order' => 'name', 'limit' => 0])->execute_update(['name' => 'X']), ActiveRecord\ActiveRecordException::class);
+        $this->assert_exception_message_contains('ActiveRecord\Connection@anonymous', fn() => Query::from_options($table, ['limit' => 1])->execute_delete(), ActiveRecord\ActiveRecordException::class);
+
+        $state = Query::from_options($table, ['conditions' => ['author_id' => 1], 'order' => 'name'])->state();
+        $this->assert_same('DELETE FROM `authors` WHERE `author_id`=?', (new ActiveRecord\QueryCompiler($table))->compile_delete($state)->to_s());
+        $this->assert_same('UPDATE `authors` SET `name`=? WHERE `author_id`=?', (new ActiveRecord\QueryCompiler($table))->compile_update($state, ['name' => 'X'])->to_s());
+    }
+
     // -- upsert()
 
     // The legacy entry and the engine's terminal send the same statement with the same binds, and the rows land

@@ -881,7 +881,11 @@ class SQLBuilder
      * Where the adapter has no LIMIT/ORDER BY on UPDATE and DELETE, the WHERE of a limited
      * one: the adapter's condition picking the rows, with the statement's own WHERE inside
      * it, so the bind values keep their order (#92). Null when there is no limit (an order
-     * alone is left out, as before) or the adapter offers no such condition.
+     * alone is left out, as before: it cannot widen the statement).
+     *
+     * @throws ActiveRecordException for a limit the adapter can apply neither way, with no
+     *   LIMIT on UPDATE and DELETE and no such condition: without it the statement would write
+     *   every row it matches
      */
     private function limited_rows_condition(): ?string
     {
@@ -895,7 +899,10 @@ class SQLBuilder
             $this->order ?: null,
             $this->limit,
             array_map($this->connection->quote_name(...), $this->key_columns),
-        );
+        ) ?? throw new ActiveRecordException(sprintf(
+            '%s cannot apply the limit of an UPDATE or a DELETE: it has no LIMIT on them and no limited_rows_condition(), and the statement would write every row it matches without it, so it is not built',
+            $this->connection::class,
+        ));
     }
 
     /**
