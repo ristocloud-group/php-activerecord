@@ -26,7 +26,10 @@ class GoldenSqlTest extends DatabaseTest
      *
      * @var list<class-string<ActiveRecord\Model>>
      */
-    private const array MODELS = [Author::class, Book::class, Venue::class, Host::class, Event::class, OddColumn::class, DatedCount::class, BigId::class];
+    private const array MODELS = [
+        Author::class, Book::class, Venue::class, Host::class, Event::class, OddColumn::class, DatedCount::class, BigId::class,
+        QualifiedConditionBook::class, ThroughFkAuthor::class, ThroughFkBook::class, AwesomePerson::class, MusicVenue::class,
+    ];
 
     public function set_up($connection_name = null)
     {
@@ -75,6 +78,18 @@ class GoldenSqlTest extends DatabaseTest
         });
 
         $this->assert_same([['exception' => ActiveRecord\DatabaseException::class, 'message' => 'PDOException: SQLSTATE[42S22]: Column not found']], $statements);
+    }
+
+    // The entries of the golden file of the connection are the cases of the corpus that run on it, and only them: an entry
+    // whose case was renamed or removed would stay, and pin nothing
+    public function test_the_golden_entries_are_the_cases_of_the_corpus(): void
+    {
+        $cases = array_keys(self::cases());
+        $entries = array_keys(GoldenStatements::load(self::connection_under_test()));
+        sort($cases);
+        sort($entries);
+
+        $this->assert_same($cases, $entries);
     }
 
     /**
@@ -148,7 +163,8 @@ class GoldenSqlTest extends DatabaseTest
             'find_pk_list' => [fn() => Author::find(1, 2), null],
             'find_pk_with_conditions' => [fn() => Author::find(1, ['conditions' => ['name' => 'Tito']]), null],
             'find_pk_with_alias_conditions' => [fn() => Venue::find(1, ['conditions' => ['marquee' => 'Blender Theater at Gramercy']]), null],
-            // RecordNotFound: recorded as the exception (Postgres refuses 'abc' for an INTEGER pk before any SQL)
+            // RecordNotFound: recorded as the exception (on Postgres, where 'abc' can never equal an INTEGER pk, the
+            // library sends no statement for it, #92)
             'find_pk_non_integer' => [fn() => Author::find('abc'), null],
 
             // first, last, all
@@ -197,7 +213,7 @@ class GoldenSqlTest extends DatabaseTest
             'count_pks' => [fn() => Author::count(1, 2), null],
             'count_bare_hash' => [fn() => Author::count(['name' => 'Tito']), null],
             'count_group' => [fn() => Author::count(['group' => 'parent_author_id']), null],
-            // fail on master: only find() resolves an alias (change in Task 4)
+            // failed on master, where only find() resolved an alias: they resolve it since spec §6.2.1
             'count_alias_hash' => [fn() => Venue::count(['conditions' => ['marquee' => 'Warner Theatre']]), null],
             'exists_alias_hash' => [fn() => Venue::exists(['conditions' => ['marquee' => 'Warner Theatre']]), null],
             'exists_pk' => [fn() => Author::exists(1), null],
@@ -222,7 +238,8 @@ class GoldenSqlTest extends DatabaseTest
             'delete_all_string' => [fn() => Author::delete_all(['conditions' => 'author_id = 1']), null],
             'delete_all_limit_order' => [fn() => Author::delete_all(['conditions' => ['author_id > ?', 1], 'order' => 'author_id', 'limit' => 1]), null],
 
-            // writes of a model (Postgres reads the new pk back with RETURNING, #47)
+            // writes of a model (Postgres reads the new pk back with RETURNING, #47); the name binds as NEW, which
+            // Author::set_name() upper-cases
             'save_insert' => [fn() => Author::create(['name' => 'New']), null],
             'save_update' => [function (): void {
                 $author = Author::find(1);
@@ -237,6 +254,65 @@ class GoldenSqlTest extends DatabaseTest
                 Author::table()->insert($data);
             }, null],
             'upsert' => [fn() => Author::upsert([['author_id' => 1, 'name' => 'Up'], ['author_id' => 9, 'name' => 'New']], 'author_id', ['name']), null],
+
+            // Added by the final review, each verified to send the same SQL and binds on master (8c8e882) on the four
+            // adapters before it was recorded. Falsy conditions of the bulk writes: no WHERE, every row
+            'delete_all_falsy_conditions' => [function (): void {
+                foreach (['', '0', 0, false, [], null] as $conditions) {
+                    Author::delete_all(['conditions' => $conditions]);
+                }
+            }, null],
+            'update_all_falsy_conditions' => [function (): void {
+                foreach (['', '0', 0, false, [], null] as $conditions) {
+                    Author::update_all(['set' => "name = 'Z'", 'conditions' => $conditions]);
+                }
+            }, null],
+
+            // Table's own writes and exists, called directly: a string and a hash where; a positional where fails in
+            // SQLBuilder, as on master
+            'table_update_direct' => [function (): void {
+                $data = ['name' => 'String'];
+                Author::table()->update($data, 'author_id = 1');
+                $data = ['name' => 'Hash'];
+                Author::table()->update($data, ['author_id' => 3]);
+            }, null],
+            'table_update_direct_positional' => [function (): void {
+                $data = ['name' => 'Positional'];
+                Author::table()->update($data, ['author_id = ?', 2]);
+            }, null],
+            'table_delete_direct' => [function (): void {
+                Author::table()->delete(['author_id' => 3]);
+                DatedCount::table()->delete(['day' => '2026-01-02', 'at' => '2026-01-02 10:00:00']);
+            }, null],
+            'table_delete_direct_positional' => [fn() => Author::table()->delete(['author_id = ?', 2]), null],
+            'table_exists_direct' => [fn() => [
+                Author::table()->exists(['conditions' => 'author_id > 1']),
+                Author::table()->exists(['conditions' => ['author_id > ?', 1]]),
+                Author::table()->exists(['conditions' => ['name' => 'Tito'], 'order' => 'name', 'limit' => 1]),
+            ], null],
+
+            // a model whose primary key is two columns (day, at): its save() of a record read and its delete()
+            'save_update_composite_pk' => [function (): void {
+                $count = DatedCount::first(['order' => 'day']);
+                $count->hits = 99;
+                $count->save();
+            }, null],
+            'model_delete_composite_pk' => [fn() => DatedCount::first(['order' => 'day'])->delete(), null],
+
+            // joins with the from option, which qualifies every key with the from table; a find by pk with joins
+            'joins_from_hash' => [function (): void {
+                Book::all(['from' => 'books', 'joins' => ['author'], 'conditions' => ['name' => 'Ancient Art of Main Tanking']]);
+                Book::all(['from' => 'authors', 'joins' => 'INNER JOIN books ON(books.author_id = authors.author_id)', 'conditions' => ['parent_author_id' => 3]]);
+            }, null],
+            'find_pk_joins' => [fn() => Book::find(1, ['joins' => ['author'], 'conditions' => ['name' => 'Ancient Art of Main Tanking']]), null],
+
+            // relationships with declared conditions: a qualified key (#35), a has_one through by a reverse foreign key,
+            // and the eager load of a has_many
+            'lazy_belongs_to_qualified_conditions' => [fn() => QualifiedConditionBook::find(1)->author, null],
+            'include_belongs_to_qualified_conditions' => [fn() => QualifiedConditionBook::all(['include' => ['author']]), null],
+            'lazy_has_one_through_conditions' => [fn() => ThroughFkAuthor::find(1)->awesome_person, null],
+            'include_has_one_through_conditions' => [fn() => ThroughFkAuthor::all(['include' => ['awesome_person']]), null],
+            'include_has_many_conditions' => [fn() => MusicVenue::all(['include' => ['music_events']]), null],
 
             // BIGINT UNSIGNED beyond PHP_INT_MAX stays an exact string (#44): the INSERT and the find
             'find_bigint_beyond_int_max' => [function (): void {
