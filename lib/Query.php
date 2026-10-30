@@ -253,7 +253,9 @@ class Query
 
     /**
      * Selects an SQL expression besides what the query selects, sent as written, with the values of its
-     * bind markers. A select() replaces it, its values included.
+     * bind markers. A select() replaces it, its values included. SQL that holds -- or # is followed by a
+     * newline, so that a line comment at its end cannot run on over the rest of the statement (see
+     * QueryCompiler::raw_fragment()).
      *
      * <code>
      * Author::select('name')->select_raw('LENGTH(name) > ? AS long_name', [10])->get();
@@ -310,7 +312,8 @@ class Query
     /**
      * Reads the rows from a FROM written in SQL, a subquery for instance, sent as written, with the
      * values of its bind markers. It names its rows itself, so no column of the model gets a table then
-     * (see QueryCompiler::column()). It replaces a from().
+     * (see QueryCompiler::column()). It replaces a from(). SQL that holds -- or # is followed by a newline,
+     * as select_raw() says.
      *
      * <code>
      * Book::from_raw('(SELECT * FROM books WHERE book_id > ?) books', [10])->get();
@@ -434,7 +437,8 @@ class Query
      * beside it, with the values of its bind markers. As in a legacy positional condition, a value that
      * is a list is spread over its marker: where_raw('author_id IN(?)', [[1, 2]]) is author_id IN(?,?).
      * The condition "0" is sent too, in parentheses, and no row meets it on MySQL, MariaDB and SQLite (Postgres
-     * takes no integer for a condition, and refuses the statement).
+     * takes no integer for a condition, and refuses the statement). SQL that holds -- or # is followed by a
+     * newline, as select_raw() says.
      *
      * <code>
      * Author::where_raw('LENGTH(name) > ?', [3])->get();
@@ -895,8 +899,9 @@ class Query
     /**
      * Joins the relationships of the model named in $relationships_or_sql, a name or a list of them, each
      * with the INNER JOIN of the legacy 'joins' option, and sends the entries that hold "JOIN " as written,
-     * as that option does: hand-written JOIN fragments. When two relationships of one call join the same
-     * table, the second and later get their relationship's name as alias. See Table::create_joins().
+     * as that option does: hand-written JOIN fragments (one that holds -- or # followed by a newline, as
+     * select_raw() says). When two relationships of one call join the same table, the second and later get
+     * their relationship's name as alias. See Table::create_joins().
      *
      * Warning: an entry that holds "JOIN " (in any case) is sent to the database as raw SQL, and must never
      * come from user input. left_joins() takes relationship names only, and refuses a fragment.
@@ -1001,7 +1006,8 @@ class Query
     /**
      * Orders the rows by an SQL expression, sent as written, with the values of its bind markers, among the other
      * orders in the order of the calls. Unlike where_raw() and having_raw(), it does not spread a value that is a
-     * list over its marker, as select_raw() and from_raw() do not: write one marker for each value.
+     * list over its marker, as select_raw() and from_raw() do not: write one marker for each value. SQL that holds
+     * -- or # is followed by a newline, as select_raw() says.
      *
      * <code>
      * Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])->get();
@@ -1113,7 +1119,7 @@ class Query
     /**
      * Groups the rows by an SQL expression, sent as written, with the values of its bind markers, after the groups
      * the query already has. A value that is a list is not spread over its marker, as in order_by_raw(): write one
-     * marker for each value.
+     * marker for each value. SQL that holds -- or # is followed by a newline, as select_raw() says.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -1164,7 +1170,7 @@ class Query
      * Adds a condition written in SQL to the HAVING, ANDed, sent as written, in parentheses when another condition
      * is beside it, with the values of its bind markers. As in where_raw(), a value that is a list is spread over
      * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?), and the condition
-     * "0" is sent, in parentheses.
+     * "0" is sent, in parentheses. SQL that holds -- or # is followed by a newline, as select_raw() says.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();

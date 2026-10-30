@@ -86,7 +86,7 @@ final class ConditionCompiler
         return match ($where['type']) {
             'basic' => $this->comparison($where['column'], $where['operator'], $where['value']),
             'column' => [$this->column($where['first']) . " {$where['operator']} " . $this->column($where['second']), []],
-            'raw' => [$beside ? "({$where['sql']})" : $where['sql'], $where['bindings']],
+            'raw' => $this->raw($where['sql'], $where['bindings'], $beside),
             'in' => $this->in($where['column'], $where['values'], $where['not']),
             'null' => [$this->column($where['column']) . ($where['not'] ? ' IS NOT NULL' : ' IS NULL'), []],
             'between' => $this->between($where['column'], $where['values'][0], $where['values'][1], $where['not']),
@@ -189,6 +189,21 @@ final class ConditionCompiler
         $expressions = new Expressions($this->connection, [$column['sql'] => $value]);
 
         return [$expressions->to_s(), array_flatten($expressions->values())];
+    }
+
+    /**
+     * A condition written by hand (where_raw(), having_raw() and their or_ forms) and its values, as given, but for the
+     * newline that follows it when it holds a comment marker (see QueryCompiler::raw_fragment()); in parentheses when
+     * another condition is $beside it, so that an OR in it cannot escape the AND of its level.
+     *
+     * @param list<mixed> $bindings
+     * @return array{string, list<mixed>}
+     */
+    private function raw(string $sql, array $bindings, bool $beside): array
+    {
+        $sql = QueryCompiler::raw_fragment($sql);
+
+        return [$beside ? "($sql)" : $sql, $bindings];
     }
 
     /**

@@ -562,6 +562,45 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same(4, Author::count(['conditions' => '0']));
     }
 
+    // SQL written by hand that holds -- or # is followed by a newline in the statement, by every method that sends it
+    // as written: a line comment that ends it (# on MySQL and MariaDB) then ends there, and cannot swallow what the
+    // statement writes after it, the ORDER BY and the LIMIT, or the parenthesis around it. SQL without them is sent
+    // exactly as before
+    public function test_a_raw_fragment_that_can_hold_a_line_comment_is_followed_by_a_newline(): void
+    {
+        foreach (['-- c', '# c'] as $comment) {
+            $this->assert_same($this->sql("SELECT * FROM `authors` WHERE author_id > 0 $comment\n ORDER BY `author_id` ASC"), Author::where_raw("author_id > 0 $comment")->order_by('author_id')->to_sql());
+            $this->assert_same($this->sql("SELECT * FROM `authors` WHERE `name` = ? OR (author_id > 0 $comment\n)"), Author::where('name', 'x')->or_where_raw("author_id > 0 $comment")->to_sql());
+            $this->assert_same($this->sql("SELECT name $comment\n FROM `authors`"), Author::select_raw("name $comment")->to_sql());
+            $this->assert_same($this->sql("SELECT * FROM authors $comment\n WHERE `author_id` = ?"), Author::from_raw("authors $comment")->where('author_id', 1)->to_sql());
+            $this->assert_same(
+                $this->sql("SELECT `books`.* FROM `books` INNER JOIN authors ON authors.author_id = books.author_id $comment\n WHERE `books`.`book_id` = ?"),
+                Book::joins("INNER JOIN authors ON authors.author_id = books.author_id $comment")->where('book_id', 1)->to_sql()
+            );
+            $this->assert_same(
+                $this->sql("SELECT `parent_author_id` FROM `authors` GROUP BY parent_author_id $comment\n HAVING COUNT(*) > 1 $comment\n ORDER BY author_id $comment\n, `parent_author_id` ASC"),
+                Author::select('parent_author_id')->group_by_raw("parent_author_id $comment")->having_raw("COUNT(*) > 1 $comment")->order_by_raw("author_id $comment")->order_by('parent_author_id')->to_sql()
+            );
+            $this->assert_same(
+                $this->sql("SELECT `parent_author_id` FROM `authors` GROUP BY `parent_author_id` HAVING `parent_author_id` > ? OR (COUNT(*) > 1 $comment\n)"),
+                Author::select('parent_author_id')->group_by('parent_author_id')->having('parent_author_id', '>', 1)->or_having_raw("COUNT(*) > 1 $comment")->to_sql()
+            );
+        }
+
+        // SQL that ends with a newline already gets no second one, and SQL without the markers is sent as written
+        $this->assert_same($this->sql("SELECT * FROM `authors` WHERE author_id > 0 -- c\n ORDER BY `author_id` ASC"), Author::where_raw("author_id > 0 -- c\n")->order_by('author_id')->to_sql());
+        $this->assert_same($this->sql('SELECT name FROM authors WHERE author_id > 0 GROUP BY name HAVING COUNT(*) > 0 ORDER BY name'), Author::select_raw('name')->from_raw('authors')->where_raw('author_id > 0')->group_by_raw('name')->having_raw('COUNT(*) > 0')->order_by_raw('name')->to_sql());
+
+        // the window is applied: one author, where the comment swallowed the ORDER BY and the LIMIT and every author was found
+        $this->assert_same([1], $this->values(Author::where_raw('author_id > 0 -- c')->order_by('author_id')->limit(1)->get()));
+        $this->assert_same([4], $this->values(Author::order_by_raw('author_id DESC -- c')->limit(1)->get()));
+
+        // the legacy 'conditions' are sent as given, as they always were
+        Author::table();
+        [$legacy] = GoldenStatements::capture(fn() => Author::all(['conditions' => 'author_id > 0 -- c', 'order' => 'author_id']));
+        $this->assert_same($this->sql('SELECT * FROM `authors` WHERE author_id > 0 -- c ORDER BY author_id'), $legacy['sql']);
+    }
+
     // -- in, null, between
 
     // where_in() and where_not_in() follow the hash rules: an empty list matches nothing (1=0) or everything

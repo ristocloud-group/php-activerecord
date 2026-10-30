@@ -109,6 +109,22 @@ final class QueryCompiler
     }
 
     /**
+     * SQL written by hand for the builder (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(),
+     * group_by_raw(), having_raw(), order_by_raw() and their or_ forms) as the statement writes it: as given,
+     * followed by a newline when it holds -- or # and does not end with a newline already. Either can open a line
+     * comment (# on MySQL and MariaDB), which would otherwise run to the end of the statement and swallow what is
+     * written after the fragment: the ORDER BY and LIMIT of a limited write, which would then write every row it
+     * matches, or the parenthesis that closes a group. The newline ends the comment. SQL without them is written as
+     * given. The legacy options never come here: their SQL is sent as given.
+     *
+     * @internal Serves QueryCompiler and ConditionCompiler; not a supported API.
+     */
+    public static function raw_fragment(string $sql): string
+    {
+        return (str_contains($sql, '--') || str_contains($sql, '#')) && !str_ends_with($sql, "\n") ? "$sql\n" : $sql;
+    }
+
+    /**
      * The SELECT of a state: that of its legacy options when it holds some, as the legacy entries always
      * sent it, else that of the builder's clauses. A state that holds nothing selects every row.
      *
@@ -548,7 +564,7 @@ final class QueryCompiler
 
         foreach ($state->selects as $select) {
             if (array_key_exists('raw', $select)) {
-                $columns[] = $select['raw'];
+                $columns[] = self::raw_fragment($select['raw']);
                 $values = [...$values, ...$select['bindings']];
             } else {
                 $alias = null === $select['alias'] ? '' : ' AS ' . $this->connection()->quote_name($select['alias']);
@@ -605,7 +621,7 @@ final class QueryCompiler
     /**
      * The GROUP BY of the builder's groups, without the keywords, and the values of its bind markers in order;
      * null when it has none. A column is named by the one rule (see column()), and SQL written by hand is sent
-     * as it is.
+     * as it is (see raw_fragment()).
      *
      * @return array{sql: string, values: list<mixed>}|null
      */
@@ -616,7 +632,7 @@ final class QueryCompiler
 
         foreach ($state->groups as $group) {
             if ('raw' === $group['type']) {
-                $sql[] = $group['sql'];
+                $sql[] = self::raw_fragment($group['sql']);
                 $values = [...$values, ...$group['bindings']];
             } else {
                 $sql[] = $this->column($group['column'], $state);
@@ -629,8 +645,8 @@ final class QueryCompiler
     /**
      * The ORDER BY of the builder's orders, without the keywords, and the values of its bind markers in order;
      * null when it has none. A column is named by the one rule (see column()) and followed by its direction,
-     * SQL written by hand is sent as it is, and the random order is the adapter's random function (see
-     * Connection::random_function()).
+     * SQL written by hand is sent as it is (see raw_fragment()), and the random order is the adapter's random
+     * function (see Connection::random_function()).
      *
      * @return array{sql: string, values: list<mixed>}|null
      */
@@ -641,7 +657,7 @@ final class QueryCompiler
 
         foreach ($state->orders as $order) {
             if ('raw' === $order['type']) {
-                $sql[] = $order['sql'];
+                $sql[] = self::raw_fragment($order['sql']);
                 $values = [...$values, ...$order['bindings']];
             } elseif ('random' === $order['type']) {
                 $sql[] = $this->connection()->random_function();
@@ -655,8 +671,8 @@ final class QueryCompiler
 
     /**
      * The joins of the builder, in order, as SQL separated by spaces, and the values of their bind markers
-     * in order. A join held as SQL (relationships, a JOIN fragment) is sent as it is. A join of join() and
-     * its family is its type, JOIN, its table reference (see table_reference()), and the ON of its
+     * in order. A join held as SQL (relationships, a JOIN fragment) is sent as it is (see raw_fragment()). A
+     * join of join() and its family is its type, JOIN, its table reference (see table_reference()), and the ON of its
      * conditions, which name their columns by the one rule (see column()) and are rendered as those of the
      * WHERE are; a CROSS join has no ON.
      *
@@ -669,7 +685,7 @@ final class QueryCompiler
 
         foreach ($state->joins as $join) {
             if (is_string($join)) {
-                $sql[] = $join;
+                $sql[] = self::raw_fragment($join);
                 continue;
             }
 
@@ -708,13 +724,13 @@ final class QueryCompiler
     }
 
     /**
-     * The FROM of the builder: from_raw()'s as written, else the table reference of from() (see
-     * table_reference()), else the model's table.
+     * The FROM of the builder: from_raw()'s as written (see raw_fragment()), else the table reference of from()
+     * (see table_reference()), else the model's table.
      */
     private function from_clause(QueryState $state): string
     {
         if (null !== $state->from_raw) {
-            return $state->from_raw;
+            return self::raw_fragment($state->from_raw);
         }
 
         if (null === $state->from) {

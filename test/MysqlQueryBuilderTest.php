@@ -78,6 +78,16 @@ class MysqlQueryBuilderTest extends DatabaseTest
         }
     }
 
+    // A # opens a line comment on MySQL and MariaDB: SQL written by hand that holds one is followed by a newline
+    // (QueryCompiler::raw_fragment()), so the comment ends with it and the ORDER BY and LIMIT after it are run
+    public function test_a_hash_comment_in_raw_sql_ends_with_the_fragment(): void
+    {
+        $ids = fn(array $authors): array => array_map(fn(Author $author): int => $author->author_id, $authors);
+
+        $this->assert_same([1], $ids(Author::where_raw('author_id > 0 # c')->order_by('author_id')->limit(1)->get()));
+        $this->assert_same([4], $ids(Author::order_by_raw('author_id DESC # c')->limit(1)->get()));
+    }
+
     // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the
     // order is an order like any other, and the database runs it
     public function test_in_random_order_is_rand(): void
