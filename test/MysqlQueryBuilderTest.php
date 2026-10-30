@@ -89,6 +89,10 @@ class MysqlQueryBuilderTest extends DatabaseTest
 
         $this->assert_same([1], $ids(Author::where_raw('author_id > 0 # c')->order_by('author_id')->limit(1)->get()));
         $this->assert_same([4], $ids(Author::order_by_raw('author_id DESC # c')->limit(1)->get()));
+
+        // and a limited write writes one row, where the comment had it write every row the WHERE matched
+        $this->assert_same(1, Author::where_raw('author_id > 0 # c')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same([2, 3, 4], $ids(Author::order_by('author_id')->get()));
     }
 
     // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the

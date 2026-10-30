@@ -279,6 +279,7 @@ class QueryWriteTest extends DatabaseTest
         }
 
         foreach (['', ' ', '0'] as $sql) {
+            $this->assert_same([ActiveRecordException::class, "The ORDER BY of update() on Author compiles to '$sql', which is no order: the statement is not sent"], $this->thrown(fn() => $compiler->compile_update($order($sql), ['name' => 'x'])));
             $this->assert_same([ActiveRecordException::class, "The ORDER BY of delete() on Author compiles to '$sql', which is no order: the statement is not sent"], $this->thrown(fn() => $compiler->compile_delete($order($sql))));
         }
 
@@ -484,6 +485,86 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same(0, Author::new_query()->limit(0)->update(['name' => 'None']));
         $this->assert_same(0, Author::new_query()->limit(0)->delete());
         $this->assert_same(1, Author::count());
+    }
+
+    // Postgres, which has no LIMIT on UPDATE and DELETE, picks the rows of a limited write by the whole primary key, (day, at)
+    // for dated_counts, and without one by the row identity (tableoid, ctid), for pkless_items. On every adapter the rows
+    // written are exactly those the order and the limit pick
+    public function test_a_limited_write_on_a_composite_key_or_without_one_writes_the_rows_it_picks(): void
+    {
+        DatedCount::table();
+        PklessItem::table();
+        PklessItem::new_query()->insert([['code' => 2, 'name' => 'second'], ['code' => 3, 'name' => 'third']]);
+
+        // dated_counts: 2026-01-01 with 1 hit, 2026-01-02 with 2
+        $update = GoldenStatements::capture(fn() => $this->assert_same(1, DatedCount::order_by('day', 'desc')->limit(1)->update(['hits' => 9])));
+        $this->assert_same([1, 9], DatedCount::order_by('day')->pluck('hits'));
+        $this->assert_same(1, DatedCount::where('hits', '<', 9)->order_by('day')->limit(1)->delete());
+        $this->assert_same([9], DatedCount::order_by('day')->pluck('hits'));
+
+        // pkless_items: codes 1, 2 and 3
+        $this->assert_same(1, PklessItem::order_by('code', 'desc')->limit(1)->update(['name' => 'last']));
+        $this->assert_same(['first', 'second', 'last'], PklessItem::order_by('code')->pluck('name'));
+        $delete = GoldenStatements::capture(fn() => $this->assert_same(1, PklessItem::where('code', '>', 1)->order_by('code')->limit(1)->delete()));
+        $this->assert_same([1, 3], PklessItem::order_by('code')->pluck('code'));
+
+        if ('pgsql' === $this->conn->protocol) {
+            $this->assert_same([['sql' => 'UPDATE "dated_counts" SET "hits"=? WHERE ("day", "at") IN (SELECT "day", "at" FROM "dated_counts" ORDER BY "day" DESC LIMIT 1)', 'values' => [9]]], $update);
+            $this->assert_same([['sql' => 'DELETE FROM "pkless_items" WHERE (tableoid, ctid) IN (SELECT tableoid, ctid FROM "pkless_items" WHERE "code" > ? ORDER BY "code" ASC LIMIT 1)', 'values' => [1]]], $delete);
+        }
+    }
+
+    // SQL written by hand that ends in a line comment is followed by a newline (QueryCompiler::raw_fragment()), so a limited
+    // write keeps its ORDER BY and LIMIT and writes one row: the comment swallowed them, and MySQL, MariaDB and SQLite
+    // wrote every row the WHERE matched (Postgres failed to parse the subquery that picks the rows)
+    public function test_a_raw_fragment_ending_in_a_comment_keeps_the_order_and_the_limit_of_a_write(): void
+    {
+        $this->assert_same(1, Author::where_raw('author_id > 0 -- c')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same([2, 3, 4], array_keys($this->names_by_id()));
+        $this->assert_same(1, Author::where_raw('author_id > 0 -- c')->order_by_desc('author_id')->limit(1)->update(['name' => 'Last']));
+        $this->assert_same(1, Author::order_by_raw('author_id -- c')->limit(1)->update(['name' => 'First']));
+        $this->assert_same([2 => 'First', 3 => 'Bill Clinton', 4 => 'Last'], $this->names_by_id());
+    }
+
+    // A limited write on an adapter that can apply the limit neither way, with no LIMIT on UPDATE and DELETE and no
+    // limited_rows_condition(), is refused before any statement, as the legacy writes are (QueryEngineTest): without the
+    // limit it would write every row it matches. No adapter of the library is one
+    public function test_a_limited_write_the_adapter_cannot_apply_is_refused(): void
+    {
+        $table = new Table('Author');
+        $table->conn = new class extends ActiveRecord\Connection {
+            // no database: the statements are refused before they are sent
+            public function __construct() {}
+
+            public function limit($sql, $offset, $limit)
+            {
+                return "$sql LIMIT $limit";
+            }
+
+            public function query_column_info($table)
+            {
+                throw new LogicException('not read');
+            }
+
+            public function query_for_tables()
+            {
+                throw new LogicException('not read');
+            }
+
+            public function set_encoding($charset) {}
+
+            public function native_database_types()
+            {
+                return [];
+            }
+        };
+
+        foreach ([
+            fn() => Query::for_table($table)->where('author_id', 1)->limit(1)->delete(),
+            fn() => Query::for_table($table)->order_by('author_id')->limit(0)->update(['name' => 'x']),
+        ] as $write) {
+            $this->assert_exception_message_contains('cannot apply the limit of an UPDATE or a DELETE', $write, ActiveRecordException::class);
+        }
     }
 
     // The values of an UPDATE are bound in the order of its markers: the SET, then the WHERE, then the ORDER BY. On
