@@ -68,11 +68,14 @@ final class RawSqlWriter
     private const string PGSQL_TERMINATOR = '/(?<![A-Za-z0-9_$\x80-\xFF])[Ee]\'(?:[^\'\\\\]++|\\\\.|\'\')*+\'|\'[^\']*+\'|"[^"]*+"|(?<![A-Za-z0-9_$\x80-\xFF])\$(?<tag>(?:[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*+)?)\$.*?\$\k<tag>\$|--[^\r\n]*+|(?<comment>\/\*(?:[^\/*]++|\*(?!\/)|\/(?!\*)|(?&comment))*+\*\/)|;/s';
 
     /**
-     * How SQLite reads it: a string in single quotes and an identifier in double quotes, in backticks or in brackets,
-     * where a backslash escapes nothing; a comment from -- to the end of the line; and a block comment, which does not
-     * nest. There is no dollar quote: #, $, @ and : start a parameter (#a, $$a, @a$$). And ;.
+     * How SQLite reads it: a parameter, read first as one token as SQLite's tokenizer reads it: #, @ or :, or a $ that
+     * follows no character of an identifier (a$b is an identifier), then a name of the letters, digits, underscores, $
+     * and :: of an identifier (#a, $$a, @a$$, :a::b), then a Tcl-style suffix from ( to the first ) or whitespace, in
+     * which a quote, a bracket or a ; is the parameter's ($a(') and $a(;) are each one parameter); a string in single
+     * quotes and an identifier in double quotes, in backticks or in brackets, where a backslash escapes nothing; a comment
+     * from -- to the end of the line; and a block comment, which does not nest. There is no dollar quote. And ;.
      */
-    private const string SQLITE_TERMINATOR = '/\'[^\']*+\'|"[^"]*+"|' . self::BACKTICKED . '|\[[^\]]*+\]|--[^\n]*+|' . self::BLOCK_COMMENT . '|;/s';
+    private const string SQLITE_TERMINATOR = '/(?:(?<![A-Za-z0-9_$\x80-\xFF])\$|[#@:])(?:[A-Za-z0-9_$\x80-\xFF]|::)++(?:\([^\s)]*+\)?)?|\'[^\']*+\'|"[^"]*+"|' . self::BACKTICKED . '|\[[^\]]*+\]|--[^\n]*+|' . self::BLOCK_COMMENT . '|;/s';
 
     /**
      * @param Table $table The table of the model, whose connection quotes the values and whose columns format its dates

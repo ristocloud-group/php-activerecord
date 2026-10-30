@@ -360,7 +360,9 @@ Details settled by the final review (2026-10-30):
     is an identifier, `$1` a parameter), `--` comments and nested block comments. `#` is an operator, a backtick no
     quote.
   - SQLite: strings, and double-quoted, backtick and bracket identifiers, with no backslash escape; `--` comments and
-    block comments that do not nest. No dollar quote: `#`, `$`, `@` and `:` start a parameter.
+    block comments that do not nest. No dollar quote: `#`, `$`, `@` and `:` start a parameter, read first as one token
+    as SQLite's tokenizer reads it, its name (`::` in it) and a Tcl-style suffix from `(` to the first `)` or
+    whitespace, in which a quote, a bracket or a `;` is the parameter's (`$a(')`, `$a(;)`).
   - A connection of no adapter of the library is read the three ways, and refused when any finds a `;` outside.
   - The builder refuses it at the call (§5.7), reads and writes alike, in `select_raw`, `from_raw`, a `JOIN` fragment
     of `joins`, `where_raw`, `having_raw`, `group_by_raw`, `order_by_raw` and the `or_` forms.
@@ -382,13 +384,15 @@ Details settled by the final review (2026-10-30):
     MariaDB (it deleted three authors), `name != 'C:\' ; '`, `author_id IS NOT #a;` and `author_id IS NOT $$a;b$$` on
     SQLite (four each), `author_id > 0 OR @a$$ IS NULL; @b$$` on MySQL, MariaDB and SQLite (four), and a
     `/*! ; */` on MySQL and MariaDB. Each is accepted where its database reads it inside: `0--1;` and `$$a;b$$` on
-    Postgres, `'C:\' ; '` and `# ;` on MySQL and MariaDB.
+    Postgres, `'C:\' ; '` and `# ;` on MySQL and MariaDB. After the review of that round, SQLite's Tcl-style parameters
+    too: `author_id IS NOT $a(') ; '` and `author_id IS NOT @a([) ; ]` (a reading that opened a string or a bracket in
+    the parentheses let them through, and the limited delete, builder or legacy, deleted the four authors) are refused,
+    and `author_id IS NOT $a(;)` is accepted: its LIMIT applies (one author deleted).
   - Residual, measured: the MySQL and MariaDB reading is that of the default sql_mode. A session with
     `NO_BACKSLASH_ESCAPES` reads `'C:\'` as a whole string, and `name != 'C:\' ; '`, accepted, deleted the four
     authors there; with `ANSI_QUOTES` a double-quoted identifier ending in a backslash is an unknown column. The library
-    sets no sql_mode. Conservative, the other way (measured on SQLite 3.46): a `;` in a block comment left open,
-    which SQLite runs to the end of the SQL, and in the parentheses of a Tcl-style parameter (`$a(;)`), which SQLite
-    reads as one parameter, is refused.
+    sets no sql_mode. Conservative, the other way (measured on SQLite 3.46): a `;` in a block comment left open, which
+    SQLite runs to the end of the SQL, is refused.
 
 ### 5.3 Read terminals
 

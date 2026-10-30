@@ -57,6 +57,29 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same(3, (int) Author::count());
     }
 
+    // SQLite reads a parameter (#, $, @ or : and a name, :: in it) with a Tcl-style suffix as one token, up to the first )
+    // or whitespace: a quote, a bracket or a ; in its parentheses is the parameter's. So the ; after $a(') or @a([) is
+    // outside, and refused, by the builder and by the legacy conditions alike, where a reading that opened a string or a
+    // bracket in the parentheses let it through and the limited delete deleted all four authors; and $a(;) holds no
+    // terminator: the parameter, bound to nothing, is NULL, and the LIMIT after it applies
+    public function test_a_tcl_style_parameter_is_read_as_one_token(): void
+    {
+        Author::table();
+        $refusal = fn(string $sql, string $source): array => [[
+            'exception' => ActiveRecord\ActiveRecordException::class,
+            'message' => "SQL '$sql' in $source on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker",
+        ]];
+
+        foreach (["author_id IS NOT \$a(') ; '", 'author_id IS NOT @a([) ; ]', "author_id IS NOT :a::b(') ; '", "author_id IS NOT #a(') ; '"] as $sql) {
+            $this->assert_same($refusal($sql, 'where_raw()'), GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()), $sql);
+            $this->assert_same($refusal($sql, "the 'conditions' option"), GoldenStatements::capture(fn() => Author::delete_all(['conditions' => $sql, 'order' => 'author_id', 'limit' => 1])), "delete_all $sql");
+        }
+
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(1, Author::where_raw('author_id IS NOT $a(;)')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(3, (int) Author::count());
+    }
+
     // Spec §5.2: a DATE column holds '2026-01-02', which a positional DateTime, sent as a date and time, never
     // equals as text; the builder knows the column, and sends a date
     public function test_legacy_positional_date_differs_from_the_builder(): void

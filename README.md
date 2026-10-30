@@ -488,7 +488,8 @@ the database of the connection reads them, throws `ActiveRecordException`, which
 - Postgres reads standard strings with no `\` escape, `E'...'` strings with them, double-quoted identifiers,
   dollar-quoted strings (`$$a;b$$`, `$tag$a;b$tag$`), `--` comments and nested block comments; `#` is an operator.
 - SQLite reads strings and double-quoted, backtick and bracket identifiers with no `\` escape, and `--` comments; `#`,
-  `$`, `@` and `:` start a parameter, so `IS NOT #a;` and `$$a;b$$` hold a `;` there.
+  `$`, `@` and `:` start a parameter, so `IS NOT #a;` and `$$a;b$$` hold a `;` there, and a parameter is one token up
+  to the `)` of a Tcl-style suffix (`$a(;)` holds none, `$a(') ;` does).
 
 MySQL, MariaDB and SQLite would end the statement at such a `;`, so the clauses that follow it would be cut off and a
 limited write would touch every row it matches; Postgres refuses the statement. A `;` in a string
