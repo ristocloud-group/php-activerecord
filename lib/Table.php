@@ -481,8 +481,9 @@ class Table
      * INSERTs $data, a row that does not come from a model, through the Query engine, and returns
      * the statement. The row gets the created_at and updated_at it lacks, set to the current time
      * (see Timestamps): a table without those columns gets nothing, and neither does a class whose
-     * timestamps are suspended, see Model::without_timestamps(). The save() of a model does not
-     * come through here: its own set_timestamps() decides its timestamps (see insert_for_save()).
+     * timestamps are suspended, see Model::without_timestamps(); a model's override of set_timestamps()
+     * does not suspend them. The save() of a model does not come through here: its own
+     * set_timestamps() decides its timestamps (see insert_for_save()).
      *
      * $data is taken by reference and comes back under the names it was given, its DateTime values
      * formatted for the database. The timestamps are added to the statement, not to $data.

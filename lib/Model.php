@@ -1292,8 +1292,9 @@ class Model
      *
      * A 'set' hash also sets updated_at to the current time when the table has that column and the
      * hash gives it no value (a key gives it one by the column's name or attribute name, pre-quoted
-     * or qualified with the model's table too); without_timestamps() suspends that. A 'set' string
-     * is sent as it is written, and sets nothing more.
+     * or qualified with the model's table too); without_timestamps() suspends that, and a model's
+     * override of set_timestamps() does not (it governs save() only). A 'set' string is sent as it is
+     * written, and sets nothing more.
      *
      * An options array takes the following parameters:
      *
@@ -1654,6 +1655,10 @@ class Model
     /**
      * Updates a model's timestamps: updated_at on every save, created_at on the first one.
      * Does nothing while the timestamps of the model's class are suspended, see {@link without_timestamps()}.
+     *
+     * A model can override it, for save() alone: update_all() with a hash 'set', a direct Table::insert(),
+     * upsert() and the writes of the query builder fill the timestamps by the library's rule whatever it does,
+     * and only without_timestamps() suspends them.
      *
      * @return void
      */

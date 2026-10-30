@@ -263,8 +263,8 @@ class Query
      * Selects an SQL expression besides what the query selects, sent as written, with the values of its
      * bind markers. A select() replaces it, its values included. SQL that holds -- or # is followed by a
      * newline, so that a line comment at its end cannot run on over the rest of the statement (see
-     * QueryCompiler::raw_fragment()). It has the warning of where_raw(): never from user input, and no line
-     * comment or statement terminator at its end, which would cut off the clauses that follow.
+     * QueryCompiler::raw_fragment()). It has the warning of where_raw(): never from user input, and no statement
+     * terminator, which would cut off the clauses that follow.
      *
      * <code>
      * Author::select('name')->select_raw('LENGTH(name) > ? AS long_name', [10])->get();
@@ -324,8 +324,8 @@ class Query
      * Reads the rows from a FROM written in SQL, a subquery for instance, sent as written, with the
      * values of its bind markers. It names its rows itself, so no column of the model gets a table then
      * (see QueryCompiler::column()). It replaces a from(). SQL that holds -- or # is followed by a newline,
-     * as select_raw() says. It has the warning of where_raw(): never from user input, and no line comment or
-     * statement terminator at its end, which would cut off the clauses that follow.
+     * as select_raw() says. It has the warning of where_raw(): never from user input, and no statement terminator,
+     * which would cut off the clauses that follow.
      *
      * <code>
      * Book::from_raw('(SELECT * FROM books WHERE book_id > ?) books', [10])->get();
@@ -453,10 +453,11 @@ class Query
      * SQLBuilder would leave it out, and an update() or a delete() of the query would write every row. SQL that holds
      * -- or # is followed by a newline, as select_raw() says.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not end with a line comment
-     * (--, or # on MySQL and MariaDB) or hold a statement terminator (;): the clauses that follow it in the statement
-     * would be cut off. On a write those include its ORDER BY and LIMIT, so a limited write would touch more rows
-     * than it says. The legacy 'conditions' option does the same.
+     * Warning: the SQL is sent as written, so it must never come from user input. A line comment at its end (--, or #
+     * on MySQL and MariaDB) ends at the newline that follows it, where the legacy 'conditions' option sends its SQL as
+     * given and the comment cuts off what follows. It must not hold a statement terminator (;): MySQL, MariaDB and SQLite
+     * end the statement there, which cuts off the clauses that follow it, on a write its ORDER BY and LIMIT, so a limited
+     * write would touch every row it matches; Postgres refuses the statement.
      *
      * <code>
      * Author::where_raw('LENGTH(name) > ?', [3])->get();
@@ -472,8 +473,8 @@ class Query
     }
 
     /**
-     * Adds a condition written in SQL as where_raw() does, ORed, with the same warning: the SQL is sent as written,
-     * and must not end with a line comment or hold a statement terminator.
+     * Adds a condition written in SQL as where_raw() does, ORed, with the same warning: the SQL is sent as written, and
+     * must not hold a statement terminator.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -1032,9 +1033,9 @@ class Query
      * where the database refuses it (see QueryCompiler::refuse_blank_sql()). SQL that holds -- or # is followed by
      * a newline, as select_raw() says.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not end with a line comment
-     * (--, or # on MySQL and MariaDB) or hold a statement terminator (;): the clauses that follow it in the statement
-     * would be cut off, its LIMIT and OFFSET, so a limited write would touch more rows than it says.
+     * Warning: the SQL is sent as written, so it must never come from user input. It must not hold a statement
+     * terminator (;): the clauses that follow it in the statement would be cut off, its LIMIT and OFFSET, so a limited
+     * write would touch every row it matches (see where_raw()).
      *
      * <code>
      * Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])->get();
@@ -1152,9 +1153,9 @@ class Query
      * marker for each value. SQL that is empty, only whitespace or 0 is refused, as order_by_raw() refuses it. SQL
      * that holds -- or # is followed by a newline, as select_raw() says.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not end with a line comment
-     * (--, or # on MySQL and MariaDB) or hold a statement terminator (;): the clauses that follow it in the statement
-     * (its HAVING, ORDER BY, LIMIT and OFFSET) would be cut off.
+     * Warning: the SQL is sent as written, so it must never come from user input. It must not hold a statement
+     * terminator (;): the clauses that follow it in the statement (its HAVING, ORDER BY, LIMIT and OFFSET) would be
+     * cut off (see where_raw()).
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -1213,10 +1214,9 @@ class Query
      * "0" is sent, in parentheses. SQL that is empty or only whitespace is refused, as where_raw() refuses it. SQL
      * that holds -- or # is followed by a newline, as select_raw() says.
      *
-     * Warning: the SQL is sent as written, so it must never come from user input. It must not end with a line comment
-     * (--, or # on MySQL and MariaDB) or hold a statement terminator (;): the clauses that follow it in the statement
-     * (its ORDER BY, LIMIT and OFFSET) would be cut off. A HAVING without a GROUP BY needs SQLite 3.39 or later, as
-     * having() says.
+     * Warning: the SQL is sent as written, so it must never come from user input. It must not hold a statement
+     * terminator (;): the clauses that follow it in the statement (its ORDER BY, LIMIT and OFFSET) would be cut off
+     * (see where_raw()). A HAVING without a GROUP BY needs SQLite 3.39 or later, as having() says.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();
@@ -1233,7 +1233,7 @@ class Query
 
     /**
      * Adds a condition written in SQL to the HAVING as having_raw() does, ORed, with the same warning: the SQL is sent
-     * as written, and must not end with a line comment or hold a statement terminator.
+     * as written, and must not hold a statement terminator.
      *
      * @param array<mixed> $bindings
      * @return $this
