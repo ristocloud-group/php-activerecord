@@ -110,6 +110,36 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_exception_message_contains("SQL 'name = $1;' in where_raw() on Author holds a statement terminator (;)", fn() => Author::where_raw('name = $1;'), ActiveRecord\ActiveRecordException::class);
     }
 
+    // Postgres reads a statement terminator as it reads SQL (QueryCompiler::refuse_statement_terminator()): a standard
+    // string has no backslash escape, an E'' string has them (and a doubled quote), an identifier is in double quotes, a
+    // dollar quote opens at a $ that follows no character of an identifier (a$$ is an identifier), -- always opens a
+    // comment, and a block comment nests. # is an operator and a backtick no quote: a ; after them is refused, as is one
+    // after 'C:\', where the string ends. The fragments accepted here are sent, and their limited delete writes one row
+    public function test_a_statement_terminator_is_read_as_postgres_reads_it(): void
+    {
+        foreach (["name != e'it''s;' AND name != E'a\\';b'", 'author_id > 0 /* /* */ ; */', 'author_id > 0--1;'] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        Author::table();
+
+        foreach ([
+            "name != 'C:\\' ; '",
+            'author_id > 0 # ;',
+            'author_id > 0 AND `a;b` IS NULL',
+            'author_id > 0 OR @a$$ IS NULL; @b$$',
+            'author_id > 0 OR a$$ IS NULL; $$',
+        ] as $sql) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+        }
+
+        $this->assert_same(1, (int) Author::count());
+    }
+
     // Spec §5.3: a value that an INTEGER pk can never equal fails the statement on Postgres (22P02) and aborts the
     // transaction, so a find looks it up in no statement, as the legacy finders by pk do (#92). The table is loaded
     // first: a table read cold adds its schema read to the capture.

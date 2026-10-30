@@ -24,6 +24,39 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same(['T?t*'], $q->get_bindings());
     }
 
+    // SQLite reads a statement terminator as it reads SQL (QueryCompiler::refuse_statement_terminator()): no backslash
+    // escape in a string, identifiers in double quotes, backticks or brackets, -- and block comments that do not nest, and
+    // no dollar quote: #, $, @ and : start a parameter (#a, $$a, @a$$), left unbound (NULL). Each ; below that it reads
+    // outside is refused at the call, and its limited delete sends nothing, where it deleted all four authors ('C:\' ;,
+    // IS NOT #a;, IS NOT $$a;b$$, @a$$ ... @b$$); the fragments accepted here are sent, and their delete writes one row
+    public function test_a_statement_terminator_is_read_as_sqlite_reads_it(): void
+    {
+        foreach (["name != 'it''s;'", 'author_id > 0 AND `a;b` IS NULL', 'author_id > 0 AND [a;b] IS NULL', 'author_id > 0 -- ;'] as $sql) {
+            $this->assert_sql_has($sql, Author::where_raw($sql)->to_sql());
+        }
+
+        $this->assert_same(1, Author::where_raw("name != 'it''s;' AND author_id > 0 /* ; */")->order_by('author_id')->limit(1)->delete());
+        Author::table();
+
+        foreach ([
+            "name != 'C:\\' ; '",
+            'author_id IS NOT #a;',
+            'author_id IS NOT $$a;b$$',
+            'author_id > 0 OR @a$$ IS NULL; @b$$',
+            'author_id > 0 # ;',
+            "name != 'a\\';b'",
+            'author_id > 0 /* /* */ ; */',
+        ] as $sql) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+        }
+
+        $this->assert_same(3, (int) Author::count());
+    }
+
     // Spec §5.2: a DATE column holds '2026-01-02', which a positional DateTime, sent as a date and time, never
     // equals as text; the builder knows the column, and sends a date
     public function test_legacy_positional_date_differs_from_the_builder(): void

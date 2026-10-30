@@ -613,22 +613,19 @@ class QueryWhereTest extends DatabaseTest
     // A ; outside the strings, the quoted identifiers and the comments of SQL written by hand ends the statement on MySQL
     // and MariaDB, which run what follows it as another statement whose error is never read, and on SQLite, which drops
     // it, so the ORDER BY and the LIMIT after it were lost (and a limited write wrote every row it matched); Postgres
-    // refuses the statement. A ; in a string (with '' and \ escapes), a quoted identifier (" or `), a comment (--, #,
-    // /* */) or a Postgres dollar-quoted string is none. The SQL is read at the call, and refused there
+    // refuses the statement. The SQL is read at the call, as the database of the connection reads it, and refused there.
+    // What every database reads alike is pinned here: a ; in a string, in a double-quoted string or identifier, in a --
+    // comment followed by a space and in a block comment is none. What they read otherwise (backslash escapes, #, --
+    // with no space after it, backticks, brackets, dollar quotes, nested comments) is pinned by the adapter test classes
+    // (MysqlQueryBuilderTest, PgsqlQueryBuilderTest, SqliteQueryBuilderTest)
     public function test_a_statement_terminator_is_read_outside_strings_identifiers_and_comments(): void
     {
         foreach ([
             "name = 'a;b'",
             "name = 'it''s;'",
-            "name = 'a\\';b'",
             'name = "a;b"',
-            'name = `a;b`',
             'author_id > 0 -- ;',
-            'author_id > 0 # ;',
             'author_id > 0 /* ; */',
-            'name = $$a;b$$',
-            'name = $tag$a;b$tag$',
-            'name IN($$a;b$$, $q$c;$q$)',
         ] as $sql) {
             $this->assert_sql_has($sql, Author::where_raw($sql)->to_sql());
         }
@@ -644,7 +641,7 @@ class QueryWhereTest extends DatabaseTest
             'author_id > 0 /* ;',
             'name = $$a;b',
             'name = $a$x;y$b$',
-            // a $ that opens no dollar quote: a parameter of Postgres, or an identifier's of MySQL
+            // a $ that opens no dollar quote: a parameter of Postgres, or a character of an identifier of MySQL
             'author_id > $1;',
         ] as $sql) {
             $this->assert_exception_message_contains($this->terminator_refusal($sql, 'where_raw'), fn() => Author::where_raw($sql), ActiveRecordException::class);

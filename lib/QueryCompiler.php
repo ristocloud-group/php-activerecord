@@ -400,15 +400,16 @@ final class QueryCompiler
     }
 
     /**
-     * Refuses SQL written by hand that holds a statement terminator, a ; outside its strings, its quoted identifiers and
-     * its comments (see RawSqlWriter::holds_statement_terminator()), given to $source: a builder method that sends its SQL
-     * as written (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(), group_by_raw(), having_raw(),
-     * order_by_raw() and the or_ forms), at the call (spec §5.7), or the legacy 'conditions' option, before any
-     * statement (see refuse_terminated_conditions()). MySQL and MariaDB end the statement there and run what follows it
-     * as another statement, whose error is never read, and SQLite drops what follows it: either way the clauses after it
-     * are lost, those of a limited write its ORDER BY and its LIMIT, so it writes every row it matches. Postgres refuses
-     * the statement. A ; in a string, a quoted identifier, a comment or a bound value is no terminator, and a value is
-     * bound with a ? marker.
+     * Refuses SQL written by hand that holds a statement terminator, a ; outside its strings, its quoted identifiers
+     * and its comments as the database of the connection the statement is rendered for reads them (MySQL and MariaDB,
+     * Postgres or SQLite: see RawSqlWriter::holds_statement_terminator()), given to $source: a builder method that
+     * sends its SQL as written (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(), group_by_raw(),
+     * having_raw(), order_by_raw() and the or_ forms), at the call (spec §5.7), or the legacy 'conditions' option,
+     * before any statement (see refuse_terminated_conditions()). MySQL and MariaDB end the statement there and run what
+     * follows it as another statement, whose error is never read, and SQLite drops what follows it: either way the
+     * clauses after it are lost, those of a limited write its ORDER BY and its LIMIT, so it writes every row it
+     * matches. Postgres refuses the statement. A ; in a string, a quoted identifier, a comment or a bound value is no
+     * terminator, and a value is bound with a ? marker.
      *
      * @internal Serves Conditions and Query, and the legacy conditions; not a supported API.
      * @param string $source Where the SQL was given, for the message of the exception: "where_raw()", "the 'conditions'
@@ -417,7 +418,7 @@ final class QueryCompiler
      */
     public function refuse_statement_terminator(string $sql, string $source): void
     {
-        if (RawSqlWriter::holds_statement_terminator($sql)) {
+        if (RawSqlWriter::holds_statement_terminator($sql, $this->connection())) {
             throw new ActiveRecordException(sprintf(
                 "SQL '%s' in %s on %s holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker",
                 $sql,

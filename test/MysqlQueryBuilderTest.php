@@ -103,6 +103,38 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(['2'], array_map(fn(Author $author): string => (string) $author->{'a;b'}, Author::select_raw('author_id AS `a;b`')->order_by('author_id')->limit(1)->get()));
     }
 
+    // MySQL and MariaDB read a statement terminator as they read SQL (QueryCompiler::refuse_statement_terminator()), in
+    // the default sql_mode: strings in single and double quotes with backslash escapes, identifiers in backticks, a #
+    // comment, a -- comment only where a space or a control character follows the dashes, and no dollar quote ($ is a
+    // character of identifiers and of variables, @a$$). A block comment does not nest, and the text of an executable one
+    // (/*! */, /*M! */) is SQL they run. Each ; below that they read outside is refused at the call, and its limited delete
+    // sends nothing: 0--1 is 0 - -1, and the delete deleted three of the four authors; @a$$ ... @b$$ deleted all four
+    public function test_a_statement_terminator_is_read_as_mysql_and_mariadb_read_it(): void
+    {
+        foreach (["name = 'a\\';b'", 'name = "a\\";b"', 'name = `a;b`', 'author_id > 0 # ;', 'author_id > 0 -- ;', "author_id > 0 --\t;", 'author_id > 0 /*+ ; */'] as $sql) {
+            $this->assert_sql_has($sql, Author::where_raw($sql)->to_sql());
+        }
+
+        Author::table();
+
+        foreach ([
+            'author_id > 0--1;',
+            'name != $$a;b$$',
+            'author_id > 0 OR @a$$ IS NULL; @b$$',
+            'author_id > 0 /* /* */ ; */',
+            'author_id > 0 /*! ; */',
+            'author_id > 0 /*M! ; */',
+        ] as $sql) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+        }
+
+        $this->assert_same(4, (int) Author::count());
+    }
+
     // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the
     // order is an order like any other, and the database runs it
     public function test_in_random_order_is_rand(): void

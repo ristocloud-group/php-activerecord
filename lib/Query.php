@@ -460,10 +460,11 @@ class Query
      * SQLBuilder would leave it out, and an update() or a delete() of the query would write every row. SQL that holds
      * -- or # is followed by a newline, as select_raw() says.
      *
-     * SQL that holds a statement terminator (;) outside its strings, its quoted identifiers and its comments is refused
-     * too (see QueryCompiler::refuse_statement_terminator()): MySQL, MariaDB and SQLite would end the statement there, which
-     * cuts off the clauses that follow it, on a write its ORDER BY and LIMIT, so a limited write would touch every row it
-     * matches; Postgres refuses the statement. A ; in a string ('a;b'), a comment or a bound value is sent as it is.
+     * SQL that holds a statement terminator (;) outside its strings, its quoted identifiers and its comments, as the
+     * database of the connection reads them (see QueryCompiler::refuse_statement_terminator()), is refused too: MySQL,
+     * MariaDB and SQLite would end the statement there, which cuts off the clauses that follow it, on a write its ORDER BY
+     * and LIMIT, so a limited write would touch every row it matches; Postgres refuses the statement. A ; in a string
+     * ('a;b'), a comment or a bound value is sent as it is.
      *
      * Warning: the SQL is sent as written, so it must never come from user input. A line comment at its end (--, or #
      * on MySQL and MariaDB) ends at the newline that follows it, where the legacy 'conditions' option sends its SQL as

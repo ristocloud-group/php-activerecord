@@ -12,8 +12,8 @@ namespace ActiveRecord;
  * connection binds as an integer bare (see Connection::binds_as_integer()), every other value as quoted text. The
  * markers are read as PDO reads them, in one pass, so what is written is never read again.
  *
- * It also reads SQL written by hand for a statement terminator, by the same reading of its strings and comments (see
- * holds_statement_terminator()).
+ * It also reads SQL written by hand for a statement terminator, as the database of a connection reads its strings and
+ * its comments, with the sub-patterns of that reading where they agree (see holds_statement_terminator()).
  *
  * @internal Serves Query and QueryCompiler; not a supported API.
  * @package ActiveRecord
@@ -21,8 +21,9 @@ namespace ActiveRecord;
 final class RawSqlWriter
 {
     /**
-     * A string in single quotes, in which a backslash escapes the next character. A quote doubled in it ('it''s')
-     * reads as two strings side by side, with nothing between them.
+     * A string in single quotes, in which a backslash escapes the next character (as PDO reads it, and MySQL and MariaDB
+     * in their default sql_mode). A quote doubled in it ('it''s') reads as two strings side by side, with nothing between
+     * them.
      */
     private const string SINGLE_QUOTED = '\'(?:[^\'\\\\]++|\\\\.)*+\'';
 
@@ -43,14 +44,35 @@ final class RawSqlWriter
      */
     private const string BIND_MARKER = '/' . self::SINGLE_QUOTED . '|' . self::DOUBLE_QUOTED . '|' . self::DASH_COMMENT . '|' . self::BLOCK_COMMENT . '|\?\??/s';
 
+    /** An identifier in backticks (MySQL, MariaDB and SQLite), a doubled backtick in it reading as two side by side. */
+    private const string BACKTICKED = '`[^`]*+`';
+
     /**
-     * What holds_statement_terminator() reads in SQL written by hand: the strings and the comments of BIND_MARKER, and
-     * besides an identifier in backticks (MySQL, MariaDB and SQLite), a comment from # to the end of the line (MySQL and
-     * MariaDB) and a dollar-quoted string of Postgres ($$...$$, or $tag$...$tag$ with a tag of the letters, digits and
-     * underscores of an identifier, not a digit first), which are left as they are; and ;. A ; outside them all is a
-     * statement terminator. A $ that opens no dollar quote, such as that of the parameter $1, is read as any character.
+     * How MySQL and MariaDB read SQL written by hand, for a statement terminator (see holds_statement_terminator()), in
+     * their default sql_mode: strings in single and double quotes with backslash escapes, identifiers in backticks, a
+     * comment from # to the end of the line, a comment from -- only where a space or a control character follows the
+     * dashes (0--1 is 0 - -1), and a block comment, which does not nest, but for an executable one (opened by /*! or
+     * /*M!), whose text they run as SQL and which is read as such. There is no dollar quote: $ is a character of
+     * identifiers and of variables (@a$$). And ;.
      */
-    private const string STATEMENT_TERMINATOR = '/' . self::SINGLE_QUOTED . '|' . self::DOUBLE_QUOTED . '|`[^`]*+`|' . self::DASH_COMMENT . '|#[^\r\n]*+|' . self::BLOCK_COMMENT . '|\$((?:[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*+)?)\$.*?\$\1\$|;/s';
+    private const string MYSQL_TERMINATOR = '/' . self::SINGLE_QUOTED . '|' . self::DOUBLE_QUOTED . '|' . self::BACKTICKED . '|#[^\n]*+|--(?=[\x00-\x20\x7F])[^\n]*+|\/\*(?!!|M!).*?\*\/|;/s';
+
+    /**
+     * How Postgres reads it: a standard string in single quotes, in which a backslash is a character; an escape string
+     * (E'...', the E not part of an identifier), in which a backslash escapes the next character and a doubled quote is
+     * a quote; an identifier in double quotes; a dollar-quoted string ($$...$$, or $tag$...$tag$ with a tag of the
+     * letters, digits and underscores of an identifier, not a digit first) opened by a $ that follows no character of an
+     * identifier (a$$ is an identifier, $1 a parameter); a comment from -- to the end of the line; and a block comment,
+     * which nests. # is an operator, and a backtick no quote. And ;.
+     */
+    private const string PGSQL_TERMINATOR = '/(?<![A-Za-z0-9_$\x80-\xFF])[Ee]\'(?:[^\'\\\\]++|\\\\.|\'\')*+\'|\'[^\']*+\'|"[^"]*+"|(?<![A-Za-z0-9_$\x80-\xFF])\$(?<tag>(?:[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*+)?)\$.*?\$\k<tag>\$|--[^\r\n]*+|(?<comment>\/\*(?:[^\/*]++|\*(?!\/)|\/(?!\*)|(?&comment))*+\*\/)|;/s';
+
+    /**
+     * How SQLite reads it: a string in single quotes and an identifier in double quotes, in backticks or in brackets,
+     * where a backslash escapes nothing; a comment from -- to the end of the line; and a block comment, which does not
+     * nest. There is no dollar quote: #, $, @ and : start a parameter (#a, $$a, @a$$). And ;.
+     */
+    private const string SQLITE_TERMINATOR = '/\'[^\']*+\'|"[^"]*+"|' . self::BACKTICKED . '|\[[^\]]*+\]|--[^\n]*+|' . self::BLOCK_COMMENT . '|;/s';
 
     /**
      * @param Table $table The table of the model, whose connection quotes the values and whose columns format its dates
@@ -59,27 +81,42 @@ final class RawSqlWriter
     public function __construct(private readonly Table $table, private readonly string $model_class) {}
 
     /**
-     * Whether SQL written by hand holds a statement terminator: a ; outside its strings, its quoted identifiers and its
-     * comments, read as STATEMENT_TERMINATOR reads them, the union of what MySQL, MariaDB, Postgres and SQLite quote
-     * and comment out. MySQL and MariaDB end the statement there and run what follows it as another statement, and
-     * SQLite prepares the statement up to it and drops the rest, so the clauses after it are lost; Postgres refuses
-     * the statement. A ; in a value is none: a value is bound, never written in the SQL.
+     * Whether SQL written by hand holds a statement terminator for $connection: a ; outside its strings, its quoted
+     * identifiers and its comments, read as the database of the connection reads them, in one pass (MYSQL_TERMINATOR
+     * for MySQL and MariaDB, PGSQL_TERMINATOR, SQLITE_TERMINATOR). MySQL and MariaDB end the statement there and run
+     * what follows it as another statement, and SQLite prepares the statement up to it and drops the rest, so the
+     * clauses after it are lost; Postgres refuses the statement. A connection of no adapter of the library is read by
+     * the three, and holds one when any of them finds one. A ; in a value is none: a value is bound, never written in
+     * the SQL.
      *
      * @internal Serves QueryCompiler::refuse_statement_terminator(); not a supported API.
      * @throws ActiveRecordException for SQL that the pattern cannot read
      */
-    public static function holds_statement_terminator(string $sql): bool
+    public static function holds_statement_terminator(string $sql, Connection $connection): bool
     {
         // most SQL holds no ; at all
         if (!str_contains($sql, ';')) {
             return false;
         }
 
-        if (false === preg_match_all(self::STATEMENT_TERMINATOR, $sql, $matches)) {
-            throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for a statement terminator: %s", $sql, preg_last_error_msg()));
+        $readings = match (true) {
+            $connection instanceof MysqlAdapter => [self::MYSQL_TERMINATOR],
+            $connection instanceof PgsqlAdapter => [self::PGSQL_TERMINATOR],
+            $connection instanceof SqliteAdapter => [self::SQLITE_TERMINATOR],
+            default => [self::MYSQL_TERMINATOR, self::PGSQL_TERMINATOR, self::SQLITE_TERMINATOR],
+        };
+
+        foreach ($readings as $reading) {
+            if (false === preg_match_all($reading, $sql, $matches)) {
+                throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for a statement terminator: %s", $sql, preg_last_error_msg()));
+            }
+
+            if (in_array(';', $matches[0], true)) {
+                return true;
+            }
         }
 
-        return in_array(';', $matches[0], true);
+        return false;
     }
 
     /**
