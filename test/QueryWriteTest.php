@@ -350,6 +350,31 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same('2026-03-04', OddColumn::find('first')->some_day->format('Y-m-d'));
     }
 
+    // A key of the values names the real column of its attribute whatever the case it differs by, and the value is
+    // prepared by that column: authors.some_Date, a DATE whose attribute is some_date, takes the date of a DateTime. MySQL,
+    // MariaDB and SQLite match column names regardless of case, so Table maps no attribute name to it there, and the value
+    // went as a date and time, which SQLite stored as it was given
+    public function test_a_write_prepares_its_values_by_the_column_an_attribute_names_in_another_case(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        Author::table();
+        $noon = new DateTime('2026-01-02 12:00:00');
+        $stored = fn(string $where): mixed => $this->conn->query($this->sql("SELECT `some_Date` FROM `authors` WHERE $where"))->fetchColumn();
+
+        $this->assert_same(
+            [['sql' => $this->sql('UPDATE `authors` SET `some_Date`=?, `updated_at`=? WHERE `author_id` = ?'), 'values' => ['2026-01-02', self::FROZEN, 2]]],
+            GoldenStatements::capture(fn() => $this->assert_same(1, Author::where('author_id', 2)->update(['some_date' => $noon])))
+        );
+        $this->assert_same(
+            [['sql' => $this->sql('INSERT INTO `authors` (`name`, `some_Date`, `created_at`, `updated_at`) VALUES (?, ?, ?, ?)'), 'values' => ['Dated', '2026-01-02', self::FROZEN, self::FROZEN]]],
+            GoldenStatements::capture(fn() => Author::new_query()->insert(['name' => 'Dated', 'some_date' => $noon]))
+        );
+
+        $this->assert_same('2026-01-02', $stored('`author_id` = 2'));
+        $this->assert_same('2026-01-02', $stored("`name` = 'Dated'"));
+        $this->assert_same(['2026-01-02', '2026-01-02'], [Author::find(2)->some_date->format('Y-m-d'), Author::find_by_name('Dated')->some_date->format('Y-m-d')]);
+    }
+
     // Spec §5.5: the keys of the values of update() and insert() name their columns by the rule of the where, an alias of
     // $alias_attribute among them (marquee is Venue's name, mycity its city), which never shadows a column (#144). An
     // alias and its column in one hash name one column, the later value. A key that names no column, attribute or alias

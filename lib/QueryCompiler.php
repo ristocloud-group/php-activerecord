@@ -658,9 +658,12 @@ final class QueryCompiler
     /**
      * The values of a write of the builder (Query::update(), Query::insert()) keyed by the columns their keys name, by
      * the rule of column() (spec §5.5): an alias of the model's $alias_attribute names the column of its attribute, an
-     * attribute name its column (#92), and any other key is kept as written, a column's own name among them. An alias
-     * never shadows a column (spec §6.2.6), so the mapping is never ambiguous. Two keys that name one column leave one
-     * entry, the later value, as Table::real_column_keys() leaves them. The legacy writes map attribute names only
+     * attribute name its column (#92), and any other key is kept as written, a column's own name among them. A key of a
+     * column of the model is its real name, matched as the database matches names (see model_column()): 'some_date' is
+     * the column some_Date on MySQL too, where Table maps no attribute name to a column that differs from it by case only,
+     * so that Table::process_data() prepares the value by that column (a DateTime of a DATE as the date). An alias never
+     * shadows a column (spec §6.2.6), so the mapping is never ambiguous. Two keys that name one column leave one entry,
+     * the later value, as Table::real_column_keys() leaves them. The legacy writes map attribute names only
      * (update_all()'s 'set', upsert(), Table::insert() and update()).
      *
      * @internal Serves Query; not a supported API.
@@ -675,7 +678,7 @@ final class QueryCompiler
         foreach ($values as $key => $value) {
             // (string): an integer key ("0") names no column and comes back unchanged
             $key = (string) $key;
-            $columns[$this->table->real_column_name($aliases[$key] ?? $key)] = $value;
+            $columns[$this->model_column($key)->name ?? $this->table->real_column_name($aliases[$key] ?? $key)] = $value;
         }
 
         return $columns;
