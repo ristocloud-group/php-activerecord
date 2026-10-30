@@ -104,10 +104,10 @@ final class QueryState
     public array $wheres = [];
 
     /**
-     * Whether a call of a where method added no condition: where([]), a closure that adds none, where_null([]). A read
-     * takes such a call for no condition (spec §5.2). A write refuses a query whose where calls all added none, its WHERE
-     * empty: the conditions it was meant to write by turned out empty (see QueryCompiler::compile_update()), where a
-     * write of every row calls no where method.
+     * Whether a call of a where method added no condition: where([]), a closure that adds none, where_null([]); or a
+     * when() or an unless() ran neither its callback nor a default. A read takes such a call for no condition (spec
+     * §5.2). A write refuses a query whose where calls all added none, its WHERE empty: the conditions it was meant to
+     * write by turned out empty (see QueryCompiler::compile_update()), where a write of every row calls no where method.
      */
     public bool $empty_where = false;
 

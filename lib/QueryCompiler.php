@@ -1177,10 +1177,11 @@ final class QueryCompiler
 
     /**
      * Refuses the write $method of a state whose where calls all added no condition (see QueryState::$empty_where):
-     * where([]), a closure that adds none, where_null([]). Its WHERE is empty, so it would write every row, where the
-     * calls meant it to write by conditions, those of a filter that came empty for instance: where($filters) with no
-     * filter. A write of every row calls no where method, Author::new_query()->delete(), and a read of such a query is
-     * that of every row, as spec §5.2 has it.
+     * where([]), a closure that adds none, where_null([]), or a when() or an unless() that ran neither its callback nor a
+     * default. Its WHERE is empty, so it would write every row, where the calls meant it to write by conditions, those of
+     * a filter that came empty for instance: where($filters) with no filter, when($ids, ...) with no id. A write of every
+     * row calls no where method, Author::new_query()->delete(), and a read of such a query is that of every row, as spec
+     * §5.2 has it.
      *
      * @throws ActiveRecordException
      */
@@ -1190,11 +1191,11 @@ final class QueryCompiler
             $model = $this->table->class->name;
 
             throw new ActiveRecordException(sprintf(
-                '%s() on %s has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), so it would write every row: it is refused. A write of every row calls no where(): %s::new_query()->%s()',
+                '%s() on %s has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), or a when() or unless() that skipped its callback, so it would write every row: it is refused. A write of every row calls no where(): %s::new_query()->%s',
                 $method,
                 $model,
                 $model,
-                $method,
+                'update' === $method ? 'update(...)' : "$method()",
             ));
         }
     }

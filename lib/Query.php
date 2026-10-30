@@ -1461,6 +1461,10 @@ class Query
      * hands back another query on the model, as in Eloquent, which is then the query that goes on, a fork for
      * instance (see clone()). Anything else that the callback returns is of no use to the chain, and is left out.
      *
+     * When neither the callback nor a default runs, the filter came out empty: an update() or a delete() of the query
+     * with no other where condition is refused, as after where([]), where Eloquent writes every row. A read is
+     * unchanged, and a write of every row says so with new_query(): Author::new_query()->delete().
+     *
      * <code>
      * Author::when($name, fn (Query $query) => $query->where('name', $name))->get();
      * </code>
@@ -2085,10 +2089,10 @@ class Query
      * rows whose values changed, as update_all() returns it. As updated_at moves to now, every row matched changes there,
      * unless it already holds every value at that second; without timestamps, a row given its own values is not counted.
      *
-     * A query whose where calls all added no condition (where([]) of a filter that came empty, a closure that adds none)
-     * is refused rather than written as a query without where: a write of every row calls no where method,
-     * Author::new_query()->update(...). Called statically, Author::update() is refused: it would write every row (see
-     * Model::__callStatic()).
+     * A query whose where calls all added no condition (where([]) of a filter that came empty, a closure that adds none),
+     * or whose when() or unless() ran neither its callback nor a default, is refused rather than written as a query
+     * without where: a write of every row calls no where method, Author::new_query()->update(...). Called statically,
+     * Author::update() is refused: it would write every row (see Model::__callStatic()).
      *
      * <code>
      * Author::where('parent_author_id', 2)->update(['name' => 'Bob']);
@@ -2111,8 +2115,8 @@ class Query
      * read as update() reads them: the WHERE, the order and the limit of the query, picked by primary key in a subquery
      * on Postgres (#92), and any other clause refused before any statement. Without a where it deletes every row, which a
      * query says with new_query(): Author::new_query()->delete(). A query whose where calls all added no condition, such
-     * as where($filters) with no filter, is refused instead. It runs on the connection of the model's Table, and the
-     * statement is left in Table::$last_sql.
+     * as where($filters) with no filter, or whose when() or unless() skipped its callback, is refused instead. It runs
+     * on the connection of the model's Table, and the statement is left in Table::$last_sql.
      *
      * Author::delete() is PHP's own Error, not this method: Model has an instance delete(), which deletes a model.
      *
@@ -3037,7 +3041,8 @@ class Query
     /**
      * What when() and unless() do: the callback runs when the truth of $value is $when (true for when(), false for
      * unless()), else the default does, if there is one. A Closure given as the value is called with the query, and
-     * what it returns is the value.
+     * what it returns is the value. When neither runs, the query remembers it as it remembers a where call that added
+     * no condition (QueryState::$empty_where): the filter came out empty, and a write with no other condition is refused.
      *
      * @param callable(static, mixed): mixed $callback
      * @param (callable(static, mixed): mixed)|null $default
@@ -3049,6 +3054,8 @@ class Query
         $run = $when === (bool) $value ? $callback : $default;
 
         if (null === $run) {
+            $this->state->empty_where = true;
+
             return $this;
         }
 

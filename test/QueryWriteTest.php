@@ -93,6 +93,19 @@ class QueryWriteTest extends DatabaseTest
     }
 
     /**
+     * The refusal of the write $method of an Author query whose where calls all added no condition, or whose when() or
+     * unless() skipped its callback (see QueryCompiler::refuse_empty_where()).
+     */
+    private function empty_where_refusal(string $method): string
+    {
+        return sprintf(
+            '%s() on Author has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), or a when() or unless() that skipped its callback, so it would write every row: it is refused. A write of every row calls no where(): Author::new_query()->%s',
+            $method,
+            'update' === $method ? 'update(...)' : 'delete()',
+        );
+    }
+
+    /**
      * The created_at and updated_at of the author named $name, as stored.
      *
      * @return array{created_at: string|null, updated_at: string|null}
@@ -307,7 +320,7 @@ class QueryWriteTest extends DatabaseTest
         ] as $name => $query) {
             foreach (['update' => fn() => $query()->update(['name' => 'x']), 'delete' => fn() => $query()->delete()] as $method => $write) {
                 $this->assert_same(
-                    [['exception' => ActiveRecordException::class, 'message' => "$method() on Author has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), so it would write every row: it is refused. A write of every row calls no where(): Author::new_query()->$method()"]],
+                    [['exception' => ActiveRecordException::class, 'message' => $this->empty_where_refusal($method)]],
                     GoldenStatements::capture($write),
                     "$method after $name"
                 );
@@ -329,6 +342,43 @@ class QueryWriteTest extends DatabaseTest
 
         // no where call at all: every row, as it says
         $this->assert_same(3, Author::new_query()->delete());
+    }
+
+    // A when() or an unless() that ran neither its callback nor a default is a filter that came out empty too, the optional
+    // filter of the README: a write with no other where condition is refused, as where([]) is. One that ran its callback,
+    // or its default, writes as the conditions it added say. Reads are unchanged, and a clone keeps what the query knows
+    public function test_a_write_refuses_a_when_or_unless_that_skipped_its_callback(): void
+    {
+        $ids = [];
+        Author::table();
+        $by_ids = fn(Query $query, mixed $ids): Query => $query->where_key($ids);
+
+        foreach ([
+            'when($ids)' => [fn() => Author::when($ids, $by_ids), 4],
+            'when(false)' => [fn() => Author::when(false, $by_ids), 4],
+            'unless(true)' => [fn() => Author::unless(true, fn(Query $q) => $q->where('author_id', 1)), 4],
+            'a closure given as the value' => [fn() => Author::when(fn(Query $q) => [], $by_ids), 4],
+            'a clone' => [fn() => Author::when($ids, $by_ids)->clone(), 4],
+            'an order and a limit beside it' => [fn() => Author::when($ids, $by_ids)->order_by('author_id')->limit(2), 2],
+            'in a closure group' => [fn() => Author::where(fn(Query $q) => $q->when($ids, $by_ids)), 4],
+        ] as $name => [$query, $read]) {
+            foreach (['update' => fn() => $query()->update(['name' => 'x']), 'delete' => fn() => $query()->delete()] as $method => $write) {
+                $this->assert_same([['exception' => ActiveRecordException::class, 'message' => $this->empty_where_refusal($method)]], GoldenStatements::capture($write), "$method after $name");
+            }
+
+            $this->assert_same($read, count($query()->get()), "get() after $name");
+        }
+
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        // a condition beside it is the WHERE, and a callback or a default that ran writes by what it added
+        $this->assert_same(1, Author::when($ids, $by_ids)->where('author_id', 1)->update(['name' => 'One']));
+        $this->assert_same(1, Author::when([2], $by_ids)->update(['name' => 'Two']));
+        $this->assert_same(1, Author::when(false, $by_ids, fn(Query $q) => $q->where_key(3))->update(['name' => 'Three']));
+        $this->assert_same(1, Author::unless(false, fn(Query $q) => $q->where('author_id', 4))->update(['name' => 'Four']));
+        $this->assert_same([1 => 'One', 2 => 'Two', 3 => 'Three', 4 => 'Four'], $this->names_by_id());
+        $this->assert_same(1, Author::when($ids, $by_ids)->where('author_id', 1)->delete());
+        $this->assert_same([2, 3, 4], array_keys($this->names_by_id()));
     }
 
     // The where of a write names its columns by the rule of every clause (spec §5.1): an alias and an attribute name
