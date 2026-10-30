@@ -224,9 +224,11 @@ $new = Invoice::where('number', 'INV-007')->sole();
 show('insert: created_at, updated_at set', [null !== $new->created_at, null !== $new->updated_at]);
 
 // update() and delete() take the where, order_by() and limit() of the query, and return the number
-// of rows written. update() sets updated_at too.
+// of rows written. update() sets updated_at too: a seed row has none until a write stamps it.
+show('update: updated_at before', Invoice::where('number', 'INV-002')->sole()->updated_at);
+Invoice::where('number', 'INV-002')->update(['note' => 'rush']);
+show('update: updated_at after', null !== Invoice::where('number', 'INV-002')->sole()->updated_at);
 show('update', Invoice::where('customer_id', 4)->update(['status' => 'void']));
-show('update: updated_at set', null !== Invoice::where('number', 'INV-008')->sole()->updated_at);
 
 // without_timestamps() suspends created_at and updated_at for the model while the closure runs
 Invoice::without_timestamps(fn() => Invoice::where('number', 'INV-003')->update(['note' => 'checked']));
