@@ -608,11 +608,10 @@ class Table
         // the engine sends the values as they are prepared here. Null (nothing to write) is an empty
         // set, which it rejects as it rejects anything but a hash. 'mapped_names' => []: a pk hash reads
         // no alias. The check at load (check_alias_attribute()) keeps an alias from being named like a
-        // column, but a shadow it did not see must not move the rows a save() writes.
-        // 'refuse_terminator' => false: the WHERE is sent as it always was (see
-        // QueryCompiler::refuse_terminated_conditions())
-        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => [], 'refuse_terminator' => false])
-            ->execute_update($data ?: [], timestamps: false, format_dates: false);
+        // column, but a shadow it did not see must not move the rows a save() writes. refuse_terminator:
+        // false: the WHERE is sent as it always was (see QueryCompiler::refuse_terminated_conditions())
+        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])
+            ->execute_update($data ?: [], timestamps: false, format_dates: false, refuse_terminator: false);
     }
 
     /**
@@ -634,8 +633,8 @@ class Table
         $conditions = is_hash($data) ? $data : [$data];
 
         // the engine sends the values as they are prepared here. 'mapped_names' => []: a pk hash reads no
-        // alias, and 'refuse_terminator' => false: the WHERE is sent as it always was (see update())
-        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => [], 'refuse_terminator' => false])->execute_delete(format_dates: false);
+        // alias, and refuse_terminator: false: the WHERE is sent as it always was (see update())
+        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])->execute_delete(format_dates: false, refuse_terminator: false);
     }
 
     /**

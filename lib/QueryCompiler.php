@@ -68,8 +68,11 @@ final class QueryCompiler
     /**
      * The statements are rendered for $connection when one is given, else for $table's: a bulk write
      * of Model gives the connection it always built its statement on (see Query::execute_update()).
+     * With $refuse_terminator false, the legacy conditions are not read for a statement terminator (see
+     * refuse_terminated_conditions()): only the WHERE that Table::update() and Table::delete() are given
+     * is sent so, through Query::execute_update() and execute_delete(), and no options array turns it off.
      */
-    public function __construct(private readonly Table $table, private readonly ?Connection $connection = null) {}
+    public function __construct(private readonly Table $table, private readonly ?Connection $connection = null, private readonly bool $refuse_terminator = true) {}
 
     /**
      * A pk value of a finder as the column stores it: a DateTime for a DATE pk column as the date the column
@@ -1263,9 +1266,11 @@ final class QueryCompiler
      * MariaDB and SQLite ended the statement there: a limited update_all() or delete_all() wrote every row it matched,
      * and a find read every row. Their values are bound, and a hash names columns, so neither is read.
      *
-     * The WHERE that Table::update() and Table::delete() are given, which they mark 'refuse_terminator' => false, is
-     * sent as it always was: save() and Model::delete() give a pk hash, and a direct caller its own SQL. So are the
-     * other legacy options (select, joins, from, group, having, order), which this does not read.
+     * The WHERE that Table::update() and Table::delete() are given is sent as it always was: they compile it with a
+     * compiler made with $refuse_terminator false (see the constructor), an argument of the engine that no options array
+     * reaches, so that a caller's options (those of the public Table::find(), exists() and options_to_sql()) can never
+     * turn the refusal off. save() and Model::delete() give a pk hash, and a direct caller its own SQL. So are the other
+     * legacy options (select, joins, from, group, having, order), which this does not read.
      *
      * @param array<string, mixed> $options
      * @throws ActiveRecordException
@@ -1274,7 +1279,7 @@ final class QueryCompiler
     {
         $conditions = $options['conditions'];
 
-        if (false === ($options['refuse_terminator'] ?? true) || !is_array($conditions) || [] === $conditions) {
+        if (!$this->refuse_terminator || !is_array($conditions) || [] === $conditions) {
             return;
         }
 

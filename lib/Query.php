@@ -159,10 +159,10 @@ class Query
      * of a finder (those Table::options_to_sql() receives), or the conditions, order and limit of
      * a legacy write, which execute_update() and execute_delete() read. Model::update_all() and
      * Model::delete_all() give those of their options; Table::update() and Table::delete() give
-     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read, and
-     * 'refuse_terminator' => false, so that the WHERE they are given is sent as it always was (the
-     * SQL of other conditions is refused when it holds a statement terminator, see
-     * QueryCompiler::refuse_terminated_conditions()).
+     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read. The SQL
+     * of the conditions is refused when it holds a statement terminator (see
+     * QueryCompiler::refuse_terminated_conditions()), whatever the options hold: only the
+     * $refuse_terminator argument of execute_update() and execute_delete() sends it as given.
      *
      * Like for_table(), it reads and builds through $table itself.
      *
@@ -2283,10 +2283,14 @@ class Query
      * passes static::connection(), a public static that a subclass can override, on which it always
      * built and ran its statement. Without one, the Table's.
      *
+     * The SQL of legacy conditions that holds a statement terminator is refused, unless
+     * $refuse_terminator is false: Table::update() turns it off, so that the WHERE it is given is
+     * sent as it always was (see QueryCompiler::refuse_terminated_conditions()).
+     *
      * @internal Serves update(), Model::update_all() and Table::update(); not a supported API.
      * @param array<string, mixed>|string $set
      */
-    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null): \PDOStatement
+    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
     {
         $table = $this->table();
 
@@ -2303,7 +2307,7 @@ class Query
             }
         }
 
-        $sql = (new QueryCompiler($table, $connection))->compile_update($this->state, $set);
+        $sql = (new QueryCompiler($table, $connection, $refuse_terminator))->compile_update($this->state, $set);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }
@@ -2320,13 +2324,15 @@ class Query
      * (Table::process_data()), and its statement always sent it as it is.
      *
      * The statement is rendered for $connection and runs on it when one is given: Model::delete_all()
-     * passes static::connection(), as execute_update() describes. Without one, the Table's.
+     * passes static::connection(), as execute_update() describes. Without one, the Table's. With
+     * $refuse_terminator false, the WHERE that Table::delete() is given is sent as it always was, as in
+     * execute_update().
      *
      * @internal Serves delete(), Model::delete_all() and Table::delete(); not a supported API.
      */
-    public function execute_delete(bool $format_dates = true, ?Connection $connection = null): \PDOStatement
+    public function execute_delete(bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
     {
-        $sql = (new QueryCompiler($this->table(), $connection))->compile_delete($this->state);
+        $sql = (new QueryCompiler($this->table(), $connection, $refuse_terminator))->compile_delete($this->state);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }

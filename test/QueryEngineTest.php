@@ -756,6 +756,29 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
     }
 
+    // No options array turns the refusal off: the WHERE of Table::update() and Table::delete() is sent as given through an
+    // argument of the engine (Query::execute_update(), execute_delete()), which no caller's options reach. A
+    // 'refuse_terminator' key in the options of the public Table::find(), exists() and options_to_sql(), or of the
+    // engine's own legacy write, is an unknown option, read by nothing: the SQL is refused as without it
+    public function test_no_option_turns_the_refusal_of_a_statement_terminator_off(): void
+    {
+        $table = Author::table();
+        $off = ['refuse_terminator' => false];
+
+        foreach ([
+            'Table::find' => fn() => $table->find(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1] + $off),
+            'Table::exists' => fn() => $table->exists(['conditions' => 'author_id > 0;'] + $off),
+            'Table::options_to_sql' => fn() => $table->options_to_sql(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1] + $off)->to_s(),
+            'a legacy delete' => fn() => Query::from_options($table, ['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1] + $off)->execute_delete(),
+            'a legacy update' => fn() => Query::from_options($table, ['conditions' => 'author_id > 0;', 'limit' => 1] + $off)->execute_update(['name' => 'Z']),
+        ] as $case => $call) {
+            $this->assert_same([['exception' => ActiveRecord\ActiveRecordException::class, 'message' => $this->terminator_refusal('author_id > 0;')]], GoldenStatements::capture($call), $case);
+        }
+
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
+    }
+
     // ... and a ; that is no terminator is sent as it always was: in a string literal, in a comment, in a bound value (a
     // dynamic finder binds its values), or on Postgres in a dollar-quoted string
     public function test_legacy_conditions_send_a_semicolon_in_a_string_a_comment_or_a_value(): void
