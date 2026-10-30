@@ -65,8 +65,8 @@ class QueryReadTest extends DatabaseTest
     public function test_find_forms(): void
     {
         $this->assert_null(Author::new_query()->find(99));
-        $this->assert_same([1, 2], array_map(fn($a) => $a->author_id, Author::new_query()->find([1, 2, 99])));
-        $this->assert_same([2, 3], array_map(fn($a) => $a->author_id, Author::new_query()->find_many([2, 3])));
+        $this->assert_same([1, 2], array_map(fn($a) => $a->author_id, Author::order_by('author_id')->find([1, 2, 99])));
+        $this->assert_same([2, 3], array_map(fn($a) => $a->author_id, Author::order_by('author_id')->find_many([2, 3])));
         $this->assert_same('missing', Author::new_query()->find_or(99, fn() => 'missing'));
         $this->assert_exception_message_contains("Couldn't find Author with ID=99", fn() => Author::new_query()->find_or_fail(99), ActiveRecord\RecordNotFound::class);
         $this->assert_exception_message_contains('composite', fn() => DatedCount::new_query()->find(1), ActiveRecord\ActiveRecordException::class);
@@ -197,7 +197,10 @@ class QueryReadTest extends DatabaseTest
 
         $this->assert_false(Author::doesnt_exist());
         $this->assert_same('Tito', Author::find_or_fail(1)->name);
-        $this->assert_same([2, 3], $this->ids(Author::find_many([2, 3])));
+        // the rows of a find come in no set order without an order_by()
+        $found = $this->ids(Author::find_many([2, 3]));
+        sort($found);
+        $this->assert_same([2, 3], $found);
         $this->assert_same('missing', Author::find_or(99, fn() => 'missing'));
         $this->assert_same(4, count(Author::pluck('name')));
         $this->assert_instance_of(Author::class, Author::first_or_fail());
