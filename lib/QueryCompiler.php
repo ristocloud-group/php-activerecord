@@ -922,8 +922,9 @@ final class QueryCompiler
 
     /**
      * column()'s reading of $name: the SQL that names it, and the name its values are prepared by (see
-     * value()). That is the column an unqualified name stands for, the text of a pre-quoted one included;
-     * any other name is taken as written, and names no column of the model.
+     * value()). That is the real name of the column of the model an unqualified name stands for (see
+     * model_column()), a pre-quoted one included, whatever case it differs by; any other name is taken as
+     * written, and names no column of the model.
      *
      * @return array{sql: string, column: string}
      */
@@ -941,9 +942,12 @@ final class QueryCompiler
         $quoted = $parts[0][1];
         $column = $quoted ? $name : $this->named_column($name);
         $sql = $connection->quote_name($column);
-        // the text of a pre-quoted identifier, in which a doubled quote character is one
+        // the values are prepared by the column the name stands for, matched as the database matches names:
+        // 'some_date' is the DATE column some_Date on MySQL too, where Table maps no attribute name to a column
+        // that differs from it by case only (Table::real_column_name()). Else by the name, the text of a
+        // pre-quoted identifier, in which a doubled quote character is one
         $q = $connection::$QUOTE_CHARACTER;
-        $data = $quoted ? str_replace($q . $q, $q, substr($name, 1, -1)) : $column;
+        $data = $this->model_column($name)->name ?? ($quoted ? str_replace($q . $q, $q, substr($name, 1, -1)) : $column);
 
         if ([] === $state->joins || null !== $state->from_raw || !$this->names_model_column($column)) {
             return ['sql' => $sql, 'column' => $data];

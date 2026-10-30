@@ -873,6 +873,38 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same(2, count(DatedCount::where_between('day', [new DateTime('2026-01-01'), $day])->get()));
     }
 
+    // The column an attribute name stands for prepares its values whatever the case it differs by: authors.some_Date,
+    // a DATE whose attribute is some_date, takes the date of a DateTime under either name. MySQL, MariaDB and SQLite
+    // match column names regardless of case, so Table maps no attribute name to it (Table::real_column_name()), and the
+    // value went as a date and time, which matched no row there. The legacy finders keep binding the date and time
+    public function test_a_value_is_prepared_for_the_column_its_attribute_names_in_another_case(): void
+    {
+        Author::update_all(['set' => $this->sql("`some_Date` = '2026-01-02'"), 'conditions' => ['author_id' => 1]]);
+        $noon = new DateTime('2026-01-02 12:00:00');
+        $midnight = new DateTime('2026-01-02 00:00:00');
+        $other = new DateTime('2026-03-04 12:00:00');
+
+        foreach ([
+            [['2026-01-02'], Author::where('some_date', $noon)],
+            [['2026-01-02'], Author::where('some_date', '<=', $noon)],
+            [['2026-01-02'], Author::where(['some_date' => $noon])],
+            [['2026-01-02', '2026-01-02'], Author::where_between('some_date', [$midnight, $noon])],
+            [['2026-01-02', '2026-03-04'], Author::where_in('some_date', [$noon, $other])],
+            [['2026-03-04', '2026-01-02'], Author::where('some_date', $other)->or_where('some_date', $noon)],
+            [['2026-03-04', '2026-01-02'], Author::where('some_date', $other)->or_where_in('some_date', [$noon])],
+            [['2026-03-04', '2026-01-02', '2026-01-02'], Author::where('some_date', $other)->or_where_between('some_date', [$midnight, $noon])],
+            [['2026-03-04'], Author::where_not('some_date', $other)],
+            [['2026-03-04'], Author::where_not_in('some_date', [$other])],
+            [['2026-03-04', '2026-03-04'], Author::where_not_between('some_date', [$other, $other])],
+        ] as [$bindings, $query]) {
+            $this->assert_same($bindings, $query->get_bindings(), $query->to_sql());
+            $this->assert_same([1], $this->values($query->get()), $query->to_sql());
+        }
+
+        [$legacy] = GoldenStatements::capture(fn() => Author::all(['conditions' => ['some_date' => $noon]]));
+        $this->assert_same([$this->conn->datetime_to_string($noon)], $legacy['values']);
+    }
+
     // Spec §5.1: with joins every where method names the model's columns with its table, or with the from()
     // alias, and any other name as written
     public function test_with_joins_the_models_columns_get_its_table(): void
