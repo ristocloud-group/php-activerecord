@@ -1991,9 +1991,11 @@ class Query
      * go as one INSERT of several VALUES. They are not models: no validation, no callback and no setter runs, as in
      * Eloquent's insert(). The rows are checked before any statement:
      * - there is at least one, and each has at least one column, and the keys of every other row, in any order;
-     * - a key names a column, by its name or its attribute name (#92), as every write of the engine reads one
-     *   (Table::real_column_keys());
-     * - a value is a scalar, null or a DateTime, which is bound in the format of its column (a DATE as a date).
+     * - a key names a column by the rule of the where (spec §5.5): by an alias of the model ($alias_attribute), an
+     *   attribute name (#92) or the column's own name (see QueryCompiler::value_columns());
+     * - a value is a scalar, null, a DateTime, bound in the format of its column (a DATE as a date), or an object with a
+     *   text (Stringable), bound as that text. An array, an enum (not supported: give the scalar it stands for) and any
+     *   other object are refused.
      *
      * Every row gets the created_at and updated_at it lacks (spec §5.6), all at the one time of the call, where
      * Eloquent's insert() sets none. Model::without_timestamps() of the model's class suspends them, for that class
@@ -2014,12 +2016,13 @@ class Query
      *
      * @param array<mixed> $values One row (a hash of column => value), or a list of rows
      * @throws ActiveRecordException before any statement: for a clause of the query, no row, a row that is no hash or has
-     *   no column, rows that do not share their keys, a value that is no scalar, null or DateTime, or a row of more columns
-     *   than the adapter binds in one statement
+     *   no column, rows that do not share their keys, a value that is an array, an enum or another object than a DateTime
+     *   or a Stringable, or a row of more columns than the adapter binds in one statement
      */
     public function insert(array $values): bool
     {
-        $this->compiler()->refuse_unwritable_clauses($this->state, __FUNCTION__);
+        $compiler = $this->compiler();
+        $compiler->refuse_unwritable_clauses($this->state, __FUNCTION__);
         $table = $this->table();
         // one hash is one row
         $rows = array_is_list($values) ? $values : [$values];
@@ -2031,8 +2034,8 @@ class Query
         $hashes = [];
 
         foreach ($rows as $row) {
-            // the statement names the columns (#92)
-            $hashes[] = $table->real_column_keys($this->insert_row(__FUNCTION__, $row));
+            // the statement names the columns: of an alias, of an attribute name (#92), or the column's own
+            $hashes[] = $compiler->value_columns($this->insert_row(__FUNCTION__, $row));
         }
 
         if (!self::share_keys($hashes)) {
@@ -2045,7 +2048,6 @@ class Query
         $now = Timestamps::now();
         $rows = array_map(fn(array $row): array => $table->process_data(Timestamps::apply_to_insert($table, $class, $row, $now)), $hashes);
         $columns = array_keys($rows[0]);
-        $compiler = new QueryCompiler($table);
 
         $this->write_rows(__FUNCTION__ . '()', $columns, $rows, fn(int $row_count): SQLBuilder => $compiler->compile_insert_rows($columns, $row_count));
 
@@ -2062,30 +2064,37 @@ class Query
      * readonly(), is refused before any statement (spec §5.5): the UPDATE would drop it, and write other rows than the
      * query reads.
      *
-     * The keys of $values name the columns, by their names or attribute names (#92), as update_all()'s 'set' hash names
-     * them (Table::real_column_keys()). A value is a scalar, null or a DateTime, which is bound in the format of its
-     * column. The SET gets updated_at, set to now, when the values give none (spec §5.6), unless Model::without_timestamps()
-     * of the model's class suspends it; created_at never. It runs on the connection of the model's Table, not on the one a
-     * subclass's connection() returns, and the statement is left in Table::$last_sql.
+     * The keys of $values name the columns by the rule of the where (spec §5.5): by an alias of the model
+     * ($alias_attribute), an attribute name (#92) or the column's own name (see QueryCompiler::value_columns()), where
+     * update_all()'s 'set' hash maps attribute names only. A key that names none of them is sent as written, and the
+     * database refuses it. A value is a scalar, null, a DateTime, bound in the format of its column, or an object with a
+     * text (Stringable), bound as that text, as update_all() binds it; an array, an enum (not supported: give the scalar
+     * it stands for) and any other object are refused. The SET gets updated_at, set to now, when the values give none
+     * (spec §5.6), unless Model::without_timestamps() of the model's class suspends it; created_at never. It runs on the
+     * connection of the model's Table, not on the one a subclass's connection() returns, and the statement is left in
+     * Table::$last_sql.
      *
      * The count is PDOStatement::rowCount(): on Postgres and SQLite the rows the WHERE matched; on MySQL and MariaDB the
      * rows whose values changed, as update_all() returns it. As updated_at moves to now, every row matched changes there,
      * unless it already holds every value at that second; without timestamps, a row given its own values is not counted.
      *
-     * Called statically, Author::update() is refused: it would write every row (see Model::__callStatic()).
+     * A query whose where calls all added no condition (where([]) of a filter that came empty, a closure that adds none)
+     * is refused rather than written as a query without where: a write of every row calls no where method,
+     * Author::new_query()->update(...). Called statically, Author::update() is refused: it would write every row (see
+     * Model::__callStatic()).
      *
      * <code>
      * Author::where('parent_author_id', 2)->update(['name' => 'Bob']);
      * </code>
      *
      * @param array<string, mixed> $values
-     * @throws ActiveRecordException before any statement: for a clause the query cannot use in an UPDATE, values that are
-     *   empty or no hash ("Updating requires a hash or string.", as update_all() has it), or a value that is no scalar,
-     *   null or DateTime
+     * @throws ActiveRecordException before any statement: for a clause the query cannot use in an UPDATE, where calls that
+     *   all added no condition, values that are empty or no hash ("Updating requires a hash or string.", as update_all()
+     *   has it), or a value that is an array, an enum or another object than a DateTime or a Stringable
      */
     public function update(array $values): int
     {
-        $this->refuse_unbindable_values(__FUNCTION__, $values);
+        $values = $this->compiler()->value_columns($this->bindable_values(__FUNCTION__, $values));
 
         return $this->execute_update($values)->rowCount();
     }
@@ -2094,7 +2103,8 @@ class Query
      * DELETEs the rows the query selects and returns how many the driver counts (PDOStatement::rowCount()). The rows are
      * read as update() reads them: the WHERE, the order and the limit of the query, picked by primary key in a subquery
      * on Postgres (#92), and any other clause refused before any statement. Without a where it deletes every row, which a
-     * query says with new_query(): Author::new_query()->delete(). It runs on the connection of the model's Table, and the
+     * query says with new_query(): Author::new_query()->delete(). A query whose where calls all added no condition, such
+     * as where($filters) with no filter, is refused instead. It runs on the connection of the model's Table, and the
      * statement is left in Table::$last_sql.
      *
      * Author::delete() is PHP's own Error, not this method: Model has an instance delete(), which deletes a model.
@@ -2103,7 +2113,8 @@ class Query
      * Author::where('author_id', '>', 10)->order_by('author_id')->limit(5)->delete();
      * </code>
      *
-     * @throws ActiveRecordException before any statement, for a clause the query cannot use in a DELETE
+     * @throws ActiveRecordException before any statement, for a clause the query cannot use in a DELETE, or where calls
+     *   that all added no condition
      */
     public function delete(): int
     {
@@ -2449,11 +2460,12 @@ class Query
     }
 
     /**
-     * A row given to $method, insert(), as the hash of column => value it must be, with at least one column, and
-     * values that a column takes (see refuse_unbindable_values()).
+     * A row given to $method, insert(), as the hash of column => value it must be, with at least one column, and its
+     * values as the statement binds them (see bindable_values()).
      *
      * @return array<string, mixed>
-     * @throws ActiveRecordException for a row that is no hash, a key that is no column name, or a row without columns
+     * @throws ActiveRecordException for a row that is no hash, a key that is no column name, a row without columns, or a
+     *   value that no column takes
      */
     private function insert_row(string $method, mixed $row): array
     {
@@ -2475,25 +2487,39 @@ class Query
             $hash[$column] = $value;
         }
 
-        $this->refuse_unbindable_values($method, $hash);
-
-        return $hash;
+        return $this->bindable_values($method, $hash);
     }
 
     /**
-     * Refuses a value of $values, given to $method, that no column takes: an array, which would stand for as many bind
-     * values as it holds, or an object that is no DateTime. Before any statement (spec §5.7).
+     * $values, given to $method (update() or insert()), as the statement binds them: a scalar, null and a DateTime as they
+     * are (a DateTime is formatted for its column later, see Table::process_data()), and an object with a text
+     * (Stringable) as that text, as the legacy writes bind it. Any other value is refused before any statement (spec
+     * §5.7): an array, which would stand for as many bind values as it holds; an enum, which is not supported (the scalar
+     * it stands for is to be given); any other object.
      *
-     * @param array<mixed> $values
+     * @param array<string, mixed> $values
+     * @return array<string, mixed>
      * @throws ActiveRecordException
      */
-    private function refuse_unbindable_values(string $method, array $values): void
+    private function bindable_values(string $method, array $values): array
     {
         foreach ($values as $column => $value) {
-            if (null !== $value && !is_scalar($value) && !$value instanceof \DateTimeInterface) {
-                throw new ActiveRecordException(sprintf("%s() takes a scalar, null or a DateTime as a value, not %s for '%s', on %s", $method, get_debug_type($value), $column, $this->model_class));
+            if (null === $value || is_scalar($value) || $value instanceof \DateTimeInterface) {
+                continue;
             }
+
+            if ($value instanceof \UnitEnum) {
+                throw new ActiveRecordException(sprintf("%s() does not support an enum as a value: %s::%s for '%s', on %s; give the scalar it stands for", $method, $value::class, $value->name, $column, $this->model_class));
+            }
+
+            if (!$value instanceof \Stringable) {
+                throw new ActiveRecordException(sprintf("%s() takes a scalar, null, a DateTime or a Stringable as a value, not %s for '%s', on %s", $method, get_debug_type($value), $column, $this->model_class));
+            }
+
+            $values[$column] = (string) $value;
         }
+
+        return $values;
     }
 
     /**
@@ -2841,13 +2867,18 @@ class Query
     }
 
     /**
-     * Adds conditions to the WHERE, after those it holds.
+     * Adds conditions to the WHERE, after those it holds. A where method that adds none (where([]), a closure that adds
+     * none) is remembered: a write refuses a WHERE that its where calls all left empty (see QueryState::$empty_where).
      *
      * @param list<Where> $wheres
      * @return $this
      */
     private function add_wheres(array $wheres): static
     {
+        if ([] === $wheres) {
+            $this->state->empty_where = true;
+        }
+
         $this->state->wheres = [...$this->state->wheres, ...$wheres];
 
         return $this;
@@ -3109,8 +3140,10 @@ class Query
         $new = get_object_vars(new QueryState());
         $held = [];
 
+        // a where call that added no condition is a where clause too: the group holds what the others added, and is
+        // left out without any, which the query it goes in remembers (see add_wheres())
         foreach (get_object_vars($query->state) as $field => $value) {
-            if ('wheres' !== $field && $value !== $new[$field]) {
+            if (!in_array($field, ['wheres', 'empty_where'], true) && $value !== $new[$field]) {
                 $held[] = $field;
             }
         }

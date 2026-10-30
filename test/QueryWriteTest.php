@@ -10,6 +10,17 @@ use ActiveRecord\Table;
 use ActiveRecord\Timestamps;
 use PHPUnit\Framework\Attributes\DataProvider;
 
+// a backed enum and a pure one: the builder's writes do not take an enum as a value
+enum QueryWriteSuit: string
+{
+    case Hearts = 'H';
+}
+
+enum QueryWritePureSuit
+{
+    case Spades;
+}
+
 /**
  * The writes of the query builder (spec §5.5): update(), delete() and insert(). An UPDATE and a DELETE write the rows
  * that the WHERE of the query selects, read by the rules of every read (Conditions and ConditionCompiler), in its order
@@ -274,10 +285,55 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same(0, Author::count());
     }
 
+    // A where call that adds no condition is no condition for a read (spec §5.2), but a write whose where calls all
+    // added none is refused: the conditions it was meant to write by turned out empty, where($filters) with no filter for
+    // instance, and it would write every row. A write of every row calls no where (see above), and a where call that
+    // added a condition beside an empty one is a WHERE as any other
+    public function test_a_write_refuses_where_calls_that_all_added_no_condition(): void
+    {
+        $filters = [];
+        Author::table();
+
+        foreach ([
+            'where([])' => fn() => Author::where($filters),
+            'or_where([])' => fn() => Author::new_query()->or_where([]),
+            'where_not([])' => fn() => Author::where_not([]),
+            'where_null([])' => fn() => Author::where_null([]),
+            'where([[closure]])' => fn() => Author::where([[fn(Query $q) => $q]]),
+            'a closure that adds none' => fn() => Author::where(fn(Query $q) => null),
+            'a closure of a closure that adds none' => fn() => Author::where(fn(Query $q) => $q->where(fn(Query $r) => $r->where([]))),
+            'two empty calls' => fn() => Author::where([])->where_not(fn(Query $q) => $q),
+            'a clone' => fn() => Author::where([])->clone(),
+        ] as $name => $query) {
+            foreach (['update' => fn() => $query()->update(['name' => 'x']), 'delete' => fn() => $query()->delete()] as $method => $write) {
+                $this->assert_same(
+                    [['exception' => ActiveRecordException::class, 'message' => "$method() on Author has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), so it would write every row: it is refused. A write of every row calls no where(): Author::new_query()->$method()"]],
+                    GoldenStatements::capture($write),
+                    "$method after $name"
+                );
+            }
+
+            // a read of the query is that of every row, as it was
+            $this->assert_same(4, count($query()->get()), "get() after $name");
+        }
+
+        // an INSERT and an UPSERT take no where at all
+        $this->assert_same([ActiveRecordException::class, 'insert() cannot use where, on Author: it takes no clause'], $this->thrown(fn() => Author::where([])->insert(['name' => 'x'])));
+        $this->assert_same([ActiveRecordException::class, 'upsert() cannot use where, on Author: it takes no clause'], $this->thrown(fn() => Author::where([])->upsert([['author_id' => 1, 'name' => 'x']], 'author_id')));
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        // an empty call beside a condition: the condition is the WHERE
+        $this->assert_same(1, Author::where([])->where('author_id', 1)->update(['name' => 'One']));
+        $this->assert_same(1, Author::where(fn(Query $q) => $q->where([])->where('author_id', 2))->delete());
+        $this->assert_same([1 => 'One', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        // no where call at all: every row, as it says
+        $this->assert_same(3, Author::new_query()->delete());
+    }
+
     // The where of a write names its columns by the rule of every clause (spec §5.1): an alias and an attribute name
-    // are the columns they stand for (#92, #144). The keys of the values are named as every write names them, by
-    // their columns or attribute names (Table::real_column_keys()), and a DateTime is bound in the format of its
-    // column: a DATE as a date
+    // are the columns they stand for (#92, #144). So do the keys of the values (spec §5.5, see
+    // test_the_keys_of_the_values_read_aliases()), and a DateTime is bound in the format of its column: a DATE as a date
     public function test_a_write_names_its_columns_as_the_reads_do(): void
     {
         $this->assert_same(1, Venue::where('marquee', 'Warner Theatre')->update(['state' => 'XX']));
@@ -292,6 +348,42 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same([['sql' => $this->sql('INSERT INTO `odd_columns` (`space name`, `dash-name`, `some day`) VALUES (?, ?, ?)'), 'values' => ['s', 'a', '2026-01-02']]], $insert);
         $this->assert_same([['sql' => $this->sql('UPDATE `odd_columns` SET `some day`=?, `dash-name`=? WHERE `space name` = ?'), 'values' => ['2026-03-04', 'd', 's']]], $update);
         $this->assert_same('2026-03-04', OddColumn::find('first')->some_day->format('Y-m-d'));
+    }
+
+    // Spec §5.5: the keys of the values of update() and insert() name their columns by the rule of the where, an alias of
+    // $alias_attribute among them (marquee is Venue's name, mycity its city), which never shadows a column (#144). An
+    // alias and its column in one hash name one column, the later value. A key that names no column, attribute or alias
+    // is sent as written, and refused by the database, as before
+    public function test_the_keys_of_the_values_read_aliases(): void
+    {
+        Venue::table();
+
+        $this->assert_same(
+            [['sql' => $this->sql('UPDATE `venues` SET `name`=? WHERE `name` = ?'), 'values' => ['Marquee', 'Warner Theatre']]],
+            GoldenStatements::capture(fn() => $this->assert_same(1, Venue::where('marquee', 'Warner Theatre')->update(['marquee' => 'Marquee'])))
+        );
+        $this->assert_same(
+            [['sql' => $this->sql('INSERT INTO `venues` (`name`, `city`, `address`) VALUES (?, ?, ?), (?, ?, ?)'), 'values' => ['Hall', 'Austin', '1 Main St', 'Room', 'Dallas', '2 Main St']]],
+            GoldenStatements::capture(fn() => Venue::new_query()->insert([['marquee' => 'Hall', 'mycity' => 'Austin', 'address' => '1 Main St'], ['address' => '2 Main St', 'name' => 'Room', 'city' => 'Dallas']]))
+        );
+
+        $this->assert_same('Washington', Venue::find_by_name('Marquee')->city);
+        $this->assert_same(['Austin', 'Dallas'], [Venue::find_by_name('Hall')->city, Venue::find_by_name('Room')->city]);
+
+        // an alias and its column in one hash: one column, the later value
+        $this->assert_same(1, Venue::where('marquee', 'Hall')->update(['marquee' => 'First', 'name' => 'Second']));
+        $this->assert_null(Venue::find_by_name('First'));
+        $this->assert_same('Austin', Venue::find_by_name('Second')->city);
+
+        // no column, attribute or alias: as written, to the database
+        foreach ([fn() => Venue::where('marquee', 'Room')->update(['no_such_column' => 'x']), fn() => Venue::new_query()->insert(['no_such_column' => 'x'])] as $write) {
+            $statements = GoldenStatements::capture($write);
+
+            $this->assert_string_contains_string($this->conn->quote_name('no_such_column'), $statements[0]['sql'] ?? '');
+            $this->assert_same(DatabaseException::class, $statements[1]['exception'] ?? null);
+        }
+
+        $this->assert_same('Dallas', Venue::find_by_name('Room')->city);
     }
 
     // -- the order and the limit of a write
@@ -561,8 +653,9 @@ class QueryWriteTest extends DatabaseTest
 
     // -- update()
 
-    // Empty values are refused as update_all() refuses them, and so is a list, before any statement; a value is one
-    // value of a column, never an array, nor an object that is no DateTime
+    // Empty values are refused as update_all() refuses them, and so is a list, before any statement. A value is one
+    // value of a column: never an array, an enum (not supported) or an object that is neither a DateTime nor a
+    // Stringable, which is bound as its text
     public function test_update_refuses_values_it_cannot_write(): void
     {
         Author::table();
@@ -571,14 +664,45 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same($refused('Updating requires a hash or string.'), GoldenStatements::capture(fn() => Author::where('author_id', 1)->update([])));
         $this->assert_same($refused('Updating requires a hash or string.'), GoldenStatements::capture(fn() => Author::where('author_id', 1)->update(['x'])));
         $this->assert_same(
-            $refused("update() takes a scalar, null or a DateTime as a value, not array for 'name', on Author"),
+            $refused("update() takes a scalar, null, a DateTime or a Stringable as a value, not array for 'name', on Author"),
             GoldenStatements::capture(fn() => Author::where('author_id', 1)->update(['parent_author_id' => 2, 'name' => ['x']]))
         );
         $this->assert_same(
-            $refused("update() takes a scalar, null or a DateTime as a value, not stdClass for 'name', on Author"),
+            $refused("update() takes a scalar, null, a DateTime or a Stringable as a value, not stdClass for 'name', on Author"),
             GoldenStatements::capture(fn() => Author::where('author_id', 1)->update(['name' => new stdClass()]))
         );
+        $this->assert_same(
+            $refused("update() does not support an enum as a value: QueryWriteSuit::Hearts for 'name', on Author; give the scalar it stands for"),
+            GoldenStatements::capture(fn() => Author::where('author_id', 1)->update(['name' => QueryWriteSuit::Hearts]))
+        );
+        $this->assert_same(
+            $refused("update() does not support an enum as a value: QueryWritePureSuit::Spades for 'name', on Author; give the scalar it stands for"),
+            GoldenStatements::capture(fn() => Author::where('author_id', 1)->update(['name' => QueryWritePureSuit::Spades]))
+        );
         $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+    }
+
+    // A Stringable value is bound as its text, as update_all() binds it; a DateTime, ActiveRecord's own included (which
+    // is a Stringable too), is bound in the format of its column, never as its text
+    public function test_a_stringable_value_is_written_as_its_text(): void
+    {
+        Timestamps::freeze(self::FROZEN);
+        Author::table();
+        $text = new class implements Stringable {
+            public function __toString(): string
+            {
+                return 'Texted';
+            }
+        };
+
+        $this->assert_same(
+            [['sql' => $this->sql('UPDATE `authors` SET `name`=?, `some_Date`=?, `updated_at`=? WHERE `author_id` = ?'), 'values' => ['Texted', '2026-01-02', self::FROZEN, 1]]],
+            GoldenStatements::capture(fn() => Author::where('author_id', 1)->update(['name' => $text, 'some_Date' => new ActiveRecord\DateTime('2026-01-02 14:30:00')]))
+        );
+        $this->assert_true(Author::new_query()->insert([['name' => $text, 'parent_author_id' => 7], ['name' => 'Plain', 'parent_author_id' => 8]]));
+
+        $this->assert_same(['Texted', 'Texted', 'Plain'], [Author::find(1)->name, Author::find_by_parent_author_id(7)->name, Author::find_by_parent_author_id(8)->name]);
+        $this->assert_same('2026-01-02', Author::find(1)->some_date->format('Y-m-d'));
     }
 
     // Spec §5.6: an UPDATE sets updated_at to now unless its values give one (null included) or the class is suspended,
@@ -648,7 +772,7 @@ class QueryWriteTest extends DatabaseTest
 
     // The rows are read before any statement (SQLBuilder::insert_rows() reads none): there is at least one; each is a
     // hash of column => value with at least one column, whose keys every row shares (in any order); a value is a
-    // scalar, null or a DateTime
+    // scalar, null, a DateTime or a Stringable, never an array, an enum (not supported) or another object
     public function test_insert_refuses_rows_it_cannot_write(): void
     {
         Author::table();
@@ -660,8 +784,10 @@ class QueryWriteTest extends DatabaseTest
             'insert() takes each row as a hash of column => value, not an array with the integer key 0, on Author' => [['A']],
             'insert() takes each row as a hash of column => value, not an array with the integer key 1, on Author' => ['name' => 'A', 1 => 'B'],
             'insert() needs every row to have the same keys, on Author' => [['name' => 'A'], ['name' => 'B', 'parent_author_id' => 1]],
-            "insert() takes a scalar, null or a DateTime as a value, not array for 'name', on Author" => [['name' => ['A']]],
-            "insert() takes a scalar, null or a DateTime as a value, not stdClass for 'name', on Author" => ['name' => new stdClass()],
+            "insert() takes a scalar, null, a DateTime or a Stringable as a value, not array for 'name', on Author" => [['name' => ['A']]],
+            "insert() takes a scalar, null, a DateTime or a Stringable as a value, not stdClass for 'name', on Author" => ['name' => new stdClass()],
+            "insert() does not support an enum as a value: QueryWriteSuit::Hearts for 'name', on Author; give the scalar it stands for" => [['name' => QueryWriteSuit::Hearts]],
+            "insert() does not support an enum as a value: QueryWritePureSuit::Spades for 'name', on Author; give the scalar it stands for" => ['name' => QueryWritePureSuit::Spades],
         ] as $message => $values) {
             $this->assert_same([['exception' => ActiveRecordException::class, 'message' => $message]], GoldenStatements::capture(fn() => Author::new_query()->insert($values)));
         }

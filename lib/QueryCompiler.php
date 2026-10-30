@@ -21,12 +21,13 @@ final class QueryCompiler
 {
     /**
      * The fields of a state that an UPDATE and a DELETE compile (see apply_write_clauses()): the legacy options of the
-     * legacy writes, or the where, the order and the limit of the builder, which pick the rows they write. Every other
-     * field is refused (see refuse_unwritable_clauses()).
+     * legacy writes, or the where, the order and the limit of the builder, which pick the rows they write (a where call
+     * that added no condition among them, see refuse_empty_where()). Every other field is refused (see
+     * refuse_unwritable_clauses()).
      *
      * @var list<string>
      */
-    private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'orders', 'limit'];
+    private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'empty_where', 'orders', 'limit'];
 
     /**
      * The name a refusal gives a field of a state, where it is not the field's own: the builder method, or the family
@@ -40,6 +41,7 @@ final class QueryCompiler
         'from_alias' => 'from',
         'from_bindings' => 'from_raw',
         'wheres' => 'where',
+        'empty_where' => 'where',
         'groups' => 'group_by',
         'havings' => 'having',
         'orders' => 'order_by',
@@ -418,7 +420,7 @@ final class QueryCompiler
         $takes = [];
 
         foreach (array_diff($writable, ['legacy']) as $field) {
-            $takes[] = self::CLAUSE_NAMES[$field] ?? $field;
+            $takes[self::CLAUSE_NAMES[$field] ?? $field] = true;
         }
 
         throw new ActiveRecordException(sprintf(
@@ -426,7 +428,7 @@ final class QueryCompiler
             $method,
             self::listing(array_keys($held), 'or'),
             $this->table->class->name,
-            [] === $takes ? 'it takes no clause' : 'it takes only ' . self::listing($takes, 'and'),
+            [] === $takes ? 'it takes no clause' : 'it takes only ' . self::listing(array_keys($takes), 'and'),
         ));
     }
 
@@ -585,11 +587,13 @@ final class QueryCompiler
      *
      * @param array<string, mixed>|string $set
      * @throws ActiveRecordException for a state that holds a clause an UPDATE cannot use (see refuse_unwritable_clauses()),
-     *   or legacy options and builder clauses both, or a WHERE or an ORDER BY that compiles to nothing
+     *   or legacy options and builder clauses both, where calls that all added no condition (see refuse_empty_where()),
+     *   or a WHERE or an ORDER BY that compiles to nothing
      */
     public function compile_update(QueryState $state, array|string $set): SQLBuilder
     {
         $this->refuse_unwritable_clauses($state, 'update', self::UPDATE_DELETE_FIELDS);
+        $this->refuse_empty_where($state, 'update');
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
         $this->apply_write_clauses($sql, $state, 'update');
@@ -606,6 +610,7 @@ final class QueryCompiler
     public function compile_delete(QueryState $state): SQLBuilder
     {
         $this->refuse_unwritable_clauses($state, 'delete', self::UPDATE_DELETE_FIELDS);
+        $this->refuse_empty_where($state, 'delete');
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
         $this->apply_write_clauses($sql, $state, 'delete');
@@ -648,6 +653,32 @@ final class QueryCompiler
         $sql->insert_rows($columns, $row_count);
 
         return $sql;
+    }
+
+    /**
+     * The values of a write of the builder (Query::update(), Query::insert()) keyed by the columns their keys name, by
+     * the rule of column() (spec §5.5): an alias of the model's $alias_attribute names the column of its attribute, an
+     * attribute name its column (#92), and any other key is kept as written, a column's own name among them. An alias
+     * never shadows a column (spec §6.2.6), so the mapping is never ambiguous. Two keys that name one column leave one
+     * entry, the later value, as Table::real_column_keys() leaves them. The legacy writes map attribute names only
+     * (update_all()'s 'set', upsert(), Table::insert() and update()).
+     *
+     * @internal Serves Query; not a supported API.
+     * @param array<string, mixed> $values
+     * @return array<string, mixed>
+     */
+    public function value_columns(array $values): array
+    {
+        $aliases = $this->alias_attributes();
+        $columns = [];
+
+        foreach ($values as $key => $value) {
+            // (string): an integer key ("0") names no column and comes back unchanged
+            $key = (string) $key;
+            $columns[$this->table->real_column_name($aliases[$key] ?? $key)] = $value;
+        }
+
+        return $columns;
     }
 
     /**
@@ -1139,6 +1170,30 @@ final class QueryCompiler
         }
 
         $sql->key_columns(array_map($this->table->real_column_name(...), $this->table->pk));
+    }
+
+    /**
+     * Refuses the write $method of a state whose where calls all added no condition (see QueryState::$empty_where):
+     * where([]), a closure that adds none, where_null([]). Its WHERE is empty, so it would write every row, where the
+     * calls meant it to write by conditions, those of a filter that came empty for instance: where($filters) with no
+     * filter. A write of every row calls no where method, Author::new_query()->delete(), and a read of such a query is
+     * that of every row, as spec §5.2 has it.
+     *
+     * @throws ActiveRecordException
+     */
+    private function refuse_empty_where(QueryState $state, string $method): void
+    {
+        if ($state->empty_where && [] === $state->wheres) {
+            $model = $this->table->class->name;
+
+            throw new ActiveRecordException(sprintf(
+                '%s() on %s has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), so it would write every row: it is refused. A write of every row calls no where(): %s::new_query()->%s()',
+                $method,
+                $model,
+                $model,
+                $method,
+            ));
+        }
     }
 
     /**
