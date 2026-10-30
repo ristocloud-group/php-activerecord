@@ -287,8 +287,8 @@ class Query
 
     /**
      * Selects each row once (SELECT DISTINCT), or with false every row again. With no select of the query's own, a
-     * count() or another aggregate of a column runs over that column's distinct values, as Eloquent's distinct() does
-     * (see min()).
+     * count() or another aggregate of a column runs over that column's distinct values, as Eloquent's distinct() does,
+     * and refuses a window ordered by another column (see min()).
      *
      * @return $this
      */
@@ -1920,7 +1920,9 @@ class Query
      * QueryCompiler::compile_count()). The statement that ran is left in Table::$last_sql.
      *
      * On a grouped query, a counted $column must be grouped, or be what the query's own select gives:
-     * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY.
+     * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY. After distinct(),
+     * with no select of the query's own, a $column in a window (limit(), offset()) ordered by another column
+     * is refused, as min() refuses it.
      *
      * <code>
      * $parents = Author::group_by('parent_author_id')->count();
@@ -1929,12 +1931,14 @@ class Query
      * Model::count() is the legacy count, which Author::count(...) calls, unchanged: grouped, it counts the
      * rows of the first group.
      *
-     * @throws ActiveRecordException for an empty column name, before any statement
+     * @throws ActiveRecordException for an empty column name, or a distinct $column in a window ordered by
+     *   another column, before any statement
      */
     public function count(string $column = '*'): int
     {
         $compiler = $this->compiler();
         $compiler->refuse_empty_column_name($column, __FUNCTION__);
+        $compiler->refuse_distinct_window_ordered_by_another_column($this->state, $column, __FUNCTION__);
 
         $table = $this->table();
         $sql = $compiler->compile_count($this->state, $column);
@@ -1955,8 +1959,12 @@ class Query
      * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
      * query's select, so a select of its own must hold it. A distinct query with no select of its own selects the
      * column alone, so its aggregate runs over the column's distinct values: Eloquent's SUM(DISTINCT col) and
-     * AVG(DISTINCT col) for sum() and avg(), where min() and max() are the same either way. The statement that ran is
-     * left in Table::$last_sql.
+     * AVG(DISTINCT col) for sum() and avg(), where min() and max() are the same either way. Such a query in a window
+     * (limit(), offset()) ordered by another column is refused at the call, since SELECT DISTINCT of one column cannot be
+     * ordered by another (MySQL and Postgres refuse it, MariaDB and SQLite pick the values arbitrarily): order by the
+     * column, by any of its names, or give the query a select of its own; without a window the order is dropped (see
+     * QueryCompiler::refuse_distinct_window_ordered_by_another_column()). The statement that ran is left in
+     * Table::$last_sql.
      *
      * The column of a grouped query must be one of its groups, unless the groups are the whole primary key of the model
      * (each group is then one row of the table, and any column may be aggregated). min(), max(), sum() and avg() refuse
@@ -1971,8 +1979,8 @@ class Query
      * $per_customer = Order::group_by('customer_id')->max('customer_id');
      * </code>
      *
-     * @throws ActiveRecordException for an empty column name, or *, or a column that the GROUP BY does not group (as
-     *   above), before any statement
+     * @throws ActiveRecordException for an empty column name, or *, or a column that the GROUP BY does not group, or a
+     *   distinct column in a window ordered by another column (as above), before any statement
      */
     public function min(string $column): int|string|float|null
     {
@@ -2823,8 +2831,9 @@ class Query
      * type the connection reports for it, and none for any other name.
      *
      * @return 'integer'|'decimal'|'floating'|null
-     * @throws ActiveRecordException for an empty column name, for *, which only count() takes, and for a column that the
-     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column())
+     * @throws ActiveRecordException for an empty column name, for *, which only count() takes, for a column that the
+     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column()), and for a distinct column in a
+     *   window ordered by another column (see QueryCompiler::refuse_distinct_window_ordered_by_another_column())
      */
     private function aggregate_kind(string $method, string $column): ?string
     {
@@ -2836,6 +2845,7 @@ class Query
         }
 
         $compiler->refuse_ungrouped_column($this->state, $column, $method);
+        $compiler->refuse_distinct_window_ordered_by_another_column($this->state, $column, $method);
 
         return AggregateCaster::kind($compiler->model_column($column), $this->table()->connection()->exact_decimals());
     }

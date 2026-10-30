@@ -221,7 +221,8 @@ final class QueryCompiler
      *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects the aggregated column,
      *   under DISTINCT too, so that a distinct aggregate of a column runs over its distinct values that are not
      *   null (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
-     *   beside a HAVING.
+     *   beside a HAVING. The order a window keeps there must then be by that column: the terminals refuse another
+     *   (see refuse_distinct_window_ordered_by_another_column()).
      *
      * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
      * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives, or the groups be the
@@ -516,6 +517,46 @@ final class QueryCompiler
             $this->table->class->name,
             $column,
         ));
+    }
+
+    /**
+     * Refuses, at the call, a distinct aggregate of a column in a window ordered by another column, given to $method:
+     * count() of a column, min(), max(), sum() or avg() (spec §5.4). With distinct() and no select of the query's own, the
+     * subquery of the aggregate selects DISTINCT that column alone (see compile_aggregate()), and a window (a limit or an
+     * offset) keeps the query's order there, where it picks the values. An order by another column cannot go with it:
+     * MySQL (3065) and Postgres (42P10) refuse the statement, and MariaDB and SQLite run it and pick the values
+     * arbitrarily, a wrong number with no error. Without a window the order is dropped, and the statement runs.
+     *
+     * An order names the aggregated column when both name it alike as the statement qualifies them with joins (see
+     * qualified_reference()): by an alias, an attribute name or the column's own name, qualified with the name the
+     * statement reads the model's rows under or not. SQL of order_by_raw() is not read, and the random order names no
+     * column (Postgres refuses it there, the other databases pick random values): such a query goes to the database as
+     * it is.
+     *
+     * @internal Serves Query; not a supported API.
+     * @param string $method The aggregate the column was given to, for the message of the exception
+     * @throws ActiveRecordException for a window ordered by another column
+     */
+    public function refuse_distinct_window_ordered_by_another_column(QueryState $state, string $column, string $method): void
+    {
+        if ('*' === $column || !$state->distinct || [] !== $state->selects || (null === $state->limit && null === $state->offset)) {
+            return;
+        }
+
+        $aggregated = $this->qualified_reference($column, $state);
+
+        foreach ($state->orders as $order) {
+            if ('column' === $order['type'] && $this->qualified_reference($order['column'], $state) !== $aggregated) {
+                throw new ActiveRecordException(sprintf(
+                    "%s() on %s aggregates the distinct values of '%s' in a window ordered by '%s', another column: SELECT DISTINCT of one column cannot be ordered by another (MySQL and Postgres refuse it, and MariaDB and SQLite pick the values arbitrarily). Order by '%s', or give the query a select of its own",
+                    $method,
+                    $this->table->class->name,
+                    $column,
+                    $order['column'],
+                    $column,
+                ));
+            }
+        }
     }
 
     /**
@@ -1374,6 +1415,19 @@ final class QueryCompiler
         }
 
         return ['sql' => $this->rows_name($state) . '.' . $sql, 'column' => $data];
+    }
+
+    /**
+     * The SQL that names the column $name stands for, qualified as the statement qualifies a column of the model with
+     * joins (see column()): a column of the model (see model_column()) by the name the statement reads the model's rows
+     * under and its real name, and any other name quoted part by part as written. Two names that give the same SQL name
+     * one column: 'qty', 'measurements.qty' and an alias of qty alike.
+     */
+    private function qualified_reference(string $name, QueryState $state): string
+    {
+        $column = $this->model_column($name);
+
+        return null === $column ? $this->quote_parts($name) : $this->rows_name($state) . '.' . $this->connection()->quote_name($column->name);
     }
 
     /**

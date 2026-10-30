@@ -394,6 +394,58 @@ class QueryAggregateTest extends DatabaseTest
         $this->assert_same(5, Measurement::distinct()->select('qty', 'label')->sum('qty'));
     }
 
+    // The subquery of such an aggregate is SELECT DISTINCT of the column alone, and a window (a limit or an offset) keeps
+    // the order of the query there, where it picks the values. An order by another column cannot go with it: MySQL (3065)
+    // and Postgres (42P10) refuse the statement, and MariaDB and SQLite pick the values arbitrarily. It is refused at the
+    // call, before any statement, by count() of a column and the aggregates. An order by the aggregated column, by any of
+    // its names, picks the values; without a window the order is dropped; and a select of the query's own, a count of the
+    // rows and SQL of order_by_raw(), which is not read, go to the database as before
+    public function test_a_distinct_aggregate_refuses_a_window_ordered_by_another_column(): void
+    {
+        Measurement::table();
+        Book::table();
+        // a relationship names its target class with a leading backslash, under which Table keeps another instance of the table
+        ActiveRecord\Table::load('\\Author');
+        $this->third_row();
+        $refusal = fn(string $method, string $model, string $column, string $order): array => [[
+            'exception' => ActiveRecordException::class,
+            'message' => "$method() on $model aggregates the distinct values of '$column' in a window ordered by '$order', another column: SELECT DISTINCT of one column cannot be ordered by another (MySQL and Postgres refuse it, and MariaDB and SQLite pick the values arbitrarily). Order by '$column', or give the query a select of its own",
+        ]];
+
+        // qty of the rows in order: 1, 2, 2
+        foreach ([
+            'sum' => [fn() => Measurement::distinct()->order_by('id')->limit(2)->sum('qty'), 'sum', 'Measurement', 'qty', 'id'],
+            'an offset alone' => [fn() => Measurement::distinct()->order_by('id')->offset(1)->sum('qty'), 'sum', 'Measurement', 'qty', 'id'],
+            'avg' => [fn() => Measurement::distinct()->order_by('label')->limit(2)->avg('qty'), 'avg', 'Measurement', 'qty', 'label'],
+            'average' => [fn() => Measurement::distinct()->order_by('label')->limit(2)->average('qty'), 'average', 'Measurement', 'qty', 'label'],
+            'min' => [fn() => Measurement::distinct()->order_by_desc('id')->limit(1)->min('qty'), 'min', 'Measurement', 'qty', 'id'],
+            'max' => [fn() => Measurement::distinct()->latest('id')->limit(1)->max('qty'), 'max', 'Measurement', 'qty', 'id'],
+            'count of the column' => [fn() => Measurement::distinct()->order_by('id')->limit(2)->count('qty'), 'count', 'Measurement', 'qty', 'id'],
+            'a second order' => [fn() => Measurement::distinct()->order_by('qty')->order_by('id')->limit(2)->sum('qty'), 'sum', 'Measurement', 'qty', 'id'],
+            "a joined table's column" => [fn() => Book::distinct()->joins('author')->order_by('authors.name')->limit(1)->sum('book_id'), 'sum', 'Book', 'book_id', 'authors.name'],
+        ] as $case => [$call, $method, $model, $column, $order]) {
+            $this->assert_same($refusal($method, $model, $column, $order), GoldenStatements::capture($call), $case);
+        }
+
+        // the aggregated column, by its name, qualified, through an alias, under a from() alias: the window picks its values
+        $this->assert_same(1, Measurement::distinct()->order_by('qty')->limit(1)->sum('qty'));
+        $this->assert_same(1, Measurement::distinct()->order_by('qty')->offset(1)->count('qty'));
+        $this->assert_same(2, Measurement::distinct()->order_by_desc('measurements.qty')->limit(1)->min('qty'));
+        $this->assert_same(1, (int) Measurement::distinct()->order_by('qty')->limit(1)->sum('measurements.qty'));
+        $this->assert_same(1, Measurement::from('measurements', 'm')->distinct()->order_by('m.qty')->limit(1)->sum('qty'));
+        // score is rating: 5, 3 and 4, the two smallest 3 and 4
+        $this->assert_same(7, AliasedBookReview::distinct()->order_by('rating')->limit(2)->sum('score'));
+        $this->assert_same(7, AliasedBookReview::distinct()->order_by('score')->limit(2)->sum('rating'));
+
+        // no window: the order is dropped
+        $this->assert_same(3, Measurement::distinct()->order_by('id')->sum('qty'));
+        $this->assert_same([$this->sql('SELECT SUM(t.`qty`) FROM (SELECT DISTINCT `qty` FROM `measurements`) AS t')], $this->statements(fn() => Measurement::distinct()->order_by('id')->sum('qty')));
+        // a select of its own (the distinct rows of qty and id, the first two), a count of the rows, and SQL that is not read
+        $this->assert_same(3, Measurement::distinct()->select('qty', 'id')->order_by('id')->limit(2)->sum('qty'));
+        $this->assert_same(2, Measurement::distinct()->order_by('id')->limit(2)->count());
+        $this->assert_same(2, Measurement::distinct()->order_by_raw('qty DESC')->limit(1)->sum('qty'));
+    }
+
     // MariaDB (in its default mode) and SQLite run an aggregate of a column that the GROUP BY does not group, and read it from
     // an arbitrary row of each group: parent 2 has the authors 2 and 4, so the MAX of author_id is 3 where it is 4, and the SUM
     // is 6 where it is 10. MySQL (1055) and Postgres (42803) refuse the statement, unless the groups are the whole primary key
