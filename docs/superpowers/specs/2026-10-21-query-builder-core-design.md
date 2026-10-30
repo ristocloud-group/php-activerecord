@@ -342,15 +342,26 @@ Details settled by the final review (2026-10-30):
   trailing comment still cuts off what follows it there. A `;` was first left to the documentation; it is refused
   since (below).
 - **A statement terminator in SQL written by hand is refused** (the maintainer, 2026-10-30, after the final
-  re-review). A `;` outside the single-quoted strings (with `''` and `\` escapes), the double-quoted strings and
-  identifiers, the backtick identifiers, the `--` and `#` line comments, the `/* */` comments and the Postgres
-  dollar-quoted strings (`$$...$$`, `$tag$...$tag$`) of a fragment ends the statement on MySQL and MariaDB (PDO's
-  emulated prepares send it with what follows, which runs as another statement whose error is never read) and on
-  SQLite (the prepare drops what follows): the clauses after it were lost, and a limited write wrote every row it
-  matched, a read read every row. Postgres refuses the statement. One rule in the engine:
-  `RawSqlWriter::holds_statement_terminator()` reads the SQL with the scanner of `to_raw_sql()` (its strings and
-  comments) and the other regions above, and `QueryCompiler::refuse_statement_terminator()` throws an
-  `ActiveRecordException` that names where the SQL was given, the model and the SQL, and says why.
+  re-review). A `;` outside the strings, the quoted identifiers and the comments of a fragment ends the statement on
+  MySQL and MariaDB (PDO's emulated prepares send it with what follows, which runs as another statement whose error is
+  never read) and on SQLite (the prepare drops what follows): the clauses after it were lost, and a limited write wrote
+  every row it matched, a read read every row. Postgres refuses the statement. One rule in the engine, read as the
+  database of the connection reads SQL (review of the residual patch: a reading of every database's quoting at once let
+  through a `;` that one of them reads outside, and a limited delete wrote every row it matched):
+  `RawSqlWriter::holds_statement_terminator()` reads the SQL in one pass, only when it holds a `;`, with the
+  sub-patterns of `to_raw_sql()`'s scanner where they agree, and `QueryCompiler::refuse_statement_terminator()` throws
+  an `ActiveRecordException` that names where the SQL was given, the model and the SQL, and says why.
+  - MySQL and MariaDB, in the default sql_mode: strings in single and double quotes with `''` and `\` escapes,
+    backtick identifiers, `#` comments, `--` comments only before a space or a control character (`0--1` is `0 - -1`),
+    block comments that do not nest, and the text of an executable comment (`/*!`, `/*M!`) read as the SQL they run.
+    No dollar quote: `$` is a character of identifiers and of variables (`@a$$`).
+  - Postgres: standard strings with no backslash escape, `E''` strings with them and with `''`, double-quoted
+    identifiers, dollar quotes (`$$...$$`, `$tag$...$tag$`) opened by a `$` that follows no identifier character (`a$$`
+    is an identifier, `$1` a parameter), `--` comments and nested block comments. `#` is an operator, a backtick no
+    quote.
+  - SQLite: strings, and double-quoted, backtick and bracket identifiers, with no backslash escape; `--` comments and
+    block comments that do not nest. No dollar quote: `#`, `$`, `@` and `:` start a parameter.
+  - A connection of no adapter of the library is read the three ways, and refused when any finds a `;` outside.
   - The builder refuses it at the call (§5.7), reads and writes alike, in `select_raw`, `from_raw`, a `JOIN` fragment
     of `joins`, `where_raw`, `having_raw`, `group_by_raw`, `order_by_raw` and the `or_` forms.
   - The legacy `conditions` option refuses it before any statement, a string or the SQL of a positional list, in
@@ -360,16 +371,24 @@ Details settled by the final review (2026-10-30):
     parentheses, which every database refused before (a `DatabaseException`); they now throw the
     `ActiveRecordException` before the load's statement.
   - Not read: the other legacy options (`select`, `joins`, `from`, `group`, `having`, `order`), the `$where` of
-    `Table::update()` / `Table::delete()` (their options say `'refuse_terminator' => false`; `save()` and
-    `Model::delete()` give a pk hash) and `find_by_sql()`. A hash binds its values and names columns.
+    `Table::update()` / `Table::delete()` (an argument of the engine, `Query::execute_update()` / `execute_delete()`,
+    which no options array reaches, so the public `Table::find()`, `exists()` and `options_to_sql()` cannot turn the
+    refusal off; `save()` and `Model::delete()` give a pk hash) and `find_by_sql()`. A hash binds its values and names
+    columns.
   - A `;` in a string, a quoted identifier, a comment or a bound value is no terminator, and SQL without a `;` is
     never scanned. Golden unchanged: no corpus case holds one.
-  - Residual, measured: the rule reads the quoting of every database at once, so a `;` that one of them reads outside
-    a comment or a string passes it. MySQL and MariaDB read a `--` that no space or control character follows as two
-    minus signs (`author_id > 0--1;` passes, and a limited delete deleted three of the four authors), and SQLite and
-    Postgres read no backslash escape in a string (`name != 'C:\' ; '` passes; SQLite deleted the four authors,
-    Postgres refused the statement). A `#` or a backtick on a database that does not read it so, and a `$$` on MySQL
-    and MariaDB, fail there; SQLite reads `$$a` as a parameter, left unbound (NULL), and drops what follows the `;`.
+  - Measured on the four (a limited delete of `limit(1)` over four authors), every `;` that a reading of all the
+    databases at once let through is refused on the database that reads it outside: `author_id > 0--1;` on MySQL and
+    MariaDB (it deleted three authors), `name != 'C:\' ; '`, `author_id IS NOT #a;` and `author_id IS NOT $$a;b$$` on
+    SQLite (four each), `author_id > 0 OR @a$$ IS NULL; @b$$` on MySQL, MariaDB and SQLite (four), and a
+    `/*! ; */` on MySQL and MariaDB. Each is accepted where its database reads it inside: `0--1;` and `$$a;b$$` on
+    Postgres, `'C:\' ; '` and `# ;` on MySQL and MariaDB.
+  - Residual, measured: the MySQL and MariaDB reading is that of the default sql_mode. A session with
+    `NO_BACKSLASH_ESCAPES` reads `'C:\'` as a whole string, and `name != 'C:\' ; '`, accepted, deleted the four
+    authors there; with `ANSI_QUOTES` a double-quoted identifier ending in a backslash is an unknown column. The library
+    sets no sql_mode. Conservative, the other way (measured on SQLite 3.46): a `;` in a block comment left open,
+    which SQLite runs to the end of the SQL, and in the parentheses of a Tcl-style parameter (`$a(;)`), which SQLite
+    reads as one parameter, is refused.
 
 ### 5.3 Read terminals
 

@@ -480,18 +480,26 @@ verbatim, with the values of its `?` markers bound, so it must never come from u
 `#` is followed by a newline in the statement, so a line comment at its end (`--`, or `#` on MySQL and MariaDB) stops
 there and cannot cut off the clauses that follow it, which on a write include its `ORDER BY` and `LIMIT`. The legacy
 `conditions` option sends its SQL as given, so a comment at its end still cuts them off there. **A fragment that holds a
-statement terminator is refused at the call**: a `;` outside its string literals (`'...'`, with `''` and `\` escapes),
-its quoted identifiers (`"..."`, `` `...` ``), its comments (`--`, `#`, `/* */`) and its Postgres dollar-quoted strings
-(`$$...$$`, `$tag$...$tag$`) throws `ActiveRecordException`, which names the method. MySQL, MariaDB and SQLite would end
-the statement there, so the clauses that follow it would be cut off and a limited write would touch every row it matches;
-Postgres refuses the statement. A `;` in a string (`where_raw("note = 'a;b'")`), an identifier, a comment or a bound
-value (`where_raw('note = ?', ['a;b'])`) is sent as written. The legacy `conditions` option refuses one too (see
-[Hash conditions](#hash-conditions)). The rule reads the quoting of every database at once, so a `;` that one of them reads
-outside a comment or a string can pass: MySQL and MariaDB read a `--` with no space after it as two minus signs
-(`0--1;`), and SQLite reads no backslash escape in a string (`'C:\' ;`). `where_raw`, `or_where_raw`, `having_raw`
-and `or_having_raw` refuse SQL that is empty or only whitespace at the call, and `order_by_raw` and `group_by_raw` refuse
-`0` too, which would name a column position that no statement has: the statement would otherwise leave the clause out, and
-a write could touch rows it was not asked to.
+statement terminator is refused at the call**: a `;` outside its strings, its quoted identifiers and its comments, as
+the database of the connection reads them, throws `ActiveRecordException`, which names the method.
+
+- MySQL and MariaDB read strings in single and double quotes with `\` escapes, backtick identifiers, `#` comments, and
+  `--` comments only where a space or a control character follows the dashes (`0--1;` is `0 - -1` and a `;` there).
+- Postgres reads standard strings with no `\` escape, `E'...'` strings with them, double-quoted identifiers,
+  dollar-quoted strings (`$$a;b$$`, `$tag$a;b$tag$`), `--` comments and nested block comments; `#` is an operator.
+- SQLite reads strings and double-quoted, backtick and bracket identifiers with no `\` escape, and `--` comments; `#`,
+  `$`, `@` and `:` start a parameter, so `IS NOT #a;` and `$$a;b$$` hold a `;` there.
+
+MySQL, MariaDB and SQLite would end the statement at such a `;`, so the clauses that follow it would be cut off and a
+limited write would touch every row it matches; Postgres refuses the statement. A `;` in a string
+(`where_raw("note = 'a;b'")`), an identifier, a comment or a bound value (`where_raw('note = ?', ['a;b'])`) is sent as
+written. The legacy `conditions` option refuses one too (see [Hash conditions](#hash-conditions)). The MySQL and MariaDB
+reading is that of their default sql_mode: a session with `NO_BACKSLASH_ESCAPES` reads `'C:\'` as a whole string, so
+`name != 'C:\' ; '` passes the check and the statement ends at its `;` (the library sets no sql_mode).
+
+`where_raw`, `or_where_raw`, `having_raw` and `or_having_raw` refuse SQL that is empty or only whitespace at the call, and
+`order_by_raw` and `group_by_raw` refuse `0` too, which would name a column position that no statement has: the statement
+would otherwise leave the clause out, and a write could touch rows it was not asked to.
 
 ### Columns and joins ###
 
