@@ -240,7 +240,8 @@ In a conditions hash (`['conditions' => ['name' => 'Tito']]`, also for `update_a
 column name, always quoted as identifiers and never spliced in as SQL. A key may name its table (`'books.name'`, e.g.
 with `joins`), and a partly quoted name is quoted part by part (`` '`books`.name' `` → `` `books`.`name` ``); with
 `joins` an unqualified key that names a column of the model gets the model's table, and any other one (a column of a
-joined table) stays as written. The columns of the model include the ones every table has without listing them
+joined table) stays as written. With the `from` option every key is still qualified, with the `from` table, as before.
+The columns of the model include the ones every table has without listing them
 (`_rowid` on MySQL and MariaDB; `rowid`, `oid` and `_rowid_` on SQLite; `ctid`, `xmin`, `xmax`, `cmin`, `cmax` and
 `tableoid` on Postgres), which are qualified too. On SQLite, `PRAGMA table_info` omits generated columns and the hidden
 columns of a virtual table, so they are not seen as columns of the model and stay as written: a joined table with a
@@ -287,17 +288,20 @@ multibyte MySQL charsets (`gbk`, `big5`, `sjis` / `cp932`, `gb18030`) are not co
 `Author::delete_all(['name' => 'Tito'])` deletes only the matching rows, and with no argument (or `null` / `[]`) it
 still deletes every row. `update_all()` takes an options hash with `set`; a hash `set` also sets `updated_at`, unless it
 gives one or the model class is suspended with `without_timestamps()`, and a string `set` is sent as written (see
-[Timestamps](#timestamps)). The other finder options are ignored, as before. An argument that could be misread throws `ActiveRecordException` before any SQL runs: a positional list
-(write `['conditions' => ['name = ?', 'Tito']]`), a hash mixing option keys with other keys (`Unknown key(s): …`), an
-int, float or bool, and, for `update_all()`, a key beside `set` that is not an option, such as a column name, or an
-argument without `set`.
+[Timestamps](#timestamps)). A key gives `updated_at` by its column's name or attribute name, also pre-quoted or qualified
+with the model's table (`` '`authors`.`updated_at`' ``), and the column is then assigned once, the value given. The other
+finder options are ignored, as before. An argument that could be misread throws `ActiveRecordException` before any SQL
+runs: a positional list (write `['conditions' => ['name = ?', 'Tito']]`), a hash mixing option keys with other keys
+(`Unknown key(s): …`), an int, float or bool, and, for `update_all()`, a key beside `set` that is not an option, such as a
+column name, or an argument without `set`.
 
 ## Query builder ##
 
 Every model also has an Eloquent-style fluent query builder, with Eloquent's names in snake_case. It sits on the engine
 that the finders (`find`, `first`, `all`, `count`, `exists`), `update_all`, `delete_all`, `save`, `delete` and `upsert` also
-run through, so a condition, an alias or a date is read by the same rules whichever API builds the statement. It is
-additive: every existing static method keeps its meaning (see
+run through, so a condition or an alias is read by the same rules whichever API builds the statement. Dates are the
+exception: the builder binds a `DateTime` in the format of its column, where the legacy finders keep the datetime format
+(see [Conditions](#conditions)). It is additive: every existing static method keeps its meaning (see
 [Legacy and builder side by side](#legacy-and-builder-side-by-side)).
 
 ```php
@@ -399,7 +403,7 @@ another builder call), the builder's runs. The legacy ones are unchanged, so exi
 
 | Name | Legacy: `Invoice::...` | Builder: `Invoice::new_query()->...` |
 |---|---|---|
-| `find` | `find(1)`, `find(1, 2)`, `find([1, 2])`, `find('first', ...)`, `find($options)`: a missing record throws `RecordNotFound` | `find(1)` is the model, or `null`. `find([1, 2])` is an array of the models found, a missing id left out. `find_or_fail($id)` throws `RecordNotFound` (with the legacy message) when an id is missing, `find_many($ids)` is the list form, and `find_or($id, $callback)` calls the callback instead of throwing. A one-column primary key only |
+| `find` | `find(1)`, `find(1, 2)`, `find([1, 2])`: a missing primary key throws `RecordNotFound`; the option forms `find('first', ...)` and `find($options)` return `null`, and `find('all', ...)` returns `[]` | `find(1)` is the model, or `null`. `find([1, 2])` is an array of the models found, a missing id left out. `find_or_fail($id)` throws `RecordNotFound` (with the legacy message) when an id is missing, `find_many($ids)` is the list form, and `find_or($id, $callback)` calls the callback instead of throwing. A one-column primary key only |
 | `first` | `first($options)`; `last($options)` reverses the order (by the primary key when there is none) | `first()` is `LIMIT 1` in the query's own order, none implied, and returns a model or `null`. `first_or_fail()`, `first_or($callback)` and `sole()` are the strict forms. There is no `last()`: reverse the order |
 | `count` | `count($options)` or primary key values; with `group` it counts the rows of the first group | `count($column = '*')` counts the rows of the result, so a grouped query counts its groups. `count('note')` is `COUNT(note)`, where `Invoice::count('note')` looks up the primary key `'note'` |
 | `exists` | `exists($options)` or a primary key value | `exists()` and `doesnt_exist()` |
@@ -420,7 +424,7 @@ Invoice::where('total_cents', '>', 10000);                      // total_cents >
 Invoice::where(['status' => 'open', 'customer_id' => [1, 2]]);  // status = ? AND customer_id IN(?,?)
 Invoice::where([['total_cents', '>', 5000], ['status', 'open']]);
 Invoice::where('status', 'open')
-    ->where(fn (ActiveRecord\Query $query) => $query->where('note', 'rush')->or_where('total_cents', '>=', 20000));
+    ->where(fn(ActiveRecord\Query $query) => $query->where('note', 'rush')->or_where('total_cents', '>=', 20000));
 // WHERE status = ? AND (note = ? OR total_cents >= ?)
 ```
 
@@ -459,13 +463,15 @@ Invoice::where('status', 'open')
 
 **The `*_raw` methods send their SQL as written.** `where_raw`, `or_where_raw`, `having_raw`, `or_having_raw`,
 `order_by_raw`, `group_by_raw`, `select_raw` and `from_raw` (and the `JOIN ...` fragments of `joins()`) insert their SQL
-verbatim, with the values of its `?` markers bound, so it must never come from user input. A fragment must not end with a
-line comment (`--`, or `#` on MySQL and MariaDB) or contain a statement terminator (`;`): the clauses that follow it in the
-statement would be cut off. On a write those include its `ORDER BY` and `LIMIT`, so a limited write would touch more rows
-than it says. The legacy `conditions` option does the same. `where_raw`, `or_where_raw`, `having_raw` and `or_having_raw`
-refuse SQL that is empty or only whitespace at the call, and `order_by_raw` and `group_by_raw` refuse `0` too, which would
-name a column position that no statement has: the statement would otherwise leave the clause out, and a write could touch
-rows it was not asked to.
+verbatim, with the values of its `?` markers bound, so it must never come from user input. A fragment that holds `--` or
+`#` is followed by a newline in the statement, so a line comment at its end (`--`, or `#` on MySQL and MariaDB) stops
+there and cannot cut off the clauses that follow it, which on a write include its `ORDER BY` and `LIMIT`. The legacy
+`conditions` option sends its SQL as given, so a comment at its end still cuts them off there. A fragment must not hold a
+statement terminator (`;`): MySQL, MariaDB and SQLite end the statement there, so the clauses that follow it are cut off
+and a limited write touches every row it matches; Postgres refuses the statement. `where_raw`, `or_where_raw`, `having_raw`
+and `or_having_raw` refuse SQL that is empty or only whitespace at the call, and `order_by_raw` and `group_by_raw` refuse
+`0` too, which would name a column position that no statement has: the statement would otherwise leave the clause out, and
+a write could touch rows it was not asked to.
 
 ### Columns and joins ###
 
@@ -489,7 +495,7 @@ Invoice::join('customers', 'customers.id', '=', 'invoices.customer_id')
     ->where('id', '>', 1)                                // `invoices`.`id` > ?
     ->get();
 
-Invoice::left_join('customers', fn (ActiveRecord\JoinClause $join) => $join
+Invoice::left_join('customers', fn(ActiveRecord\JoinClause $join) => $join
         ->on('customers.id', '=', 'invoices.customer_id')
         ->where('customers.country', 'DE'))
     ->select('invoices.*', 'customers.name as customer_name')
@@ -557,7 +563,7 @@ Invoice::with(['customer' => ['invoices']])->get();    // or as the include opti
 The names merge into the include tree. `without('customer.invoices')` removes by path (the parent stays loaded, and a name
 the query does not load takes nothing off and is not looked up), and `with_only(...)` replaces the tree. A relationship the
 model does not declare is refused at the call (`RelationshipException`), and so is a constraint on a relationship
-(`with(['customer' => fn ($query) => ...])`), which is not supported. `get()`, `first()`, `find()` and the other terminals
+(`with(['customer' => fn($query) => ...])`), which is not supported. `get()`, `first()`, `find()` and the other terminals
 that return models load them; `count()`, `exists()`, `value()` and `pluck()` load nothing. As with the legacy `include`, a
 `select()` that leaves out the keys the relationship loads by fails (`UndefinedPropertyException`).
 
@@ -565,13 +571,14 @@ that return models load them; `count()`, `exists()`, `value()` and `pluck()` loa
 them. It is not forwarded statically (see above).
 
 `when($value, $callback, $default = null)` calls the callback when the value is truthy, and `unless()` when it is falsy: the
-shape of an optional filter (`$default`, when there is one, is called in the other case). A Closure value is called first,
-and the callback is given the query and the value. If it returns a `Query` on the same model, that query goes on (a fork,
-for instance); any other return is ignored, where Eloquent uses any non-null result. `tap($callback)` calls back and
-returns the query.
+shape of an optional filter (`$default`, when there is one, is called in the other case). A `when()` or `unless()` that
+runs neither is a filter that came out empty: an `update()` or a `delete()` with no other where condition is then refused
+(see [Writing](#writing)), and a read is unchanged. A Closure value is called first, and the callback is given the query
+and the value. If it returns a `Query` on the same model, that query goes on (a fork, for instance); any other return is
+ignored, where Eloquent uses any non-null result. `tap($callback)` calls back and returns the query.
 
 ```php
-$invoices = Invoice::when($status, fn (ActiveRecord\Query $query, mixed $status) => $query->where('status', $status))->get();
+$invoices = Invoice::when($status, fn(ActiveRecord\Query $query, mixed $status) => $query->where('status', $status))->get();
 ```
 
 ### Reading ###
@@ -610,7 +617,8 @@ Invoice::where('status', 'open')->count();                  // 3
 - `count()` returns the number of rows of the result. A query with a `group_by`, a `having`, `distinct()`, a `limit` or an
   `offset` is counted as a subquery, `SELECT COUNT(*) FROM (...) AS t`, so a grouped query counts its groups and a limited
   one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)`
-  counts the column's non-null values, and after `distinct()` with no select it counts distinct rows. On a grouped query
+  counts the column's non-null values, and after `distinct()` with no select of the query's own its distinct non-null
+  values (Eloquent's `COUNT(DISTINCT column)`); `count()` after `distinct()` counts distinct rows. On a grouped query
   the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
 
 ### Aggregates ###
@@ -632,6 +640,8 @@ Postgres, and on SQLite for integer columns:
 | floating (`FLOAT`, `DOUBLE`, `REAL`) | a `float` | `0.0` | the database's `AVG`, a `float` |
 | anything else: text, a date, a joined table's column, the alias of an expression | the driver's value | the driver's | the driver's |
 
+The column is read by the name you aggregate: the alias of an expression named like a column of the model
+(`select_raw('qty * 2 AS qty')->sum('qty')`) is read by that column's type, and any other alias gives the driver's value.
 `min`, `max` and `avg` of no row are `null`. An exact `avg` is the SUM divided by the COUNT in PHP, an exact long division
 rounded half up at the scale of the SUM plus 4 (`'1.5000'` for the integers 1 and 2, `'12000.1667'` above), where the
 databases' own AVG differ in type and scale.
@@ -639,7 +649,9 @@ databases' own AVG differ in type and scale.
 - They aggregate the rows of the result, as `count()` counts them: a grouped, distinct or windowed query (`limit`,
   `offset`) is aggregated as a subquery, `SELECT SUM(t.col) FROM (...) AS t`, so
   `order_by_desc('total_cents')->limit(2)->sum('total_cents')` sums the two biggest. Eloquent ignores the `limit` and
-  aggregates every row.
+  aggregates every row. After `distinct()` with no select of the query's own, the subquery selects `DISTINCT col`, so
+  `sum()` and `avg()` run over the column's distinct values, Eloquent's `SUM(DISTINCT col)` and `AVG(DISTINCT col)`
+  (`min()` and `max()` are the same either way); with a select of its own they run over the distinct rows it selects.
 - On a grouped query, aggregating a column that the groups do not group is refused at the call, as MariaDB and SQLite would
   silently read an arbitrary row of each group: group by it, give the query a select of its own, or group by the whole
   primary key (each group is then one row, and any column may be aggregated). It is refused only when the query can be
@@ -662,11 +674,15 @@ Invoice::new_query()->update(['note' => null]);                         // every
 - **A write takes the query's where, `order_by()` and `limit()`, and refuses any other clause** at the call: joins,
   groups, havings, an offset, `distinct()`, a `select()`, `from()`, `with()` and `readonly()` (`update() cannot use joins,
   ...`). `insert()` and `upsert()` take no clause.
-- **Without a where, a write is for every row, but only from an explicit form** such as `Invoice::new_query()->delete()`,
-  because the static forwarding refuses `update` and `delete`.
+- **A write with no where condition writes every row**, up to its `limit()`: `Invoice::new_query()->delete()`, and also a
+  chain of `order_by()` or `limit()` alone (`Invoice::order_by('id')->delete()` deletes every row,
+  `Invoice::limit(2)->delete()` two). The static forwarding refuses `update` and `delete`, so a bare `Invoice::update([...])`
+  never writes.
 - **A write whose where calls all came out empty is refused**: `where([])`, an empty closure group or `where_null([])` mean
-  a filter that came out empty, and it must not write every row. Reads are unchanged (`where([])->get()` returns every row),
-  and so is a write with no where call at all. A negation of an empty list is not empty but "all except none" (see
+  a filter that came out empty, and it must not write every row. A `when()` or `unless()` that ran neither its callback
+  nor a default is refused the same way: with `$ids = []`,
+  `Invoice::when($ids, fn(ActiveRecord\Query $query, array $ids) => $query->where_key($ids))->delete()` is refused. Reads
+  are unchanged (`where([])->get()` returns every row), and so is a write with no where call at all. A negation of an empty list is not empty but "all except none" (see
   [Conditions](#conditions)): `where_not_in('id', [])`, `where_key_not([])` and `where_not(['id' => []])` match every row,
   and a write with them touches every row, by design.
 - **The keys of the values** name a column by its alias, its attribute name or its own name (`update(['amount' => 5])` with
@@ -674,33 +690,42 @@ Invoice::new_query()->update(['note' => null]);                         // every
   with a `__toString()` (bound as text); an array, an enum (give the scalar it stands for) and any other object are refused.
   Empty values throw `Updating requires a hash or string.`, as `update_all()` does.
 - **`update()` and `delete()` return** the rows the driver counts (`PDOStatement::rowCount()`). On MySQL and MariaDB that is
-  the rows whose values changed, as `update_all()` returns it, and since `updated_at` moves to now that is every matched
-  row.
+  the rows whose values changed, as `update_all()` returns it. `updated_at` moves to now, so that is normally every matched
+  row, but a row already stamped within the same second, its other values unchanged, is not counted.
 - **`insert()`** takes one row (a hash) or a list of rows, which must all have the same keys. Several rows become one
   multi-row `INSERT`, split at the adapter's bind-parameter limit, in a transaction when there is more than one statement
   (unless the connection is already in one). No validation, callback or setter runs.
 - **A limited write** (`order_by()` and `limit()`) is `UPDATE ... ORDER BY ... LIMIT` on MySQL, MariaDB and SQLite. Postgres
-  has no `LIMIT` on `UPDATE` and `DELETE`, so it picks the rows by primary key in a subquery.
+  has no `LIMIT` on `UPDATE` and `DELETE`, so it picks the rows by primary key in a subquery. An adapter that can do
+  neither refuses the limited write (`ActiveRecordException`), here and in `update_all()` / `delete_all()`, rather than send
+  it without its limit.
 - `upsert($rows, $unique_by, $update = null)` is `Model::upsert()`, with the timestamps below.
 
 ### Timestamps ###
 
-One rule, in the engine, for every write:
+`save()` sets the timestamps itself, as it always has, and the engine fills them in every other statement it writes:
 
 | Statement | `created_at` | `updated_at` |
 |---|---|---|
-| INSERT: the `save()` of a new record, `insert()` | when missing: now | when missing: now |
-| UPDATE: `save()`, `update()`, `update_all()` with a hash `set` | never | when missing: now |
+| `save()` of a new record (`create()`) | now, over a value you assigned | now, over a value you assigned |
+| `save()` of a record read (`update_attributes()`) | not set | now, over a value you assigned |
+| INSERT: `insert()`, a direct `Table::insert()` | when missing: now | when missing: now |
+| UPDATE: `update()`, `update_all()` with a hash `set` | never | when missing: now |
 | UPSERT | on the INSERT part, when missing: now | when missing: now; also set on a conflict, unless the update list is empty |
 | raw SQL: `update_all()` with a string `set` | untouched | untouched |
 
+`save()` goes through the model's `set_timestamps()`, which a model can override. That override governs `save()` only:
+`insert()`, `update()`, `update_all()` with a hash `set`, `upsert()` and a direct `Table::insert()` stamp the timestamps
+of every model, one that overrides `set_timestamps()` included, and only `without_timestamps()` suspends them.
+
 A timestamp column is one whose attribute name is `created_at` or `updated_at` (a column named `"created at"` is one), and a
-value is missing when the data you give has none for that column, after name mapping (a given `null` is given). All the rows
-of an `insert()` or an `upsert()` take the same time. `Model::without_timestamps($fn)` suspends the rule for that model
-class while `$fn` runs, `save()` included, and returns `$fn`'s result:
+value is missing when the data you give has none for that column, after name mapping (a given `null` is given; a key may be
+pre-quoted or qualified with the model's table). All the rows of an `insert()` or an `upsert()` take the same time.
+`Model::without_timestamps($fn)` suspends the rule for that model class while `$fn` runs, `save()` included, and returns
+`$fn`'s result:
 
 ```php
-$invoice = Invoice::without_timestamps(fn () => Invoice::create(['customer_id' => 1, 'number' => 'INV-009', 'status' => 'open', 'total_cents' => 100, 'issued_on' => '2026-05-01']));
+$invoice = Invoice::without_timestamps(fn() => Invoice::create(['customer_id' => 1, 'number' => 'INV-009', 'status' => 'open', 'total_cents' => 100, 'issued_on' => '2026-05-01']));
 ```
 
 Suspensions nest, and the previous state is restored when `$fn` ends, also if it throws. It is for that class only: not for a
@@ -715,8 +740,10 @@ Where `update_all()` with a hash `set` must not touch `updated_at`, wrap the cal
 $query = Invoice::where('status', 'open')->where('total_cents', '>', 5000)->order_by_desc('issued_on')->limit(2);
 $query->to_sql();        // SELECT * FROM `invoices` WHERE `status` = ? AND `total_cents` > ? ORDER BY `issued_on` DESC LIMIT 2
 $query->get_bindings();  // ['open', 5000]
-$query->to_raw_sql();    // SELECT * FROM `invoices` WHERE `status` = 'open' AND `total_cents` > 5000 ORDER BY `issued_on` DESC LIMIT 2
+$query->to_raw_sql();    // SELECT * FROM `invoices` WHERE `status` = 'open' AND `total_cents` > '5000' ORDER BY `issued_on` DESC LIMIT 2
 ```
+
+The output is MySQL's.
 
 `get_bindings()` lists the values in the order of the clauses (select, FROM, joins, WHERE, GROUP BY, HAVING, ORDER BY); the
 limit and the offset are written in the statement, not bound. **`to_raw_sql()` is a debug aid**, never for execution: it
@@ -724,7 +751,9 @@ writes each value as the literal the adapter binds, so the text runs by hand as 
 adapter binds as an integer is written bare (on SQLite, ints and bools), every other value as quoted text, as it is sent
 (on MySQL, MariaDB and Postgres an int is `'5'` and a bool `'1'`). So Postgres, run by hand, would refuse a bare `1` against a
 boolean column or a bare `5` against a text column, and SQLite compares a quoted `'1'` with an integer expression
-differently from the bound integer. `null` is `NULL`, and a `DateTime` is written as the builder binds it.
+differently from the bound integer. `null` is `NULL`, and a `DateTime` is written as the builder binds it. It reads the
+`?` markers as PDO does, outside strings and comments, and when they and the values do not match it throws an
+`ActiveRecordException` rather than write another statement than the one that runs.
 
 ### Differences from Eloquent ###
 
@@ -741,11 +770,14 @@ Code ported from the Laravel documentation works by changing the method case, ex
   row. **A closure group refuses anything but wheres**, where Eloquent ignores the rest.
 - **`count()` counts the rows of the result**, so a grouped query counts its groups. Laravel counts the first group, and
   returns 0 with an offset.
-- **Aggregates are exact** and normalized by column type (`avg` is an exact string), where Laravel casts `sum` with `(int)`
-  or `(float)`. **`sum`, `min`, `max` and `avg` of a grouped, distinct or windowed query aggregate its result rows**, where
-  Eloquent ignores the `limit`, and a grouped aggregate of an ungrouped column is refused at the call.
+- **Aggregates are exact** and normalized by column type (`avg` is an exact string), where Laravel returns the driver's
+  value (or 0) with no cast. **`sum`, `min`, `max` and `avg` of a grouped, distinct or windowed query aggregate its result
+  rows**, where Eloquent ignores the `limit`, and a grouped aggregate of an ungrouped column is refused at the call. After
+  `distinct()` with a select of the query's own they aggregate the distinct rows it selects, where Eloquent aggregates the
+  column's distinct values (with no select of its own, both do).
 - **`exists()` selects `1`**, so an aggregate select cannot make it true when no row matches. Eloquent keeps the select,
-  which can.
+  which can. **`exists()` also leaves out the limit and the offset**, so `limit(0)->exists()` is true when a row matches,
+  where Eloquent keeps the window.
 - **`find()` returns `null` for a missing record**, as Eloquent's does, where the legacy static `Invoice::find()` still
   throws `RecordNotFound`. **`find_or($ids, $callback)` calls the callback when any id is missing**, where Eloquent's
   `findOr` never calls it for a list.
@@ -753,7 +785,8 @@ Code ported from the Laravel documentation works by changing the method case, ex
   return, where Eloquent uses any non-null result. **`readonly()` is not forwardable.**
 - **`insert()` fills `created_at` and `updated_at`**, where Eloquent's `insert()` is raw and sets none.
 - **A static `update` or `delete` is refused**, a write takes only a where, `order_by()` and `limit()`, and a write whose
-  where calls all came out empty is refused (see [Writing](#writing)).
+  where calls all came out empty, or whose `when()` or `unless()` skipped its callback, is refused, where Eloquent writes
+  every row (see [Writing](#writing)).
 - The exceptions are this library's: `RecordNotFound` for `first_or_fail()`, `find_or_fail()` and `sole()` (Eloquent's
   `ModelNotFoundException`) and `MultipleRecordsFound` for `sole()`. The terminals return arrays, where Eloquent returns
   Collections.
@@ -776,8 +809,9 @@ Code ported from the Laravel documentation works by changing the method case, ex
   `charset=latin1` misreads non-ASCII patterns.
 - SQLite needs version 3.39 or later for `right_join()`, and for a `HAVING` without a `GROUP BY` (`having_raw('COUNT(*) > ?',
   [1])` on an aggregate select); an older SQLite fails at the database.
-- A wrapped `count()` (or aggregate) selects `1` in its subquery when the select cannot matter, which avoids MySQL's and
-  MariaDB's error 1060 for two result columns of one name (`invoices.*` beside `customers.name`). When it has to keep the
+- A wrapped `count()` of the rows selects `1` in its subquery when the select cannot matter (`sum`, `min`, `max`, `avg`
+  and a count of a column select their column, or keep the query's own select), which avoids MySQL's and MariaDB's error
+  1060 for two result columns of one name (`invoices.*` beside `customers.name`). When it has to keep the
   caller's select, because a GROUP BY, a HAVING or an aggregate depends on it, such a query can still meet that error
   there. Another residual: SQLite accepts a select alias in a WHERE, so a query that uses one works in `get()` there but
   fails in `exists()`, whose select is `1`.
