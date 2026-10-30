@@ -587,7 +587,8 @@ class Table
      * named like a column that the check at load did not see (defense in depth, spec §6.2.6). A
      * DateTime of the $where hash is bound in the format of its column, and two of its keys naming
      * one column both stay conditions. Anything else as $where is the one argument of a condition,
-     * as before.
+     * as before, sent as written: a statement terminator (;) in a $where string is not refused here,
+     * where the 'conditions' option of the finders and of the bulk writes refuses one.
      *
      * @param array<string, mixed> $data
      * @param array<string, mixed>|string $where
@@ -607,8 +608,10 @@ class Table
         // the engine sends the values as they are prepared here. Null (nothing to write) is an empty
         // set, which it rejects as it rejects anything but a hash. 'mapped_names' => []: a pk hash reads
         // no alias. The check at load (check_alias_attribute()) keeps an alias from being named like a
-        // column, but a shadow it did not see must not move the rows a save() writes
-        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])
+        // column, but a shadow it did not see must not move the rows a save() writes.
+        // 'refuse_terminator' => false: the WHERE is sent as it always was (see
+        // QueryCompiler::refuse_terminated_conditions())
+        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => [], 'refuse_terminator' => false])
             ->execute_update($data ?: [], timestamps: false, format_dates: false);
     }
 
@@ -620,7 +623,7 @@ class Table
      * alias: a pk is not aliased, also where an alias is named like a column that the check at load
      * did not see (defense in depth, spec §6.2.6). A DateTime of it is bound in the format of its
      * column, and two of its keys naming one column both stay conditions. Anything but a hash is the
-     * one argument of a condition, as before.
+     * one argument of a condition, as before, and is not read for a statement terminator (see update()).
      *
      * @param array<string, mixed> $data
      * @return mixed
@@ -631,8 +634,8 @@ class Table
         $conditions = is_hash($data) ? $data : [$data];
 
         // the engine sends the values as they are prepared here. 'mapped_names' => []: a pk hash reads no
-        // alias (see update())
-        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])->execute_delete(format_dates: false);
+        // alias, and 'refuse_terminator' => false: the WHERE is sent as it always was (see update())
+        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => [], 'refuse_terminator' => false])->execute_delete(format_dates: false);
     }
 
     /**

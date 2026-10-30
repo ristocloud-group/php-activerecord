@@ -159,7 +159,10 @@ class Query
      * of a finder (those Table::options_to_sql() receives), or the conditions, order and limit of
      * a legacy write, which execute_update() and execute_delete() read. Model::update_all() and
      * Model::delete_all() give those of their options; Table::update() and Table::delete() give
-     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read.
+     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read, and
+     * 'refuse_terminator' => false, so that the WHERE they are given is sent as it always was (the
+     * SQL of other conditions is refused when it holds a statement terminator, see
+     * QueryCompiler::refuse_terminated_conditions()).
      *
      * Like for_table(), it reads and builds through $table itself.
      *

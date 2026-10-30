@@ -398,14 +398,16 @@ final class QueryCompiler
      * Refuses SQL written by hand that holds a statement terminator, a ; outside its strings, its quoted identifiers and
      * its comments (see RawSqlWriter::holds_statement_terminator()), given to $source: a builder method that sends its SQL
      * as written (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(), group_by_raw(), having_raw(),
-     * order_by_raw() and the or_ forms), at the call (spec §5.7). MySQL and MariaDB end the statement there and run what
-     * follows it as another statement, whose error is never read, and SQLite drops what follows it: either way the clauses
-     * after it are lost, those of a limited write its ORDER BY and its LIMIT, so it writes every row it matches. Postgres
-     * refuses the statement. A ; in a string, a quoted identifier, a comment or a bound value is no terminator, and a
-     * value is bound with a ? marker.
+     * order_by_raw() and the or_ forms), at the call (spec §5.7), or the legacy 'conditions' option, before any
+     * statement (see refuse_terminated_conditions()). MySQL and MariaDB end the statement there and run what follows it
+     * as another statement, whose error is never read, and SQLite drops what follows it: either way the clauses after it
+     * are lost, those of a limited write its ORDER BY and its LIMIT, so it writes every row it matches. Postgres refuses
+     * the statement. A ; in a string, a quoted identifier, a comment or a bound value is no terminator, and a value is
+     * bound with a ? marker.
      *
-     * @internal Serves Conditions and Query; not a supported API.
-     * @param string $source Where the SQL was given, for the message of the exception: "where_raw()", ...
+     * @internal Serves Conditions and Query, and the legacy conditions; not a supported API.
+     * @param string $source Where the SQL was given, for the message of the exception: "where_raw()", "the 'conditions'
+     *   option", ...
      * @throws ActiveRecordException
      */
     public function refuse_statement_terminator(string $sql, string $source): void
@@ -1121,7 +1123,12 @@ final class QueryCompiler
      * through the model's aliases (#144), unless the options give the names to map as
      * 'mapped_names' (an empty list maps no alias), and are then named as the columns (#92).
      *
+     * The SQL of a string or a list is refused, before any statement, when it holds a statement terminator (see
+     * refuse_terminated_conditions()), for every legacy entry that reads conditions here: the finders, count(), exists(),
+     * update_all() and delete_all(), and the loads of a relationship, whose declared conditions they are given.
+     *
      * @param array<string, mixed> $options
+     * @throws ActiveRecordException for SQL of the conditions that holds a statement terminator
      */
     private function apply_conditions(SQLBuilder $sql, array $options): void
     {
@@ -1134,6 +1141,7 @@ final class QueryCompiler
                 $options['conditions'] = [$options['conditions']];
             }
 
+            $this->refuse_terminated_conditions($options);
             call_user_func_array([$sql,'where'], $options['conditions']);
         } else {
             // aliases and attribute names become column names (#92): the model's aliases,
@@ -1203,6 +1211,35 @@ final class QueryCompiler
         }
 
         $sql->key_columns(array_map($this->table->real_column_name(...), $this->table->pk));
+    }
+
+    /**
+     * Refuses the legacy conditions of $options, a list (a string comes as a list of one), when their SQL, the first
+     * element, holds a statement terminator (see refuse_statement_terminator()). They were sent as given, and MySQL,
+     * MariaDB and SQLite ended the statement there: a limited update_all() or delete_all() wrote every row it matched,
+     * and a find read every row. Their values are bound, and a hash names columns, so neither is read.
+     *
+     * The WHERE that Table::update() and Table::delete() are given, which they mark 'refuse_terminator' => false, is
+     * sent as it always was: save() and Model::delete() give a pk hash, and a direct caller its own SQL. So are the
+     * other legacy options (select, joins, from, group, having, order), which this does not read.
+     *
+     * @param array<string, mixed> $options
+     * @throws ActiveRecordException
+     */
+    private function refuse_terminated_conditions(array $options): void
+    {
+        $conditions = $options['conditions'];
+
+        if (false === ($options['refuse_terminator'] ?? true) || !is_array($conditions) || [] === $conditions) {
+            return;
+        }
+
+        // SQLBuilder::where() takes the first element as the SQL, a string or an object that renders one
+        $sql = $conditions[array_key_first($conditions)];
+
+        if (is_string($sql) || $sql instanceof \Stringable) {
+            $this->refuse_statement_terminator((string) $sql, "the 'conditions' option");
+        }
     }
 
     /**

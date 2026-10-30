@@ -1251,7 +1251,9 @@ class Model
      *
      * <ul>
      * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
-     * $alias_attribute, as find() reads them</li>
+     * $alias_attribute, as find() reads them, and SQL that holds a statement terminator (;) outside its strings and
+     * comments is refused, as find() refuses it: MySQL, MariaDB and SQLite would end the statement there, and a
+     * limited delete would delete every record it matches</li>
      * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1263,7 +1265,8 @@ class Model
      * @return int Number of rows affected
      * @throws ActiveRecordException before any SQL for an argument that could be misread: a positional
      *   list (pass it as ['conditions' => [...]]), a hash mixing option keys with other keys
-     *   ("Unknown key(s): ..."), or an int, float or bool
+     *   ("Unknown key(s): ..."), or an int, float or bool; and for conditions whose SQL holds a statement
+     *   terminator
      */
     public static function delete_all($options = [])
     {
@@ -1301,7 +1304,9 @@ class Model
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with</li>
      * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
-     * $alias_attribute, as find() reads them</li>
+     * $alias_attribute, as find() reads them, and SQL that holds a statement terminator (;) outside its strings and
+     * comments is refused, as find() refuses it: MySQL, MariaDB and SQLite would end the statement there, and a
+     * limited update would update every record it matches</li>
      * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1315,7 +1320,8 @@ class Model
      *   or its 'set' is neither a non-empty hash nor a string ("Updating requires a hash or
      *   string."), is a positional list ("Invalid options for update_all(): pass positional
      *   conditions as ['conditions' => [...]]"), or has a key beside 'set' that is not an option,
-     *   such as a column name ("Unknown key(s): ...")
+     *   such as a column name ("Unknown key(s): ..."); and for conditions whose SQL holds a statement
+     *   terminator
      */
     public static function update_all($options = [])
     {
@@ -2264,6 +2270,7 @@ class Model
      *
      * @see find
      * @return list<Model> array of records found
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function all(/* ... */)
     {
@@ -2374,9 +2381,13 @@ class Model
      * YourModel::count(array('conditions' => 'amount > 3.14159265'));
      * </code>
      *
+     * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
+     * strings and comments is refused.
+     *
      * @see find
      * @return int|string Number of records that matched the query; 0 when the count query
      *   returns no row (e.g. 'limit' => 0, or an 'offset' past its single row) (#34)
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function count(/* ... */)
     {
@@ -2395,8 +2406,12 @@ class Model
      * SomeModel::exists(array('id' => 123, 'name' => 'Tito'));
      * </code>
      *
+     * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
+     * strings and comments is refused.
+     *
      * @see find
      * @return boolean
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function exists(/* ... */)
     {
@@ -2421,7 +2436,8 @@ class Model
      * @see find
      * @return Model|null The first matched record or null if not found
      * @throws RecordNotFound if given pk values and none of them is found
-     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option), and before any
+     *   SQL for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function first(/* ... */)
     {
@@ -2438,7 +2454,8 @@ class Model
      * @see find
      * @return Model|null The last matched record or null if not found
      * @throws RecordNotFound if given pk values and none of them is found
-     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option), and before any
+     *   SQL for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function last(/* ... */)
     {
@@ -2493,7 +2510,10 @@ class Model
      * <li><b>joins:</b> A SQL join fragment such as: 'JOIN roles ON(roles.user_id=user.id)' or a named association on the model</li>
      * <li><b>include:</b> TODO not implemented yet</li>
      * <li><b>conditions:</b> A SQL fragment such as: 'id=1', array('id=1'), array('name=? and id=?','Tito',1), array('name IN(?)', array('Tito','Bob')),
-     * array('name' => 'Tito', 'id' => 1)</li>
+     * array('name' => 'Tito', 'id' => 1). SQL that holds a statement terminator (;) outside its strings and comments
+     * is refused before any SQL, with an ActiveRecordException: MySQL, MariaDB and SQLite would end the statement
+     * there and drop the order and the limit after it, and Postgres refuses it. A ; in a string ('a;b'), a comment
+     * or a bound value is sent as before</li>
      * <li><b>limit:</b> Number of records to limit the query to. A first/last find takes one
      * record, none with a limit of 0 (#38)</li>
      * <li><b>offset:</b> The row offset to return results from for the query. A first/last find
@@ -2505,6 +2525,7 @@ class Model
      * </ul>
      *
      * @throws RecordNotFound if no options are passed or finding by pk and no records matched
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator
      * @return mixed An array of records found if doing a find_all otherwise a
      *   single Model object or null if it wasn't found. NULL is only return when
      *   doing a first/last find. If doing an all find and no records matched this

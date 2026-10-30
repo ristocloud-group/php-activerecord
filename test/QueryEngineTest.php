@@ -4,6 +4,14 @@ use ActiveRecord\Query;
 use ActiveRecord\Table;
 use ActiveRecord\Timestamps;
 
+// an author whose books are declared with conditions that hold a statement terminator
+class TerminatedConditionsAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $pk = 'author_id';
+    public static $has_many = [['books', 'class_name' => 'Book', 'foreign_key' => 'author_id', 'conditions' => 'book_id > 0;']];
+}
+
 /**
  * The Query engine behind the legacy entries: Table::options_to_sql() builds its SELECT through
  * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs, UPDATEs,
@@ -705,6 +713,98 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(4, $this->strict_call(fn() => Author::update_all(['set' => ['name' => 'Every'], 'conditions' => []])));
         $this->assert_same(4, $this->strict_call(fn() => Author::delete_all(['conditions' => []])));
         $this->assert_same(0, (int) Author::count());
+    }
+
+    /**
+     * The refusal of the legacy conditions whose SQL holds a statement terminator (see QueryCompiler::apply_conditions()),
+     * on $model.
+     */
+    private function terminator_refusal(string $sql, string $model = 'Author'): string
+    {
+        return "SQL '$sql' in the 'conditions' option on $model holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker";
+    }
+
+    // BREAKING (the maintainer, 2026-10-30): the SQL of the legacy 'conditions' option, a string or the first element of a
+    // positional list, that holds a statement terminator, a ; outside its strings and comments, is refused before any
+    // statement, by every finder, count(), exists(), update_all() and delete_all(). MySQL, MariaDB and SQLite ended the
+    // statement there: a read lost the ORDER BY and the LIMIT after it and found every row, a limited update_all() or
+    // delete_all() wrote every row it matched, the four authors here (the same SQL as master's), and Postgres refused it.
+    // A ; with nothing after it, which every database ran, is refused too
+    public function test_legacy_conditions_that_hold_a_statement_terminator_are_refused(): void
+    {
+        Author::table();
+
+        foreach ([
+            'all' => [fn() => Author::all(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0;'],
+            'find all, a positional list' => [fn() => Author::find('all', ['conditions' => ['author_id > ?;', 0]]), 'author_id > ?;'],
+            'first' => [fn() => Author::first(['conditions' => 'author_id > 1;', 'order' => 'author_id']), 'author_id > 1;'],
+            'last' => [fn() => Author::last(['conditions' => 'author_id > 1;']), 'author_id > 1;'],
+            'find by pk' => [fn() => Author::find(1, ['conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'count' => [fn() => Author::count(['conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'exists' => [fn() => Author::exists(['conditions' => 'author_id > 10;']), 'author_id > 10;'],
+            'Table::find' => [fn() => Author::table()->find(['conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'update_all' => [fn() => Author::update_all(['set' => ['name' => 'Z'], 'conditions' => ['author_id > ?;', 0], 'order' => 'author_id', 'limit' => 1]), 'author_id > ?;'],
+            'update_all, a string set' => [fn() => Author::update_all(['set' => "name = 'Z'", 'conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'delete_all' => [fn() => Author::delete_all(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0;'],
+            'delete_all, a conditions string' => [fn() => Author::delete_all('author_id > 0;'), 'author_id > 0;'],
+        ] as $case => [$call, $sql]) {
+            $this->assert_same([['exception' => ActiveRecord\ActiveRecordException::class, 'message' => $this->terminator_refusal($sql)]], GoldenStatements::capture($call), $case);
+        }
+
+        // nothing was written
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
+    }
+
+    // ... and a ; that is no terminator is sent as it always was: in a string literal, in a comment, in a bound value (a
+    // dynamic finder binds its values), or on Postgres in a dollar-quoted string
+    public function test_legacy_conditions_send_a_semicolon_in_a_string_a_comment_or_a_value(): void
+    {
+        // insert() runs no setter (Author's upper-cases the name)
+        Author::new_query()->insert(['name' => 'a;b']);
+
+        $this->assert_same(1, count(Author::all(['conditions' => "name = 'a;b'"])));
+        $this->assert_same(1, (int) Author::count(['conditions' => ['name = ?', 'a;b']]));
+        $this->assert_true(Author::exists(['conditions' => "name = 'a;b' /* ; */"]));
+        $this->assert_same('a;b', Author::find_by_name('a;b')->name);
+        $this->assert_same([1], array_map(fn(Author $author): int => $author->author_id, Author::all(['conditions' => 'author_id > 0 /* a;b */', 'order' => 'author_id', 'limit' => 1])));
+
+        if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
+            $this->assert_same(1, (int) Author::count(['conditions' => 'name = $$a;b$$']));
+        }
+
+        $this->assert_same(1, Author::update_all(['set' => ['name' => 'c;d'], 'conditions' => "name = 'a;b'"]));
+        $this->assert_same(1, Author::delete_all(['conditions' => ['name = ?', 'c;d'], 'order' => 'author_id', 'limit' => 1]));
+        $this->assert_same(4, (int) Author::count());
+    }
+
+    // A relationship's declared 'conditions' reach the finders' (its loads call them, ANDed with the key), so one that
+    // holds a ; is refused before the books are read, in the lazy load and the eager one. Master sent it in parentheses,
+    // "(book_id > 0;) AND author_id = ?", which every database refused (a DatabaseException)
+    public function test_a_relationship_whose_conditions_hold_a_statement_terminator_is_refused(): void
+    {
+        $author = TerminatedConditionsAuthor::find(1);
+        $refused = "in the 'conditions' option on Book holds a statement terminator (;)";
+
+        $this->assert_exception_message_contains($refused, fn() => $author->books, ActiveRecord\ActiveRecordException::class);
+        $this->assert_exception_message_contains($refused, fn() => TerminatedConditionsAuthor::all(['include' => 'books']), ActiveRecord\ActiveRecordException::class);
+    }
+
+    // The scope of the refusal (the maintainer, 2026-10-30) is the 'conditions' option: the SQL of the other options, the
+    // WHERE that Table::update() and Table::delete() are given (save() and Model::delete() give a pk hash) and
+    // find_by_sql() are sent as they always were
+    public function test_only_the_conditions_option_is_refused_a_statement_terminator(): void
+    {
+        $table = Author::table();
+        $options = ['select' => 'author_id;', 'joins' => 'JOIN books ON(1);', 'order' => 'author_id;', 'group' => 'author_id;', 'having' => 'COUNT(*) > 0;', 'from' => 'authors;'];
+
+        foreach ($options as $option => $sql) {
+            $this->assert_sql_has($sql, $table->options_to_sql([$option => $sql])->to_s());
+        }
+
+        $data = ['name' => 'Ended'];
+        $this->assert_same(1, $table->update($data, 'author_id = 1;')->rowCount());
+        $this->assert_same(['Ended'], array_map(fn(Author $author): string => $author->name, Author::find_by_sql('SELECT * FROM authors WHERE author_id = 1;')));
     }
 
     // Spec §6.2.5: an empty set is refused before any SQL. The updated_at of the rule must not make a
