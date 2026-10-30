@@ -3151,16 +3151,9 @@ class Query
         $query->table = $this->table;
         $callback($query);
 
-        $new = get_object_vars(new QueryState());
-        $held = [];
-
         // a where call that added no condition is a where clause too: the group holds what the others added, and is
         // left out without any, which the query it goes in remembers (see add_wheres())
-        foreach (get_object_vars($query->state) as $field => $value) {
-            if (!in_array($field, ['wheres', 'empty_where'], true) && $value !== $new[$field]) {
-                $held[] = $field;
-            }
-        }
+        $held = QueryCompiler::held_fields($query->state, ['wheres', 'empty_where']);
 
         if ([] !== $held) {
             throw new ActiveRecordException(sprintf('A where() group can only hold where clauses: the one given to %s() on %s also holds %s', $method, $this->model_class, implode(', ', $held)));

@@ -988,18 +988,21 @@ final class QueryCompiler
 
     /**
      * The fields of a state, other than those of $except, that are not as in a new state: the clauses it holds, in the
-     * order of the fields. Legacy options that are an empty array hold no option, and are none.
+     * order of the fields. Legacy options that are an empty array hold no option, and are none. The fields of a new
+     * state are read once: they are scalars, arrays and null, which no state shares by reference.
      *
+     * @internal Serves QueryCompiler and Query (the clauses a closure group holds); not a supported API.
      * @param list<string> $except
      * @return list<string>
      */
-    private static function held_fields(QueryState $state, array $except): array
+    public static function held_fields(QueryState $state, array $except): array
     {
-        $new = get_object_vars(new QueryState());
+        static $new = null;
+        $new ??= get_object_vars(new QueryState());
         $held = [];
 
         foreach (get_object_vars($state) as $field => $value) {
-            if (!in_array($field, $except, true) && $value !== $new[$field] && !('legacy' === $field && [] === $value)) {
+            if ($value !== $new[$field] && !in_array($field, $except, true) && !('legacy' === $field && [] === $value)) {
                 $held[] = $field;
             }
         }
