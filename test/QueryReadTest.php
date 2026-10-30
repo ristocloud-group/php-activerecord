@@ -407,6 +407,34 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(2, Author::limit(2)->count('authors.author_id'));
     }
 
+    // A count of a column under distinct() with no select of the query's own counts the column's distinct values, not
+    // null: the subquery selects DISTINCT that column, Eloquent's COUNT(DISTINCT column), where it selected DISTINCT *
+    // and counted every row a primary key keeps apart. A window stays on the subquery, so it picks values. The parents
+    // of the authors are 3, 2, 1 and 2; the cities of the venues New York, Washington twice, West Chester, Richmond and
+    // Hampton. A count of the rows, and a query with a select of its own, count as they did
+    public function test_a_distinct_count_of_a_column_counts_its_distinct_values(): void
+    {
+        Author::table();
+
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(t.`parent_author_id`) FROM (SELECT DISTINCT `parent_author_id` FROM `authors`) AS t'), 'values' => []]],
+            GoldenStatements::capture(fn() => Author::distinct()->count('parent_author_id'))
+        );
+        $this->assert_same(3, Author::distinct()->count('parent_author_id'));
+        $this->assert_same(3, Author::distinct()->count('authors.parent_author_id'));
+        $this->assert_same(2, Author::distinct()->where('author_id', '>', 1)->count('parent_author_id'));
+        $this->assert_same(2, Author::distinct()->limit(2)->count('parent_author_id'));
+        $this->assert_same(5, Venue::distinct()->count('mycity'));
+        $this->assert_same(6, Venue::new_query()->count('mycity'));
+
+        $this->conn->query("UPDATE authors SET some_text = 'x' WHERE author_id IN (3, 4)");
+        $this->assert_same(1, Author::distinct()->count('some_text'));
+        $this->assert_same(2, Author::new_query()->count('some_text'));
+
+        $this->assert_same(4, Author::distinct()->count());
+        $this->assert_same(4, Author::distinct()->select('parent_author_id', 'name')->count('parent_author_id'));
+    }
+
     // Spec §5.3: a wrapped count() and exists() keep the caller's select wherever a clause or the rows depend on it.
     // A GROUP BY and an ORDER BY can name an alias of it, on every database, and an aggregate in it collapses the rows
     // to one. So count() selects 1 only with no counted column, no DISTINCT, no HAVING, and a select of plain columns

@@ -172,8 +172,10 @@ final class QueryCompiler
      * - Otherwise the state's own select, since a clause or the rows may depend on it: a GROUP BY and an
      *   ORDER BY can name an alias of it, on every database, a HAVING too on MySQL, MariaDB and SQLite, SQL
      *   of a GROUP BY or a kept ORDER BY can name a column of it by position, and an aggregate
-     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects every
-     *   column under DISTINCT, and otherwise the counted column, or 1 beside a HAVING.
+     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects the counted column,
+     *   under DISTINCT too, so that a distinct count of a column counts its distinct values that are not null
+     *   (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
+     *   beside a HAVING.
      *
      * A counted column is read as t's column of its name (see result_name()), which the subquery must
      * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives): MySQL's
@@ -202,7 +204,8 @@ final class QueryCompiler
         if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !self::has_raw($state->groups) && !self::has_raw($rows->orders)) {
             // the state's select provably cannot matter
             $rows->selects = [['raw' => '1', 'bindings' => []]];
-        } elseif ([] === $state->selects && !$state->distinct) {
+        } elseif ([] === $state->selects && !($all && $state->distinct)) {
+            // under DISTINCT, the distinct values of the counted column: SELECT DISTINCT * would keep every row apart
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }
 
