@@ -444,13 +444,13 @@ Invoice::where('status', 'open')
   and `where_not(['status' => []])` is `NOT (1=0)`. They match every row, which matters for a write (see
   [Writing](#writing)).
 - **Groups.** A closure is a parenthesized group, and an empty group is left out. The closure is given a new `Query` on the
-  same model, and setting anything but wheres on it throws. `where_all(['name', 'note'], 'like', 'T%')` is
-  `(name LIKE ? AND note LIKE ?)`, `where_any` joins the same comparisons with OR, and `where_none` negates that. An empty
+  same model, and setting anything but wheres on it throws. `where_all(['number', 'note'], 'like', 'T%')` is
+  `(number LIKE ? AND note LIKE ?)`, `where_any` joins the same comparisons with OR, and `where_none` negates that. An empty
   column list throws (Laravel adds nothing and matches every row), and so do `where_key` on a composite primary key and an
   array nested in `where_in`, `where_between` or `where_key`.
 - **Values** are bound as the database expects them for their column: a bool as `0` or `1`, and a `DateTime` in the format
-  of its column's type, `2026-02-01` for a DATE column and `2026-02-01 10:00:00` for a DATETIME one. That also fixes DATE
-  comparisons on SQLite. The legacy finders are unchanged: their positional values (`['issued_on = ?', $date]`) and hash
+  of its column's type, a date (`2026-02-01`) for a DATE column and a date and time, in the adapter's datetime format, for a
+  DATETIME one. That also fixes DATE comparisons on SQLite. The legacy finders are unchanged: their positional values (`['issued_on = ?', $date]`) and hash
   values keep binding the datetime format.
 - **`where_like($column, $pattern, $case_sensitive = false)`** takes the `%` and `_` wildcards, matches in any case by
   default, and in the case given with `true`; how is in [Database notes](#database-notes).
@@ -521,7 +521,7 @@ Customer::left_joins('invoices')->where_null('invoices.id')->get();    // the cu
 ### Selecting, ordering and paging ###
 
 ```php
-Invoice::select('number', 'total_cents as cents')->get();             // "name as alias" names the attribute
+Invoice::select('number', 'total_cents as cents')->get();             // "column as alias" names the attribute
 Invoice::select('customer_id')->select_raw('SUM(total_cents) AS total')
     ->group_by('customer_id')->having_raw('SUM(total_cents) > ?', [22000])->get();
 Invoice::order_by('status')->order_by_desc('issued_on')->limit(10)->offset(20)->get();
@@ -609,9 +609,9 @@ Invoice::where('status', 'open')->count();                  // 3
   cannot make it true when no row matches. `doesnt_exist()` is its opposite.
 - `count()` returns the number of rows of the result. A query with a `group_by`, a `having`, `distinct()`, a `limit` or an
   `offset` is counted as a subquery, `SELECT COUNT(*) FROM (...) AS t`, so a grouped query counts its groups and a limited
-  one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)` counts the
-  column's non-null values, and after `distinct()` with no select it counts distinct rows. On a grouped query the counted
-  column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
+  one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)`
+  counts the column's non-null values, and after `distinct()` with no select it counts distinct rows. On a grouped query
+  the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
 
 ### Aggregates ###
 
