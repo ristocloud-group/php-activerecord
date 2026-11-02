@@ -169,13 +169,16 @@ class DateTime extends \DateTime
      * DateMalformedStringException (it no longer returns false) and sub()
      * throws DateInvalidOperationException on failure, in which case the
      * value was not changed and must not be marked dirty.
+     *
+     * modify() returns static, as the parent's (tentative static|false) does: on success the parent returns this
+     * very object, and on PHP >= 8.3 it never returns false.
      */
-    public function modify(string $modifier): DateTime
+    public function modify(string $modifier): static
     {
-        $result = parent::modify($modifier);
+        parent::modify($modifier);
         $this->flag_dirty();
 
-        return $result;
+        return $this;
     }
 
     public function add(\DateInterval $interval): DateTime
