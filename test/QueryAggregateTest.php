@@ -619,6 +619,49 @@ class QueryAggregateTest extends DatabaseTest
         );
     }
 
+    // Spec §5.3: SQL written by hand in the GROUP BY, or in the ORDER BY a window keeps, can name a column of the select by
+    // position, so the subquery of an aggregate with no select of its own selects what get() selects there, and not the
+    // aggregated column alone: GROUP BY 1 grouped by that column, and summed its distinct values (6), and ORDER BY 1 of a
+    // window picked the rows of its smallest values (3). The numbers are those of get()'s rows
+    public function test_a_raw_group_or_kept_raw_order_keeps_the_empty_select_of_an_aggregate(): void
+    {
+        Author::table();
+
+        // GROUP BY 1 groups by the first column of what get() selects, the key: each author is a group
+        $this->assert_same(4, count(Author::group_by_raw('1')->get()));
+        $this->assert_same(8, Author::group_by_raw('1')->sum('parent_author_id'));
+        $this->assert_same(3, Author::group_by_raw('1')->max('parent_author_id'));
+        $this->assert_same(4, Author::group_by_raw('1')->count('parent_author_id'));
+        $this->assert_same(
+            [$this->sql('SELECT SUM(t.`parent_author_id`) FROM (SELECT * FROM `authors` GROUP BY 1) AS t')],
+            $this->statements(fn() => Author::group_by_raw('1')->sum('parent_author_id'))
+        );
+
+        // ORDER BY 1 of a window orders by the key, and picks authors 1 and 2, whose parents are 3 and 2
+        $this->assert_same([3, 2], array_map(fn(Author $author): int => $author->parent_author_id, Author::order_by_raw('1')->limit(2)->get()));
+        $this->assert_same(5, Author::order_by_raw('1')->limit(2)->sum('parent_author_id'));
+
+        // a select of the query's own is what the positions name
+        $this->assert_same(6, Author::select('parent_author_id')->group_by_raw('1')->sum('parent_author_id'));
+
+        // a GROUP BY that names a column is aggregated as get() reads it: its groups, or the refusal of MySQL and Postgres
+        // of a select of every column beside it, where get() is refused too
+        $by_name = fn(): ActiveRecord\Query => Author::group_by_raw('parent_author_id');
+        $thrown = function (callable $call): ?string {
+            try {
+                $call();
+            } catch (Throwable $e) {
+                return $e::class;
+            }
+
+            return null;
+        };
+        $read = $thrown(fn() => $by_name()->get());
+        $this->assert_same($read ?? 3, $thrown(fn() => $by_name()->max('parent_author_id')) ?? $by_name()->max('parent_author_id'));
+        $this->assert_true(in_array($read, [null, ActiveRecord\DatabaseException::class], true));
+        $this->assert_same(3, Author::select('parent_author_id')->group_by_raw('parent_author_id')->max('parent_author_id'));
+    }
+
     // What cannot be told goes to the database as it is, with the residual that the database decides: a select of the query's
     // own (which can aggregate the column, or alias it), SQL of group_by_raw() and a qualified name, which this does not read.
     // The statement is sent in every case (MySQL and Postgres may refuse it, MariaDB and SQLite read an arbitrary row), and
@@ -632,7 +675,7 @@ class QueryAggregateTest extends DatabaseTest
             GoldenStatements::capture(fn() => Author::group_by('authors.parent_author_id')->max('author_id'))[0]['sql']
         );
         $this->assert_same(
-            $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT `author_id` FROM `authors` GROUP BY parent_author_id) AS t'),
+            $this->sql('SELECT MAX(t.`author_id`) FROM (SELECT * FROM `authors` GROUP BY parent_author_id) AS t'),
             GoldenStatements::capture(fn() => Author::group_by_raw('parent_author_id')->max('author_id'))[0]['sql']
         );
         $this->assert_same(

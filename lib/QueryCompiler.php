@@ -227,7 +227,11 @@ final class QueryCompiler
      *   under DISTINCT too, so that a distinct aggregate of a column runs over its distinct values that are not
      *   null (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
      *   beside a HAVING. The order a window keeps there must then be by that column: the terminals refuse another
-     *   (see refuse_distinct_window_ordered_by_another_column()).
+     *   (see refuse_distinct_window_ordered_by_another_column()). But without DISTINCT, SQL written by hand in the
+     *   GROUP BY or in a kept ORDER BY keeps the empty select, as get() sends it (every column): GROUP BY 1 groups by
+     *   the first column of the rows there too, where beside 1 it grouped by the constant, and beside the aggregated
+     *   column by that column. MySQL and Postgres refuse every column beside a GROUP BY that is not the primary key,
+     *   as they refuse get() of such a query.
      *
      * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
      * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives, or the groups be the
@@ -258,10 +262,14 @@ final class QueryCompiler
             return $this->compile_select($rows);
         }
 
-        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !self::has_raw($state->groups) && !self::has_raw($rows->orders)) {
+        // SQL written by hand in the GROUP BY, or in the ORDER BY a window keeps, can name the select by position
+        // (GROUP BY 1, ORDER BY 2): there a select of 1, or of the aggregated column alone, would change what it names
+        $positional = self::has_raw($state->groups) || self::has_raw($rows->orders);
+
+        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !$positional) {
             // the state's select provably cannot matter
             $rows->selects = [['raw' => '1', 'bindings' => []]];
-        } elseif ([] === $state->selects && !($all && $state->distinct)) {
+        } elseif ([] === $state->selects && !($all && $state->distinct) && ($state->distinct || !$positional)) {
             // under DISTINCT, the distinct values of the aggregated column: SELECT DISTINCT * would keep every row apart
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }

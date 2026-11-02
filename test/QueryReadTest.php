@@ -514,6 +514,47 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(4, Author::select('name')->group_by('name')->order_by_raw('1')->count());
     }
 
+    // ... and so does a query with no select of its own: spec §5.3 keeps the select-1 rule from SQL written by hand in the
+    // GROUP BY, which can name a column of the select by position. The subquery selects what get() selects, so GROUP BY 1
+    // groups by the first column of the table there too, and counts the four authors, where SELECT 1 ... GROUP BY 1
+    // grouped by the constant and counted one group; and so does SQL written by hand in the ORDER BY a window keeps, where
+    // ORDER BY 2 named a column that SELECT 1 does not have. A GROUP BY that names a column is counted as get() reads it:
+    // its groups, or the refusal of MySQL and Postgres of a select of every column beside it, where get() is refused too
+    public function test_a_raw_group_keeps_the_empty_select_of_a_count(): void
+    {
+        Author::table();
+
+        $this->assert_same(4, count(Author::group_by_raw('1')->get()));
+        $this->assert_same(4, Author::group_by_raw('1')->count());
+        $this->assert_same(4, Author::group_by_raw('1')->having_raw('COUNT(*) = 1')->count());
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (SELECT * FROM `authors` GROUP BY 1) AS t'), 'values' => []]],
+            GoldenStatements::capture(fn() => Author::group_by_raw('1')->count())
+        );
+        $this->assert_same(4, Author::select('name')->group_by_raw('1')->count());
+
+        // ORDER BY 2 of a window names the second column of the table, which SELECT 1 does not have
+        $this->assert_same(2, count(Author::order_by_raw('2')->limit(2)->get()));
+        $this->assert_same(2, Author::order_by_raw('2')->limit(2)->count());
+
+        // the class of what get() and count() throw, or the number of rows they give: alike on every database
+        $by_name = fn(): Query => Author::group_by_raw('parent_author_id');
+        $rows = $this->thrown(fn() => $by_name()->get())[0] ?? count($by_name()->get());
+        $counted = $this->thrown(fn() => $by_name()->count())[0] ?? $by_name()->count();
+        $this->assert_same($rows, $counted);
+        $this->assert_true(in_array($rows, [3, ActiveRecord\DatabaseException::class], true));
+
+        if ($this->conn instanceof ActiveRecord\SqliteAdapter) {
+            $this->assert_same(3, $counted);
+        }
+
+        $this->assert_same(3, Author::select('parent_author_id')->group_by_raw('parent_author_id')->count());
+        $this->assert_same(
+            [['sql' => $this->sql('SELECT COUNT(*) FROM (SELECT `parent_author_id` FROM `authors` GROUP BY parent_author_id) AS t'), 'values' => []]],
+            GoldenStatements::capture(fn() => Author::select('parent_author_id')->group_by_raw('parent_author_id')->count())
+        );
+    }
+
     // Spec §5.3: exists() and doesnt_exist() leave out the order, the limit and the offset, and their values with
     // them, and without a GROUP BY and a HAVING select 1, as the legacy exists does: the caller's select could be an
     // aggregate, whose one row exists for no row. A GROUP BY or a HAVING, which may name an alias of it, keeps the
