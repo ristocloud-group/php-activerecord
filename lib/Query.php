@@ -1891,13 +1891,22 @@ class Query
      * no row matches, does not make it true; with one, which may name an alias of the select, the select
      * stays (see QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
      *
+     * With no select of its own, SQL of group_by_raw() that names a column by its position (GROUP BY 1) is refused
+     * before any statement: it would name the 1 that exists() selects (see
+     * QueryCompiler::refuse_position_in_own_select()).
+     *
      * Model::exists() is the legacy exists, which Author::exists(...) calls.
+     *
+     * @throws ActiveRecordException for SQL of group_by_raw() that names a column by its position, with no select of
+     *   the query's own, before any statement
      */
     public function exists(): bool
     {
         $table = $this->table();
         $conn = $table->connection();
-        $sql = $this->compiler()->compile_exists($this->state);
+        $compiler = $this->compiler();
+        $compiler->refuse_position_in_own_select($this->state, null, __FUNCTION__);
+        $sql = $compiler->compile_exists($this->state);
         $values = $table->format_date_bind_values($sql->select_bind_values());
         $statement = $conn->exists_sql($sql->to_s());
         $table->last_sql = $statement;
@@ -1928,7 +1937,9 @@ class Query
      * On a grouped query, a counted $column must be grouped, or be what the query's own select gives:
      * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY. After distinct(),
      * with no select of the query's own, a $column in a window (limit(), offset()) ordered by another column
-     * is refused, as min() refuses it.
+     * is refused, as min() refuses it. So is SQL of group_by_raw(), or of a window's order_by_raw(), that names a column by
+     * its position (GROUP BY 1) where count() makes the select of its subquery itself, with no select of the query's own
+     * (see QueryCompiler::refuse_position_in_own_select()).
      *
      * <code>
      * $parents = Author::group_by('parent_author_id')->count();
@@ -1937,14 +1948,15 @@ class Query
      * Model::count() is the legacy count, which Author::count(...) calls, unchanged: grouped, it counts the
      * rows of the first group.
      *
-     * @throws ActiveRecordException for an empty column name, or a distinct $column in a window ordered by
-     *   another column, before any statement
+     * @throws ActiveRecordException for an empty column name, a distinct $column in a window ordered by another
+     *   column, or a position in raw SQL where count() makes its select, before any statement
      */
     public function count(string $column = '*'): int
     {
         $compiler = $this->compiler();
         $compiler->refuse_empty_column_name($column, __FUNCTION__);
         $compiler->refuse_distinct_window_ordered_by_another_column($this->state, $column, __FUNCTION__);
+        $compiler->refuse_position_in_own_select($this->state, $column, __FUNCTION__);
 
         $table = $this->table();
         $sql = $compiler->compile_count($this->state, $column);
@@ -2846,8 +2858,9 @@ class Query
      *
      * @return 'integer'|'decimal'|'floating'|null
      * @throws ActiveRecordException for an empty column name, for *, which only count() takes, for a column that the
-     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column()), and for a distinct column in a
-     *   window ordered by another column (see QueryCompiler::refuse_distinct_window_ordered_by_another_column())
+     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column()), for a distinct column in a
+     *   window ordered by another column (see QueryCompiler::refuse_distinct_window_ordered_by_another_column()), and for a
+     *   position in raw SQL where the aggregate makes its select (see QueryCompiler::refuse_position_in_own_select())
      */
     private function aggregate_kind(string $method, string $column): ?string
     {
@@ -2860,6 +2873,7 @@ class Query
 
         $compiler->refuse_ungrouped_column($this->state, $column, $method);
         $compiler->refuse_distinct_window_ordered_by_another_column($this->state, $column, $method);
+        $compiler->refuse_position_in_own_select($this->state, $column, $method);
 
         return AggregateCaster::kind($compiler->model_column($column), $this->table()->connection()->exact_decimals());
     }

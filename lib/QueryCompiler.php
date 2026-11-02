@@ -227,11 +227,7 @@ final class QueryCompiler
      *   under DISTINCT too, so that a distinct aggregate of a column runs over its distinct values that are not
      *   null (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
      *   beside a HAVING. The order a window keeps there must then be by that column: the terminals refuse another
-     *   (see refuse_distinct_window_ordered_by_another_column()). But without DISTINCT, SQL written by hand in the
-     *   GROUP BY or in a kept ORDER BY keeps the empty select, as get() sends it (every column): GROUP BY 1 groups by
-     *   the first column of the rows there too, where beside 1 it grouped by the constant, and beside the aggregated
-     *   column by that column. MySQL and Postgres refuse every column beside a GROUP BY that is not the primary key,
-     *   as they refuse get() of such a query.
+     *   (see refuse_distinct_window_ordered_by_another_column()).
      *
      * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
      * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives, or the groups be the
@@ -262,14 +258,10 @@ final class QueryCompiler
             return $this->compile_select($rows);
         }
 
-        // SQL written by hand in the GROUP BY, or in the ORDER BY a window keeps, can name the select by position
-        // (GROUP BY 1, ORDER BY 2): there a select of 1, or of the aggregated column alone, would change what it names
-        $positional = self::has_raw($state->groups) || self::has_raw($rows->orders);
-
-        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !$positional) {
+        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !self::has_raw($state->groups) && !self::has_raw($rows->orders)) {
             // the state's select provably cannot matter
             $rows->selects = [['raw' => '1', 'bindings' => []]];
-        } elseif ([] === $state->selects && !($all && $state->distinct) && ($state->distinct || !$positional)) {
+        } elseif ([] === $state->selects && !($all && $state->distinct)) {
             // under DISTINCT, the distinct values of the aggregated column: SELECT DISTINCT * would keep every row apart
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }
@@ -584,6 +576,108 @@ final class QueryCompiler
                 ));
             }
         }
+    }
+
+    /**
+     * Refuses, at the call of $method (count(), an aggregate of a column, or exists()), SQL written by hand that names a
+     * column by its position (GROUP BY 1, ORDER BY 2) where the statement makes its select itself, as the maintainer ruled
+     * on 2026-11-02. A position names a column of the select; with no select of the query's own, a wrapped count() selects 1
+     * in its subquery, an aggregate the aggregated column alone (DISTINCT under distinct()) and exists() 1 (see
+     * compile_aggregate() and compile_exists()), not the columns of get(), so the position named another column, or none:
+     * group_by_raw('1')->count() counted one group (the constant's) where get() reads a row per key,
+     * group_by_raw('1')->sum('col') summed the distinct values of the column, and order_by_raw('2')->limit(2)->count() was
+     * refused by the database. The SQL read is that of group_by_raw(), and of order_by_raw() where the statement keeps the
+     * order (a window's, in a wrapped aggregate; exists() leaves every order out). A select of the query's own is kept, and
+     * with it its positions; so is SELECT DISTINCT * of a count of distinct rows, whose columns are get()'s; and an aggregate
+     * in place (neither grouped, distinct nor windowed) has no GROUP BY and leaves its order out.
+     *
+     * A position is an item of the SQL, at the top level, that is an integer and nothing else but a direction (ASC, DESC,
+     * NULLS FIRST, NULLS LAST) or WITH ROLLUP, and comments, in parentheses or after a unary + or not: 'name, 2', '1 DESC',
+     * '1 -- the key', '(1)', '+1'. An integer in an expression ('CASE WHEN a THEN 1 ELSE 0 END', 'LEFT(name, 1)'), in a
+     * string or in a comment is none, nor is a value bound to a ? marker, which is not read.
+     *
+     * @internal Serves Query; not a supported API.
+     * @param string|null $column The aggregated column, * for a count of the rows, null for exists()
+     * @param string $method The terminal, for the message of the exception
+     * @throws ActiveRecordException for SQL that names a column by its position there
+     */
+    public function refuse_position_in_own_select(QueryState $state, ?string $column, string $method): void
+    {
+        if (null !== $state->legacy || [] !== $state->selects) {
+            return;
+        }
+
+        if (null === $column) {
+            $clauses = ['group_by_raw' => $state->groups];
+        } else {
+            $windowed = null !== $state->limit || null !== $state->offset;
+
+            if ((!$windowed && !$state->distinct && [] === $state->groups && [] === $state->havings) || ('*' === $column && $state->distinct)) {
+                // aggregated in place, or as SELECT DISTINCT *
+                return;
+            }
+
+            $clauses = ['group_by_raw' => $state->groups, 'order_by_raw' => $windowed ? $state->orders : []];
+        }
+
+        foreach ($clauses as $source => $entries) {
+            foreach ($entries as $entry) {
+                if ('raw' === $entry['type'] && $this->names_a_position($entry['sql'])) {
+                    throw new ActiveRecordException(sprintf(
+                        "%s() on %s cannot send SQL '%s' of %s(), which names a column by its position: with no select of the query's own, %s() makes the select of its statement itself (1, or the aggregated column), not the columns of get(), so the position would name another column, or none. Give the query a select of its own, or name the column",
+                        $method,
+                        $this->table->class->name,
+                        $entry['sql'],
+                        $source,
+                        $method,
+                    ));
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether SQL of a GROUP BY or an ORDER BY written by hand holds an item that is a position (see
+     * refuse_position_in_own_select()): its strings and quoted identifiers are read as a word, its comments (--, a block
+     * comment, and # on MySQL and MariaDB) as a space, the text in parentheses as none, and what is left is split at its
+     * commas. An integer in parentheses is unwrapped first, (1) and +1 being positions on MySQL, MariaDB and SQLite, and
+     * (1) on Postgres too (measured).
+     *
+     * @throws ActiveRecordException for SQL that the patterns cannot read
+     */
+    private function names_a_position(string $sql): bool
+    {
+        // most SQL names no position: it holds no digit
+        if (!preg_match('/\d/', $sql)) {
+            return false;
+        }
+
+        $hash = $this->connection() instanceof MysqlAdapter ? '|#[^\n]*+' : '';
+        $flat = preg_replace_callback(
+            "/'(?:[^'\\\\]++|\\\\.)*+'|\"(?:[^\"\\\\]++|\\\\.)*+\"|`[^`]*+`|\\[[^\\]]*+\\]|--[^\n]*+$hash|\\/\\*.*?\\*\\//s",
+            fn(array $match): string => in_array($match[0][0], ["'", '"', '`', '['], true) ? ' word ' : ' ',
+            $sql,
+        );
+        // an integer in parentheses, or after a unary +, is a position too: (1), ((1)), +1
+        if (null !== $flat) {
+            do {
+                $flat = preg_replace('/\(\s*+\+?\s*+(\d++)\s*+\)/', ' $1 ', $flat, -1, $unwrapped);
+            } while (null !== $flat && $unwrapped > 0);
+        }
+
+        $flat = null === $flat ? null : preg_replace('/\((?:[^()]++|(?R))*+\)/', '()', $flat);
+
+        if (null === $flat) {
+            throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for a position: %s", $sql, preg_last_error_msg()));
+        }
+
+        foreach (explode(',', $flat) as $item) {
+            if (preg_match('/^\s*+\+?\s*+\d++(?:\s++(?:ASC|DESC))?(?:\s++NULLS\s++(?:FIRST|LAST))?(?:\s++WITH\s++ROLLUP)?\s*$/i', $item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
