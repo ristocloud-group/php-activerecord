@@ -357,7 +357,7 @@ work (§9). The engine preserves whatever #145 ships.
 |---|---|---|
 | INSERT (`save()` of a new record, `->insert()`, `Table::insert()`) | missing → now | missing → now |
 | UPDATE (`save()`, `->update()`, `update_all` with a hash `set`) | — | missing → now |
-| UPSERT | the INSERT part: missing → now | missing → now; it is also updated on conflict when the update list is not empty (today's behavior) |
+| UPSERT | the INSERT part: missing → now | missing → now; it is also updated on conflict when the update list is not empty (today's behavior). A suspended class gets no `updated_at` in the conflict clause, because assigning it there would overwrite the existing row's value with NULL |
 | raw SQL (`update_all` with a string `set`) | untouched | untouched |
 
 - A timestamp column is a column whose attribute name is `created_at` / `updated_at`. This is the single rule;
@@ -401,16 +401,49 @@ reads and writes alike. Golden tests prove it (§7).
 These were explicitly approved by the maintainer on 2026-10-21, and all go in the release notes.
 
 1. **Aliases are resolved in `count`, `exists`, `update_all` and `delete_all`** as in `find`. Those calls fail
-   today with `Unknown column`. Edge case: an alias that has the same name as a real column would now follow the
-   alias in those four methods too, as `find()` already does (verified in the plan, §10).
+   today with `Unknown column`. An alias can no longer have the same name as a real column (change 6), so the
+   mapping is never ambiguous.
 2. **Breaking:** `update_all` with a hash `set` sets `updated_at` (157 monolith calls). Opt-out:
    `Model::without_timestamps()`.
 3. INSERTs that bypass the model (`Table::insert()` called directly, `->insert()`) fill `created_at` / `updated_at`.
-   The monolith never calls `Table::insert()` directly.
+   The monolith never calls `Table::insert()` directly. `upsert` follows the same rule (§5.6), so it recognizes a
+   timestamp column by its attribute name: a table whose timestamp columns have odd names (#92: `"created at"`,
+   `UPDATED_AT`) now gets them filled by `upsert` too. A row key that respells a timestamp column (`UPDATED_AT`,
+   `` `created_at` ``) is recognized as that column: on MySQL/MariaDB the duplicated column error 1110 becomes a
+   success, and SQLite (which tolerated the duplicate) sends the column once and stores the same rows. The monolith
+   never calls `upsert`.
 4. With joins, legacy hash keys that are not model columns are no longer qualified with the model's table.
    Those calls fail today.
 5. The PHP warning before `update_all`'s "Updating requires a hash or string." disappears. The exception is
    unchanged.
+
+Approved by the maintainer on 2026-10-23 (issue #144):
+
+6. **Breaking:** an `$alias_attribute` key that names a column of the model's own table, by its real name or by its
+   attribute name (#92), or a pseudo-column of the connection (`_rowid`, `rowid`/`oid`/`_rowid_`, `ctid`/`xmin`/…,
+   which hash keys already treat like columns), is a configuration error. Loading the table throws `ConfigException`,
+   naming the model, the alias and the column. Names are compared the way the database compares column names:
+   case-insensitively, except on Postgres. Every other alias resolves in every hash condition: `find`, `count`,
+   `exists`, `update_all`, `delete_all` and relationship conditions (change 7).
+   - The mapping is static. It never depends on a schema read after the table was loaded, so a schema change at
+     runtime cannot change which rows a write touches. That is #144's requirement, and the reason the
+     "column wins" rule of #129 was dropped.
+   - Residual, documented: some shadowing columns are not seen at load. One is a column added after the table was
+     loaded (a long-running process, a stale metadata cache). Another is a SQLite generated column, which
+     `PRAGMA table_info` omits. In both cases the alias keeps winning, and the error appears at the next load with
+     fresh metadata.
+   - Monolith: on 2026-10-23, the development databases of two tenants were checked for the 22 models and
+     42 aliases. No alias names a column or a pseudo-column.
+7. **Relationship `conditions` resolve aliases (#144).** A hash in a relationship's declared `conditions` maps the
+   associated model's `$alias_attribute` keys and attribute names (#92) to real columns, in lazy and eager loads.
+   - #129's rule is kept: an alias key and its target column's key in the same hash are both kept and ANDed.
+   - Those keys fail today with `Unknown column`. Every other declared condition renders byte-identical SQL.
+   - One exception, as in finders with joins: in a `has_many … through`, an unqualified key that names a column of
+     the middle table and is also an alias or attribute name of the target now names the target's column. In a
+     `through` load every key the mapping changed is written with the target table (`` `venues`.`name` ``), so it is
+     never ambiguous with a middle-table column. Keys of the middle table should be written qualified
+     (`'events.title'`). Monolith, checked 2026-10-23: of 126 declared
+     relationship conditions, 1 is a hash (on one model), and it maps to itself.
 
 ### 6.3 Unchanged on purpose
 
@@ -493,8 +526,12 @@ Add them to the GitHub draft release when the code merges, never before (the cha
   `Model::without_timestamps()`, `MultipleRecordsFound`.
 - **Breaking:** `update_all` with a hash `set` sets `updated_at`. INSERTs that bypass the model fill the
   timestamps.
-- Fixes: aliases in `count` / `exists` / `update_all` / `delete_all`. Legacy hash keys with joins are no longer
-  wrongly qualified.
+- Fixes: aliases in `count` / `exists` / `update_all` / `delete_all` and in relationship `conditions` (#144).
+  Legacy hash keys with joins are no longer wrongly qualified.
+- **Breaking:** an `$alias_attribute` key named like a column of its own table throws `ConfigException` when the
+  table loads (#144).
+- On MySQL/MariaDB, `update_all()` with a hash `set` returns the matched rows even when no other value changes,
+  because `updated_at` changes too.
 - **Dates** (the maintainer asked for this item explicitly): the builder binds a DateTime in the format of its
   column's type, which fixes DATE comparisons on SQLite. Legacy positional binds are unchanged.
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
@@ -533,7 +570,7 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 These are concrete checks to run during planning, not open design questions:
 
 - **Alias edge case:** for the 22 monolith models with `$alias_attribute`, confirm that no alias shadows a real
-  column (§6.2.1).
+  column (§6.2.1). Done 2026-10-23 on the development databases of two tenants: none (§6.2.6).
 - **`raw_type` strings:** record the exact `raw_type` each adapter reports for float/double/real/decimal/numeric
   (§5.4).
 - **Golden corpus:** define the list and the timestamp masking on master (§7.1).

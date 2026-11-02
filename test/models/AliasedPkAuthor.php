@@ -1,8 +1,8 @@
 <?php
 
 /**
- * An author whose alias is named like its primary key column (a consumer's model can have one):
- * the pk of a finder is the column's own name, never read through that alias.
+ * An author whose alias is named like its primary key column (a consumer's model could have one): a
+ * configuration error, so its table does not load (#144, spec §6.2.6).
  */
 class AliasedPkAuthor extends ActiveRecord\Model
 {

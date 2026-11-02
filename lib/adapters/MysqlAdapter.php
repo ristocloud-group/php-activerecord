@@ -43,7 +43,7 @@ class MysqlAdapter extends Connection
     /**
      * InnoDB's _rowid: another name of a table's single integer primary key column.
      *
-     * @internal Serves QueryCompiler; not a supported API.
+     * @internal Serves QueryCompiler and Table; not a supported API.
      * @return list<string>
      */
     public function pseudo_columns(): array

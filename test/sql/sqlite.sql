@@ -186,3 +186,11 @@ CREATE TABLE odd_columns (
   `dash-name` VARCHAR(20),
   `some day` DATE
 );
+
+-- timestamp columns that differ from their attribute names (#92): "created at" is created_at, UPDATED_AT is updated_at (by case only, so mapped on Postgres only)
+CREATE TABLE odd_timestamps (
+  id INTEGER NOT NULL PRIMARY KEY,
+  name VARCHAR(20),
+  `created at` DATETIME,
+  `UPDATED_AT` DATETIME
+);

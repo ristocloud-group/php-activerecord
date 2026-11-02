@@ -11,6 +11,7 @@ require __DIR__ . '/lib/Table.php';
 require __DIR__ . '/lib/QueryState.php';
 require __DIR__ . '/lib/QueryCompiler.php';
 require __DIR__ . '/lib/Query.php';
+require __DIR__ . '/lib/Timestamps.php';
 require __DIR__ . '/lib/ConnectionManager.php';
 require __DIR__ . '/lib/Connection.php';
 require __DIR__ . '/lib/SQLBuilder.php';

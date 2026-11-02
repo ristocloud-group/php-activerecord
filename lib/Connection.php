@@ -775,8 +775,9 @@ abstract class Connection
      * For an adapter without LIMIT/ORDER BY on UPDATE and DELETE (see
      * accepts_limit_and_order_for_update_and_delete()): a WHERE condition that keeps the
      * statement to the first $limit rows in $order, which replaces the statement's own
-     * WHERE. Null by default: the statement is built without the limit and the order, as
-     * it always has been (#92).
+     * WHERE. Null by default: SQLBuilder then refuses the limited statement (an
+     * ActiveRecordException), which it could only build without the limit, writing every
+     * row it matches. An order without a limit is left out, as it always has been (#92).
      *
      * @internal Serves SQLBuilder; not a supported API.
      * @param string $table The table as the statement names it (already quoted)
@@ -802,10 +803,44 @@ abstract class Connection
     }
 
     /**
-     * Columns every table has that schema introspection never lists; with joins a hash key
-     * naming one is qualified like a model column (spec §6.1). None by default.
+     * The name of a column as the database compares column names: in lower case where they are not
+     * case-sensitive (see column_names_are_case_sensitive()), else as it is. The column a query names
+     * is the one whose key equals the key of the reference (see column_reference_key()).
      *
-     * @internal Serves QueryCompiler; not a supported API.
+     * @internal Serves SQLBuilder, Timestamps and Table; not a supported API.
+     */
+    public function column_name_key(string $name): string
+    {
+        return $this->column_names_are_case_sensitive() ? $name : strtolower($name);
+    }
+
+    /**
+     * The key, as column_name_key() gives one, of the column a query names with $reference (a hash
+     * key, a data key), read as the database reads it: a single pre-quoted identifier by its text
+     * (`a``b` is the identifier a`b), anything else as written. A name of several parts is kept
+     * whole, so it is the key of no column.
+     *
+     * @internal Serves SQLBuilder, Timestamps and Table; not a supported API.
+     */
+    public function column_reference_key(string $reference): string
+    {
+        $q = static::$QUOTE_CHARACTER;
+        $parts = str_contains($reference, $q) ? self::split_name_parts($reference, $q) : null;
+
+        // `a``b` is the identifier a`b
+        if (null !== $parts && 1 === count($parts) && $parts[0][1]) {
+            $reference = str_replace($q . $q, $q, substr($parts[0][0], 1, -1));
+        }
+
+        return $this->column_name_key($reference);
+    }
+
+    /**
+     * Columns every table has that schema introspection never lists; with joins a hash key
+     * naming one is qualified like a model column (spec §6.1), and an $alias_attribute key may
+     * not be named like one (spec §6.2.6). None by default.
+     *
+     * @internal Serves QueryCompiler and Table; not a supported API.
      * @return list<string>
      */
     public function pseudo_columns(): array

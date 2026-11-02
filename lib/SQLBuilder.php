@@ -52,13 +52,12 @@ class SQLBuilder
 
     /**
      * With joins, the only hash keys that get the table: the model's columns and pseudo-columns,
-     * by name (in lower case where the database matches column names regardless of case). Null:
+     * by the key the database compares their names by (see Connection::column_name_key()). Null:
      * every unqualified key gets it. See qualify_hash_keys().
      *
      * @var array<string, true>|null
      */
     private ?array $model_columns = null;
-    private bool $fold_column_names = false;
 
     // for insert/update
     /** @var array<string, mixed>|null */
@@ -70,11 +69,12 @@ class SQLBuilder
     /** The column an INSERT returns (RETURNING), if any (#47). */
     private ?string $returning = null;
 
-    // for upsert
+    // for a multi-row insert, and for an upsert, which is one
     /** @var list<string>|null */
-    private ?array $upsert_columns = null;
-    private ?int $upsert_row_count = null;
+    private ?array $rows_columns = null;
+    private ?int $rows_count = null;
 
+    // for upsert
     /** @var list<string>|null */
     private ?array $upsert_unique_by = null;
 
@@ -176,7 +176,7 @@ class SQLBuilder
      * WHERE from several conditions hashes, ANDed in order: like where($hash) for each,
      * without one hash overwriting a key of another.
      *
-     * @internal Serves Table, for hashes whose keys name the same column; not a supported API.
+     * @internal Serves QueryCompiler, for hashes whose keys name the same column; not a supported API.
      * @param list<array<string, mixed>> $hashes
      */
     public function where_hashes(array $hashes): static
@@ -201,7 +201,7 @@ class SQLBuilder
      * UPDATE/DELETE by these columns in a subquery; without any it uses the adapter's own
      * row identity (#92). Other adapters do not use them.
      *
-     * @internal Serves Model::update_all() and Model::delete_all(); not a supported API.
+     * @internal Serves the UPDATE and DELETE of QueryCompiler; not a supported API.
      * @param list<string> $columns
      */
     public function key_columns(array $columns): static
@@ -280,10 +280,10 @@ class SQLBuilder
      * $columns, the model's own (its pseudo-columns included): any other key is a column of a
      * joined table, and stays as written. Without this call every unqualified key is prefixed (#35).
      *
-     * A key names a column the way the database matches it: regardless of case where
-     * Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB and SQLite match
-     * 'author_id' to Author_Id), and a single pre-quoted identifier by its text. Like joins(),
-     * this is read when where() applies a hash, so it comes first.
+     * A key names a column the way the database matches it (see Connection::column_reference_key()):
+     * regardless of case where Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB
+     * and SQLite match 'author_id' to Author_Id), and a single pre-quoted identifier by its text.
+     * Like joins(), this is read when where() applies a hash, so it comes first.
      *
      * @internal Serves QueryCompiler; not a supported API.
      * @param list<string> $columns the real names of the model's columns, and the connection's
@@ -291,9 +291,7 @@ class SQLBuilder
      */
     public function qualify_hash_keys(array $columns): static
     {
-        $set = array_fill_keys($columns, true);
-        $this->fold_column_names = !$this->connection->column_names_are_case_sensitive();
-        $this->model_columns = $this->fold_column_names ? array_change_key_case($set) : $set;
+        $this->model_columns = array_fill_keys(array_map($this->connection->column_name_key(...), $columns), true);
 
         return $this;
     }
@@ -323,12 +321,31 @@ class SQLBuilder
     /**
      * End the INSERT with RETURNING $column, the column's real name (#47).
      *
-     * @internal Serves Table::insert_returning_pk(); not a supported API.
+     * @internal Serves Table::insert_returning_pk(), through the Query engine; not a supported API.
      * @return $this
      */
     public function returning(string $column): static
     {
         $this->returning = $column;
+        return $this;
+    }
+
+    /**
+     * A multi-row INSERT: $row_count rows of one bind marker per column, as in
+     * "INSERT INTO t (c1, c2) VALUES (?, ?), (?, ?)". The statement holds no values: the caller
+     * binds them, row after row, each in the order of $columns. (insert() renders the INSERT of
+     * one row from a hash, which is another statement.)
+     *
+     * @internal Serves the Query engine; not a supported API.
+     * @param list<string> $columns The real names of the columns, unquoted
+     * @param int $row_count How many rows the statement inserts: at least one
+     */
+    public function insert_rows(array $columns, int $row_count): static
+    {
+        $this->operation = 'INSERT_ROWS';
+        $this->rows_columns = $columns;
+        $this->rows_count = $row_count;
+
         return $this;
     }
 
@@ -341,8 +358,8 @@ class SQLBuilder
     public function upsert(array $columns, int $row_count, array $unique_by, array $update)
     {
         $this->operation = 'UPSERT';
-        $this->upsert_columns = $columns;
-        $this->upsert_row_count = $row_count;
+        $this->rows_columns = $columns;
+        $this->rows_count = $row_count;
         $this->upsert_unique_by = $unique_by;
         $this->upsert_update = $update;
 
@@ -651,19 +668,7 @@ class SQLBuilder
      */
     private function names_model_column(string $key): bool
     {
-        if (null === $this->model_columns) {
-            return true;
-        }
-
-        $q = $this->connection::$QUOTE_CHARACTER;
-        $parts = str_contains($key, $q) ? Connection::split_name_parts($key, $q) : null;
-
-        // `a``b` is the identifier a`b
-        if (null !== $parts && 1 === count($parts) && $parts[0][1]) {
-            $key = str_replace($q . $q, $q, substr($parts[0][0], 1, -1));
-        }
-
-        return isset($this->model_columns[$this->fold_column_names ? strtolower($key) : $key]);
+        return null === $this->model_columns || isset($this->model_columns[$this->connection->column_reference_key($key)]);
     }
 
     /**
@@ -768,19 +773,39 @@ class SQLBuilder
         return $e->to_s();
     }
 
+    private function build_insert_rows(): string
+    {
+        if (null === $this->rows_columns || null === $this->rows_count) {
+            throw new ActiveRecordException('SQLBuilder: insert_rows() must be called before building an INSERT statement');
+        }
+
+        return $this->rows_insert($this->rows_columns, $this->rows_count);
+    }
+
+    /**
+     * The INSERT of a statement of several rows: all that insert_rows() renders, and what an
+     * upsert goes on from, with its conflict clause.
+     *
+     * @param list<string> $columns
+     */
+    private function rows_insert(array $columns, int $row_count): string
+    {
+        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $columns));
+
+        $one_row = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $rows = implode(', ', array_fill(0, $row_count, $one_row));
+
+        return "INSERT INTO $this->table ($keys) VALUES $rows";
+    }
+
     private function build_upsert(): string
     {
-        if (null === $this->upsert_columns || null === $this->upsert_row_count
+        if (null === $this->rows_columns || null === $this->rows_count
             || null === $this->upsert_unique_by || null === $this->upsert_update) {
             throw new ActiveRecordException('SQLBuilder: upsert() must be called before building an UPSERT statement');
         }
 
-        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $this->upsert_columns));
-
-        $one_row = '(' . implode(', ', array_fill(0, count($this->upsert_columns), '?')) . ')';
-        $rows = implode(', ', array_fill(0, $this->upsert_row_count, $one_row));
-
-        $sql = "INSERT INTO $this->table ($keys) VALUES $rows";
+        $sql = $this->rows_insert($this->rows_columns, $this->rows_count);
 
         if (!empty($this->upsert_update)) {
             $sql .= ' ' . $this->connection->upsert_conflict_clause($this->upsert_unique_by, $this->upsert_update);
@@ -856,7 +881,11 @@ class SQLBuilder
      * Where the adapter has no LIMIT/ORDER BY on UPDATE and DELETE, the WHERE of a limited
      * one: the adapter's condition picking the rows, with the statement's own WHERE inside
      * it, so the bind values keep their order (#92). Null when there is no limit (an order
-     * alone is left out, as before) or the adapter offers no such condition.
+     * alone is left out, as before: it cannot widen the statement).
+     *
+     * @throws ActiveRecordException for a limit the adapter can apply neither way, with no
+     *   LIMIT on UPDATE and DELETE and no such condition: without it the statement would write
+     *   every row it matches
      */
     private function limited_rows_condition(): ?string
     {
@@ -870,7 +899,10 @@ class SQLBuilder
             $this->order ?: null,
             $this->limit,
             array_map($this->connection->quote_name(...), $this->key_columns),
-        );
+        ) ?? throw new ActiveRecordException(sprintf(
+            '%s cannot apply the limit of an UPDATE or a DELETE: it has no LIMIT on them and no limited_rows_condition(), and the statement would write every row it matches without it, so it is not built',
+            $this->connection::class,
+        ));
     }
 
     /**

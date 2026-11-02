@@ -614,6 +614,20 @@ abstract class AbstractRelationship implements InterfaceRelationship
      * list becomes `col IN(?, ...)`, and a null value becomes `col IS NULL`.
      * A positional/fragment condition is returned unchanged.
      *
+     * The keys of a hash are read as the associated model's finders read them
+     * (#144, spec §6.2.7), the associated model being the one the load finds
+     * (for a `through`, the target): its $alias_attribute keys and its
+     * attribute names name their columns (#92), through
+     * {@see Table::map_names()}. An alias next to the column it stands for
+     * keeps both conditions (#129): each hash map_names() returns is rendered
+     * alike, and they are ANDed with their binds in order. Any other key, a
+     * qualified one included, renders as it always did.
+     *
+     * A `through` load joins the middle table, which may have a column of the
+     * same name: there a key that map_names() changed is named with the
+     * target's table, as finders with joins name a model column (see
+     * qualify_changed_names()). A key it left as declared is not.
+     *
      * @param array<int|string, mixed> $conditions
      * @return array<int|string, mixed>
      */
@@ -621,11 +635,69 @@ abstract class AbstractRelationship implements InterfaceRelationship
     {
         if (is_hash($conditions)) {
             require_once 'Expressions.php';
-            $expressions = new Expressions($conn, $conditions);
-            return array_merge([$expressions->to_s()], array_flatten($expressions->values()));
+            /** @var class-string<Model> $class */
+            $class = $this->class_name;
+            $aliases = $class::$alias_attribute;
+            $keys = array_keys($conditions);
+            $hashes = $this->get_table()->map_names($conditions, $aliases);
+            $fragments = $values = [];
+
+            if (!empty($this->options['through'])) {
+                $hashes = $this->qualify_changed_names($conn, $keys, $hashes);
+            }
+
+            foreach ($hashes as $hash) {
+                $expressions = new Expressions($conn, $hash);
+                $fragments[] = $expressions->to_s();
+                $values[] = $expressions->values();
+            }
+
+            return array_merge([implode(' AND ', $fragments)], array_flatten($values));
         }
 
         return $conditions;
+    }
+
+    /**
+     * The hashes map_names() made of the declared keys $keys, with each name it
+     * changed named with the target's table, as the statement names that table
+     * (`venues`.`city`). map_names() keeps every condition, in order, so the
+     * n-th name of the hashes stands for the n-th declared key. A name that
+     * comes to equal another of its hash starts a new hash, as in map_names():
+     * every condition is kept.
+     *
+     * @param list<int|string> $keys
+     * @param list<array<int|string, mixed>> $hashes
+     * @return list<array<int|string, mixed>>
+     */
+    private function qualify_changed_names(Connection $conn, array $keys, array $hashes): array
+    {
+        $table = $this->get_table()->get_fully_qualified_table_name();
+        $qualified = [];
+        $i = 0;
+
+        foreach ($hashes as $hash) {
+            $ret = [];
+
+            foreach ($hash as $name => $value) {
+                if (is_string($name) && $name !== $keys[$i]) {
+                    $name = $table . '.' . $conn->quote_name($name);
+                }
+
+                ++$i;
+
+                if (array_key_exists($name, $ret)) {
+                    $qualified[] = $ret;
+                    $ret = [];
+                }
+
+                $ret[$name] = $value;
+            }
+
+            $qualified[] = $ret;
+        }
+
+        return $qualified;
     }
 
     /**

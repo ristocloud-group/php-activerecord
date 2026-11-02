@@ -60,9 +60,10 @@ class PgsqlAdapterTest extends AdapterTest
 
     public function test_limited_update_all_and_delete_all_pick_the_rows_by_primary_key()
     {
+        // the 'set' hash also sets updated_at (spec §6.2.2)
         Author::update_all(['set' => ['name' => 'X'], 'conditions' => ['parent_author_id = ?', 2], 'order' => 'name asc', 'limit' => 1]);
         $this->assert_equals(
-            'UPDATE "authors" SET "name"=? WHERE "author_id" IN (SELECT "author_id" FROM "authors" WHERE parent_author_id = ? ORDER BY name asc LIMIT 1)',
+            'UPDATE "authors" SET "name"=?, "updated_at"=? WHERE "author_id" IN (SELECT "author_id" FROM "authors" WHERE parent_author_id = ? ORDER BY name asc LIMIT 1)',
             Author::table()->last_sql
         );
 

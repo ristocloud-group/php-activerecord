@@ -193,15 +193,31 @@ class Model
      *
      * <code>
      * class Person extends ActiveRecord\Model {
-     *   static $alias_attribute = array(
+     *   static $alias_attribute = [
      *     'alias_first_name' => 'first_name',
-     *     'alias_last_name' => 'last_name');
+     *     'alias_last_name' => 'last_name',
+     *   ];
      * }
      *
      * $person = Person::first();
      * $person->alias_first_name = 'Tito';
      * echo $person->alias_first_name;
      * </code>
+     *
+     * An alias names its column in a hash of conditions too: find(), count(), exists(),
+     * update_all() and delete_all() read `['alias_first_name' => 'Tito']` alike, and so does the
+     * declared `conditions` hash of a relationship whose associated model this is (the target of a
+     * has_many through), in the lazy load and the eager include.
+     *
+     * An alias may not have the name of a column of the model's own table, by the column's real
+     * name or by its attribute name (`space_name` for the column `space name`), nor the name of a
+     * column every table has without listing it (`rowid` on SQLite, `ctid` on Postgres): the table
+     * does not load, and the first use of the model throws a ConfigException naming the model, the
+     * alias and the column (#144). Names are compared as the database compares column names:
+     * regardless of case, except on Postgres. The check reads the columns as the table loads. A
+     * shadowing column it does not see, one added to the table afterwards (a long-running process,
+     * a stale metadata cache) or, on SQLite, a generated column (PRAGMA table_info omits it),
+     * leaves the alias winning in every condition; the next load with fresh metadata throws.
      *
      * @var array<string, string>
      */
@@ -913,10 +929,16 @@ class Model
      * Bulk insert-or-update. Faithful to Laravel Eloquent's upsert: a single
      * atomic operation that bypasses validations, callbacks and dirty-tracking.
      *
+     * Every row gets the created_at and updated_at it lacks, set to the current time (one time for
+     * the whole call), and updated_at is overwritten on a conflict too, unless $update is empty;
+     * the default list never overwrites created_at. {@link without_timestamps()} suspends that for
+     * this class: its rows go as given, and updated_at is not added to the columns a conflict
+     * overwrites.
+     *
      * @param array<array<string,mixed>> $values Rows to insert/update (identical keys)
      * @param array<string>|string $unique_by Column(s) identifying a record
      * @param array<string>|null $update Columns to overwrite on conflict; null = all
-     *   inserted columns; [] = plain insert (error on duplicates)
+     *   inserted columns but created_at; [] = plain insert (error on duplicates)
      * @return int Affected row count (summed across chunks)
      */
     public static function upsert(array $values, array|string $unique_by, ?array $update = null): int
@@ -973,6 +995,8 @@ class Model
         $read_back = false;
         $returned_pk = null;
 
+        // a save() sends the timestamps its model set (set_timestamps(), which a model can override):
+        // unlike Table::insert(), insert_for_save() and insert_returning_pk() add none of their own
         if ($table->reads_back_pk() && !isset($attributes[$pk])) {
             // the database fills the pk (a sequence, an IDENTITY, a uuid default…): the
             // INSERT omits it and returns the stored value (#47, #153)
@@ -985,10 +1009,10 @@ class Model
                 unset($attributes[$pk]);
             }
 
-            $table->insert($attributes, $pk, $table->sequence);
+            $table->insert_for_save($attributes, $pk, $table->sequence);
             $use_sequence = true;
         } else {
-            $table->insert($attributes);
+            $table->insert_for_save($attributes);
         }
 
         // the row is stored under the pk values this INSERT sent or reads back below; one
@@ -1104,7 +1128,8 @@ class Model
      * An options array takes the following parameters:
      *
      * <ul>
-     * <li><b>conditions:</b> Conditions using a string/hash/array</li>
+     * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
+     * $alias_attribute, as find() reads them</li>
      * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1121,35 +1146,9 @@ class Model
     public static function delete_all($options = [])
     {
         $options = self::bulk_write_options($options, 'delete_all');
-        $table = static::table();
-        $conn = static::connection();
-        $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        $conditions = $options['conditions'] ?? null;
-
-        if (is_array($conditions) && !is_hash($conditions)) {
-            call_user_func_array([$sql, 'delete'], $conditions);
-        } elseif (is_hash($conditions)) {
-            // the keys name the columns (#92); two keys naming one column both stay conditions
-            $sql->delete()->where_hashes($table->condition_hashes($conditions));
-        } else {
-            $sql->delete($conditions);
-        }
-
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
-        }
-
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
-        }
-
-        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
-        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
-
-        $values = $table->format_date_bind_values($sql->bind_values());
-        $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
-        return $ret->rowCount();
+        // on the connection it always took, the hook a subclass can override
+        return self::bulk_write_query($options)->execute_delete(connection: static::connection())->rowCount();
     }
 
     /**
@@ -1169,11 +1168,17 @@ class Model
      * YourModel::update_all(['set' => 'name = "Bob"']);
      * </code>
      *
+     * A 'set' hash also sets updated_at to the current time when the table has that column and the
+     * hash gives it no value (a key gives it one by the column's name or attribute name, pre-quoted
+     * or qualified with the model's table too); without_timestamps() suspends that. A 'set' string
+     * is sent as it is written, and sets nothing more.
+     *
      * An options array takes the following parameters:
      *
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with</li>
-     * <li><b>conditions:</b> Conditions using a string/hash/array</li>
+     * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
+     * $alias_attribute, as find() reads them</li>
      * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1183,49 +1188,48 @@ class Model
      *
      * @param array<string, mixed> $options
      * @return int Number of rows affected
-     * @throws ActiveRecordException before any SQL: when $options is not an array or has no
-     *   'set' ("Updating requires a hash or string."), is a positional list ("Invalid options
-     *   for update_all(): pass positional conditions as ['conditions' => [...]]"), or has a key
-     *   beside 'set' that is not an option, such as a column name ("Unknown key(s): ...")
+     * @throws ActiveRecordException before any SQL: when $options is not an array, has no 'set',
+     *   or its 'set' is neither a non-empty hash nor a string ("Updating requires a hash or
+     *   string."), is a positional list ("Invalid options for update_all(): pass positional
+     *   conditions as ['conditions' => [...]]"), or has a key beside 'set' that is not an option,
+     *   such as a column name ("Unknown key(s): ...")
      */
     public static function update_all($options = [])
     {
         $options = self::bulk_write_options($options, 'update_all');
-        $table = static::table();
-        $conn = static::connection();
-        $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
-
-        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138);
-        // the keys name the columns (#92)
         $set = $options['set'];
-        $sql->update(is_array($set) ? $table->format_date_bind_values($table->real_column_keys($set)) : $set);
 
-        if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
-            if (is_array($conditions) && !is_hash($conditions)) {
-                call_user_func_array([$sql, 'where'], $conditions);
-            } elseif (is_hash($conditions)) {
-                // the keys name the columns (#92); two keys naming one column both stay conditions
-                $sql->where_hashes($table->condition_hashes($conditions));
-            } else {
-                $sql->where($conditions);
-            }
+        // bulk_write_options() refuses a missing set, and the engine an empty one; a value that is
+        // neither a hash nor a string is refused here, before any SQL, as it always was
+        if (!is_array($set) && !is_string($set)) {
+            throw new ActiveRecordException('Updating requires a hash or string.');
         }
 
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
+        // on the connection it always took, the hook a subclass can override
+        return self::bulk_write_query($options)->execute_update($set, connection: static::connection())->rowCount();
+    }
+
+    /**
+     * The query a bulk write runs: the conditions, order and limit of its options (as
+     * bulk_write_options() returns them), the only ones update_all() and delete_all() ever read,
+     * so the other finder options stay ignored.
+     *
+     * Conditions that are no array are the one argument of a condition, as they always were: a
+     * string, an object that renders one, or a scalar, a falsy one rendering no WHERE; null is none.
+     *
+     * @param array<string, mixed> $options
+     * @return Query<Model>
+     */
+    private static function bulk_write_query(array $options): Query
+    {
+        $clauses = array_intersect_key($options, ['order' => true, 'limit' => true]);
+        $conditions = $options['conditions'] ?? null;
+
+        if (null !== $conditions) {
+            $clauses['conditions'] = is_array($conditions) ? $conditions : [$conditions];
         }
 
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
-        }
-
-        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
-        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
-
-        $values = $table->format_date_bind_values($sql->bind_values());
-        $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
-        return $ret->rowCount();
-
+        return Query::from_options(static::table(), $clauses);
     }
 
     /**
@@ -1526,13 +1530,18 @@ class Model
     }
 
     /**
-     * Updates a model's timestamps.
+     * Updates a model's timestamps: updated_at on every save, created_at on the first one.
+     * Does nothing while the timestamps of the model's class are suspended, see {@link without_timestamps()}.
      *
      * @return void
      */
     public function set_timestamps()
     {
-        $now = date('Y-m-d H:i:s');
+        if (Timestamps::suspended(static::class)) {
+            return;
+        }
+
+        $now = Timestamps::now();
 
         // isset() also sees a delegate of the same name (#54): only the model's own timestamps are set
         if (isset($this->updated_at) && $this->resolves_locally('updated_at')) {
@@ -1542,6 +1551,31 @@ class Model
         if (isset($this->created_at) && $this->resolves_locally('created_at') && $this->is_new_record()) {
             $this->created_at = $now;
         }
+    }
+
+    /**
+     * Runs $fn without this model class's timestamps, and returns what $fn returns: while it runs,
+     * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at,
+     * a row that Table::insert() writes straight to this class's table gets neither,
+     * update_all() with a hash 'set' does not set updated_at, and upsert() gives its rows neither
+     * and does not add updated_at to the columns a conflict overwrites. A timestamp the caller
+     * writes is still written.
+     *
+     * <code>
+     * $author = Author::without_timestamps(fn() => Author::create(['name' => 'Tito']));
+     * </code>
+     *
+     * Calls nest: the class stays suspended until the outermost one returns. The suspension ends
+     * when $fn does, also when it throws. It is for this class only: not for another model of the
+     * same table, nor for a subclass or a parent class.
+     *
+     * @template TResult
+     * @param callable(): TResult $fn
+     * @return TResult What $fn returns
+     */
+    public static function without_timestamps(callable $fn): mixed
+    {
+        return Timestamps::suspend(static::class, $fn);
     }
 
     /**
@@ -2112,7 +2146,9 @@ class Model
         // argument alone is the pk then
         if ([] !== array_filter($args, fn($arg) => is_hash($arg))) {
             $options['conditions'] = static::pk_conditions($args[0]);
-            $options['mapped_names'] = []; // the pk names its column, even where an alias is named like it
+            // the pk names its column, even where an alias is named like it: a model that declares one does
+            // not load, but a shadow the load did not see must not move the pk (spec §6.2.6)
+            $options['mapped_names'] = [];
 
             return $options;
         }
@@ -2125,10 +2161,13 @@ class Model
      * "<pk> AND (<conditions>)", the latter parenthesized so that an OR of theirs cannot
      * widen the pk (#149). Both are rendered as options_to_sql() renders them (a hash's
      * names mapped to columns, by $mapped_names in the own conditions and by no alias in the
-     * pk, which names its column even where an alias is named like it; keys qualified with
-     * the table when joining; list values expanded) and passed on as positional conditions.
-     * Without own conditions, or with ones rendering no WHERE, $pk become the conditions, as
-     * they always did, and the returned options map no alias in them.
+     * pk; keys qualified with the table when joining; list values expanded) and passed on as
+     * positional conditions. Without own conditions, or with ones rendering no WHERE, $pk become
+     * the conditions, as they always did, and the returned options map no alias in them.
+     *
+     * The pk names its column even where an alias is named like it. A model that declares one
+     * does not load (spec §6.2.6), but a shadow the load did not see (a column the table gained
+     * since, a SQLite generated column) can exist: this is the defense in depth.
      *
      * @param array<string, mixed> $pk
      * @param array<string, mixed> $options

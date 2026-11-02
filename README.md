@@ -240,7 +240,7 @@ column name, always quoted as identifiers and never spliced in as SQL. A key may
 with `joins`), and a partly quoted name is quoted part by part (`` '`books`.name' `` → `` `books`.`name` ``); with
 `joins` an unqualified key that names a column of the model gets the model's table, and any other one (a column of a
 joined table) stays as written. Keys that name the same column (`'id'`, `` '`id`' ``, `'books.id'`,
-and in `find` / `all` / `first` / `last` an `$alias_attribute` name and its column) are all kept and ANDed. An
+and an `$alias_attribute` name and the column it stands for) are all kept and ANDed. An
 attribute name whose column is named differently is mapped to that column, also for `update_all` / `delete_all` (and
 for the keys of an `update_all` `set` hash and of `upsert`): `'space_name'` → `space name`, `'dash_name'` →
 `dash-name`, and on Postgres, whose quoted names are case-sensitive, a mixed-case `'some_date'` → `some_Date` (MySQL
@@ -249,6 +249,27 @@ and SQLite match it as is); space and hyphen differences are mapped on every ada
 ANDed, whereas in a `set` hash or an `upsert` row the later key wins. An
 expression such as `'LOWER(name)' => 'tito'` is one (unknown) column name, not a function call, so the database rejects
 it: write expressions as a positional condition instead, `['conditions' => ['LOWER(name) = ?', 'tito']]`.
+
+An `$alias_attribute` name stands for its column in the conditions hash of `find` / `all` / `first` / `last`, `count`,
+`exists`, `update_all` and `delete_all` alike, and in a relationship's declared `conditions` hash: with
+`'marquee' => 'name'`, `['marquee' => 'Warner Theatre']` reads as `name = 'Warner Theatre'`. A relationship's hash reads
+the names of its associated model, the one its load finds (the target of a `has_many … through`): its aliases and its
+attribute names (`'space_name'` for the column `space name`), in the lazy load and the eager `include` alike. An alias
+next to its column's own name keeps both conditions, ANDed, and any other key, a qualified one included, is written as
+before. In a `through`, which joins the middle table, a key the mapping changes (an alias, or an attribute name whose
+column is named differently) is named with the target's table, `` `venues`.`city` ``, so it stays unambiguous when the
+middle table has a column of the same name. Still write a key of the middle table qualified (`'events.title'`):
+unqualified, a name that is also an alias or an attribute name of the target names the target's column. So that a name
+is never ambiguous, an alias may not be named like a column of the model's
+own table, by the column's real name or by its attribute name (`'space_name'` for the column `space name`), nor like a
+column every table has without listing it (`_rowid` on MySQL and MariaDB; `rowid`, `oid` and `_rowid_` on SQLite;
+`ctid`, `xmin`, `xmax`, `cmin`, `cmax` and `tableoid` on Postgres): such a model does not load, and its first use
+throws `ActiveRecord\ConfigException`, naming the model, the alias and the column. Names are compared as the
+database compares column names, regardless of case, except on Postgres
+(`'Author_Id'` is the column `author_id` on MySQL, MariaDB and SQLite, not on Postgres). The check reads the columns as
+the table loads, so a shadowing column it does not see (one added to the table afterwards, in a long-running process or
+behind a stale schema cache, or on SQLite a generated column, which `PRAGMA table_info` omits) leaves the alias winning
+in every condition; the next load with fresh metadata throws.
 
 The identifiers-only guarantee relies on doubling the quote character, so it assumes a connection charset in which
 that byte cannot belong to a multibyte character: `utf8mb4` / `utf8` (the default) or a single-byte charset. Legacy
