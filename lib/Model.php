@@ -2378,23 +2378,32 @@ class Model
      * Get a count of qualifying records.
      *
      * <code>
-     * YourModel::count(array('conditions' => 'amount > 3.14159265'));
+     * YourModel::count(['conditions' => 'amount > 3.14159265']);
+     * YourModel::count(['group' => 'customer_id']); // the number of customers
      * </code>
+     *
+     * It takes the arguments find() takes and builds its query from them as find() does, then counts the rows of
+     * that query with the builder's Query::count(), the one count of the library: the rows of the result. So a
+     * 'group' (and 'having') counts the groups, a 'limit' and an 'offset' the rows of their window, and a 'select'
+     * is honoured as the builder honours a select of its own: a count neither grouped nor windowed counts the rows
+     * in place (SELECT COUNT(*) in place of the select, without the order), and any other keeps the select in its
+     * subquery, SELECT COUNT(*) FROM (…) AS t (see Query::count()). The statement runs on the Table's connection, as
+     * find() and exists() run theirs, and is left in Table::$last_sql.
      *
      * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
      * strings and comments is refused.
      *
      * @see find
-     * @return int|string Number of records that matched the query; 0 when the count query
-     *   returns no row (e.g. 'limit' => 0, or an 'offset' past its single row) (#34)
-     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
+     * @return int Number of records that matched the query
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see
+     *   find()), or, with no 'select', a 'group' or a windowed 'order' that names a column by its position (see
+     *   Query::count())
      */
     public static function count(/* ... */)
     {
         $options = self::finder_conditions_from_args(func_get_args());
-        $options['select'] = 'COUNT(*)';
 
-        return Query::from_options(static::table(), $options)->legacy_count(static::connection());
+        return Query::from_options(static::table(), $options)->count();
     }
 
     /**

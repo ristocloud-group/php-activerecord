@@ -40,7 +40,7 @@ class Query
      *   calls them and they keep their legacy meaning, so they are reached through new_query() or a
      *   chain. PHP refuses a static call of an instance method of Model such as readonly() with its own
      *   Error, before __callStatic() sees it;
-     * - the internals of the legacy entries (from_options, to_sql_builder, state, execute_*, legacy_*).
+     * - the internals of the legacy entries (from_options, to_sql_builder, state, execute_*).
      *
      * @var list<string>
      */
@@ -1945,8 +1945,9 @@ class Query
      * $parents = Author::group_by('parent_author_id')->count();
      * </code>
      *
-     * Model::count() is the legacy count, which Author::count(...) calls, unchanged: grouped, it counts the
-     * rows of the first group.
+     * Model::count(), which Author::count(...) calls, runs this count() on the query of its legacy options, by the
+     * same rule: their select, group, having, order, limit and offset are read as those of the builder written by hand
+     * (select_raw(), group_by_raw(), ...).
      *
      * @throws ActiveRecordException for an empty column name, a distinct $column in a window ordered by another
      *   column, or a position in raw SQL where count() makes its select, before any statement
@@ -2210,28 +2211,6 @@ class Query
     public function delete(): int
     {
         return $this->execute_delete()->rowCount();
-    }
-
-    /**
-     * The execution of Model::count(), moved here: the SELECT of the legacy options is run (count()
-     * has them select COUNT(*)) and the first column of its first row is returned, 0 when it
-     * returns none (#34). A grouped count is that of the first group. Unlike exists(), it leaves
-     * Table::$last_sql alone, as count() always did.
-     *
-     * It runs on $connection when one is given: Model::count() passes static::connection(), a
-     * public static that a subclass can override, so that count() keeps calling that hook as it
-     * always did. Without one it runs on the Table's connection.
-     *
-     * @internal Serves Model::count(); not a supported API.
-     */
-    public function legacy_count(?Connection $connection = null): int|string
-    {
-        $table = $this->table();
-        $sql = $this->to_sql_builder();
-        $values = $table->format_date_bind_values($sql->get_where_values());
-        $row = ($connection ?? $table->connection())->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
-
-        return false === $row ? 0 : $row[0];
     }
 
     /**

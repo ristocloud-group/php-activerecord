@@ -415,13 +415,14 @@ cursors, query scopes, and the date, JSON and full-text wheres.
 ### Legacy and builder side by side ###
 
 Some names exist in both worlds. Called on the class, the legacy static runs; called on a query (`new_query()`, or after
-another builder call), the builder's runs. The legacy ones are unchanged, so existing code is not affected:
+another builder call), the builder's runs. The legacy ones are unchanged, so existing code is not affected, except
+`count`: there is one count, and the legacy `count` runs the builder's on the query of its options:
 
 | Name | Legacy: `Invoice::...` | Builder: `Invoice::new_query()->...` |
 |---|---|---|
 | `find` | `find(1)`, `find(1, 2)`, `find([1, 2])`: a missing primary key throws `RecordNotFound`; the option forms `find('first', ...)` and `find($options)` return `null`, and `find('all', ...)` returns `[]` | `find(1)` is the model, or `null`. `find([1, 2])` is an array of the models found, a missing id left out. `find_or_fail($id)` throws `RecordNotFound` (with the legacy message) when an id is missing, `find_many($ids)` is the list form, and `find_or($id, $callback)` calls the callback instead of throwing. A one-column primary key only |
 | `first` | `first($options)`; `last($options)` reverses the order (by the primary key when there is none) | `first()` is `LIMIT 1` in the query's own order, none implied, and returns a model or `null`. `first_or_fail()`, `first_or($callback)` and `sole()` are the strict forms. There is no `last()`: reverse the order |
-| `count` | `count($options)` or primary key values; with `group` it counts the rows of the first group | `count($column = '*')` counts the rows of the result, so a grouped query counts its groups. `count('note')` is `COUNT(note)`, where `Invoice::count('note')` looks up the primary key `'note'` |
+| `count` | `count($options)` or primary key values: the builder's `count()` of the query of those options, so it counts the rows of the result too (a `group` its groups, a `limit` or an `offset` the rows of the window), always an `int` | `count($column = '*')` counts the rows of the result, so a grouped query counts its groups. `count('note')` is `COUNT(note)`, where `Invoice::count('note')` looks up the primary key `'note'` |
 | `exists` | `exists($options)` or a primary key value | `exists()` and `doesnt_exist()` |
 | `all` | `all($options)`, that is `find('all', $options)` | `get()` |
 | `update_all`, `update` | `update_all(['set' => [...], 'conditions' => ...])`; a hash `set` also sets `updated_at` | `update([...])` on the query's where, `order_by()` and `limit()`; it sets `updated_at` too |
@@ -656,16 +657,26 @@ Invoice::where('status', 'open')->count();                  // 3
   cannot make it true when no row matches. `doesnt_exist()` is its opposite.
 - `count()` returns the number of rows of the result. A query with a `group_by`, a `having`, `distinct()`, a `limit` or an
   `offset` is counted as a subquery, `SELECT COUNT(*) FROM (...) AS t`, so a grouped query counts its groups and a limited
-  one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)`
-  counts the column's non-null values, and after `distinct()` with no select of the query's own its distinct non-null
-  values (Eloquent's `COUNT(DISTINCT column)`), with the refusal of a window ordered by another column that the
-  [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. With no select of the query's own,
+  one the rows of its window. `count($column)` counts the column's non-null values, and after `distinct()` with no select
+  of the query's own its distinct non-null values (Eloquent's `COUNT(DISTINCT column)`), with the refusal of a window
+  ordered by another column that the [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. With no select of the query's own,
   `count()` and `exists()` make their select themselves (`1`), so SQL of `group_by_raw()`, or of a window's
   `order_by_raw()`, that names a column by its position (`group_by_raw('1')`, `'name, 2'`, `'(1)'`,
   `'1 COLLATE NOCASE DESC'`), read as the database of the connection reads its strings and comments, is refused at the
   call: the position would name the constant, not the column it names in `get()`. Give the query a select of its own
   (`select('name')->group_by_raw('1')->count()`), or name the column (`group_by_raw('parent_author_id')`). On a grouped
   query the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
+- The legacy `Invoice::count($options)` is this count, run on the query of its options (and of its primary key values),
+  as `find()` builds it: their `select`, `group`, `having`, `order`, `limit` and `offset` are read as SQL written by hand
+  (`select_raw()`, `group_by_raw()`, ...). So `count(['group' => 'customer_id'])` counts the customers,
+  `count(['limit' => 2])` at most 2 rows and `count(['offset' => 1])` all rows but one. A `select` is kept where the
+  builder keeps a select of its own: in the subquery of a grouped or windowed count, so `count(['select' => 'DISTINCT
+  customer_id', 'limit' => 100])` counts distinct values; a count neither grouped nor windowed counts every matching row
+  in place (`SELECT COUNT(*)`, the select and the order left out), as `select_raw('DISTINCT customer_id')->count()` does.
+  With no `select`, a `group` or a windowed `order` that names a column by its position (`'group' => '1'`) is refused,
+  as above. It returns an `int`, runs on the model's `Table` connection (not through `Model::connection()`), and leaves its
+  statement in `Table::$last_sql`, as `find()` and `exists()` do. Up to 2.1.0 it counted the rows of the first group,
+  ignored the select and the window (0 with an offset), and could return the driver's string.
 
 ### Aggregates ###
 
@@ -828,8 +839,8 @@ Code ported from the Laravel documentation works by changing the method case, ex
   `OR (a = ? AND b = ?)`, where Eloquent's `orWhere` with an array ORs them.
 - **`where_all`, `where_any` and `where_none` refuse an empty column list**, where Laravel adds nothing and matches every
   row. **A closure group refuses anything but wheres**, where Eloquent ignores the rest.
-- **`count()` counts the rows of the result**, so a grouped query counts its groups. Laravel counts the first group, and
-  returns 0 with an offset.
+- **`count()` counts the rows of the result**, so a grouped query counts its groups, and so does the static
+  `Invoice::count([...])`. Laravel counts the first group, and returns 0 with an offset.
 - **Aggregates are exact** and normalized by column type (`avg` is an exact string), where Laravel returns the driver's
   value (or 0) with no cast. **`sum`, `min`, `max` and `avg` of a grouped, distinct or windowed query aggregate its result
   rows**, where Eloquent ignores the `limit`, and a grouped aggregate of an ungrouped column is refused at the call, as is

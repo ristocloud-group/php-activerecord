@@ -84,9 +84,8 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(3, Author::offset(1)->count());
         $this->assert_same(2, Author::limit(2)->count());
         $this->assert_same(3, Author::distinct()->select('parent_author_id')->count());
-        // the legacy count is unchanged: that of the first group. Every name is one author's, so whichever group
-        // the database returns first holds one (the groups by parent_author_id hold 1, 2 and 1, in no set order)
-        $this->assert_same(1, Author::count(['group' => 'name']));
+        // Model::count() runs this count() too: grouped, it counts the groups
+        $this->assert_same(4, Author::count(['group' => 'name']));
         $this->assert_same(4, Author::group_by('name')->count());
     }
 

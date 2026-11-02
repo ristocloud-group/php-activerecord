@@ -91,19 +91,92 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same([], $builder->get_where_values());
     }
 
-    public function test_legacy_count_is_served_by_the_engine(): void
+    // Maintainer (2026-11-02): one count. Model::count() builds its query from the legacy options and runs the
+    // builder's count() on it; the legacy execution is gone
+    public function test_model_count_runs_the_builders_count(): void
     {
-        $this->assert_same(1, Author::count(['conditions' => ['name' => 'Tito']]));
-        $this->assert_true(method_exists(Query::class, 'legacy_count'));
-    }
+        $this->assert_false(method_exists(Query::class, 'legacy_count'));
 
-    public function test_legacy_count_leaves_last_sql_alone(): void
-    {
         $table = Author::table();
         $table->last_sql = 'untouched';
 
-        $this->assert_same(4, (int) Author::count());
-        $this->assert_same('untouched', $table->last_sql);
+        $this->assert_same(1, Author::count(['conditions' => ['name' => 'Tito']]));
+        // the statement that ran is left in Table::$last_sql, as find() and exists() leave theirs
+        $this->assert_sql_has('SELECT COUNT(*) FROM authors WHERE', $table->last_sql);
+    }
+
+    public function test_model_count_is_an_int(): void
+    {
+        $this->assert_same(4, Author::count());
+        $this->assert_same(3, Author::count(['conditions' => ['author_id > ?', 1]]));
+        $this->assert_same(0, Author::count(['conditions' => ['author_id > ?', 99]]));
+        $this->assert_same(2, Author::count(1, 2));
+        $this->assert_same(1, Author::count(['name' => 'Tito']));
+        $this->assert_same(2, Author::count_by_parent_author_id(2));
+        $this->assert_same(1, Author::count_by_name('Tito'));
+    }
+
+    public function test_model_count_of_groups_counts_the_rows_of_the_result(): void
+    {
+        $this->assert_same(3, Author::count(['group' => 'parent_author_id']));
+        $this->assert_same(Author::group_by('parent_author_id')->count(), Author::count(['group' => 'parent_author_id']));
+        $this->assert_same(4, Author::count(['group' => 'name']));
+        $this->assert_same(1, Author::count(['group' => 'parent_author_id', 'having' => 'COUNT(*) > 1']));
+        $this->assert_same(0, Author::count(['group' => 'parent_author_id', 'having' => 'COUNT(*) > 99']));
+        $this->assert_same(2, Author::count(['group' => 'parent_author_id', 'conditions' => ['author_id > ?', 1]]));
+        $this->assert_same(2, Author::count(['joins' => ['books'], 'group' => 'authors.author_id']));
+    }
+
+    public function test_model_count_of_a_window_counts_its_rows(): void
+    {
+        $this->assert_same(2, Author::count(['limit' => 2]));
+        $this->assert_same(4, Author::count(['limit' => 5]));
+        $this->assert_same(3, Author::count(['offset' => 1]));
+        $this->assert_same(3, Author::count(['limit' => 5, 'offset' => 1]));
+        $this->assert_same(1, Author::count(['limit' => 2, 'offset' => 3]));
+        $this->assert_same(0, Author::count(['offset' => 10]));
+        $this->assert_same(0, Author::count(['limit' => 0]));
+        $this->assert_same(0, Author::count(['limit' => '0']));
+        $this->assert_same(4, Author::count(['limit' => null, 'offset' => 0]));
+        $this->assert_same(2, Author::count(['conditions' => ['author_id > ?', 1], 'order' => 'author_id DESC', 'limit' => 2]));
+        $this->assert_same(Author::limit(2)->offset(1)->count(), Author::count(['limit' => 2, 'offset' => 1]));
+
+        // a count in place leaves the order out, as the builder's does: Postgres refused it beside COUNT(*)
+        $table = Author::table();
+        $this->assert_same(4, Author::count(['order' => 'name']));
+        $this->assert_false(str_contains($table->last_sql, 'ORDER BY'));
+        $this->assert_same(3, Author::count(['conditions' => ['author_id > ?', 1], 'order' => 'name DESC']));
+    }
+
+    // the select of the options is honoured as the builder honours a select of its own: a count in place
+    // (neither grouped nor windowed) selects COUNT(*) instead, as select_raw()->count() does; a grouped or
+    // windowed count keeps it in its subquery
+    public function test_model_count_honours_the_select_as_the_builder_does(): void
+    {
+        $this->assert_same(4, Author::count(['select' => 'author_id']));
+        $this->assert_same(3, Author::count(['select' => 'author_id', 'conditions' => ['author_id > ?', 1]]));
+        $this->assert_same(2, Author::count(['select' => 'author_id', 'limit' => 2]));
+
+        $this->assert_same(Author::select_raw('DISTINCT parent_author_id')->count(), Author::count(['select' => 'DISTINCT parent_author_id']));
+        $this->assert_same(4, Author::count(['select' => 'DISTINCT parent_author_id']));
+        $this->assert_same(3, Author::count(['select' => 'DISTINCT parent_author_id', 'limit' => 10]));
+        $this->assert_same(Author::select_raw('DISTINCT parent_author_id')->limit(10)->count(), Author::count(['select' => 'DISTINCT parent_author_id', 'limit' => 10]));
+
+        // a position in the GROUP BY names a column of the select: of the options' own, it is accepted; with none, count()
+        // makes the select of its subquery itself, and refuses it as the builder does (see refuse_position_in_own_select())
+        $this->assert_same(3, Author::count(['select' => 'parent_author_id', 'group' => '1']));
+        $this->assert_exception_message_contains(
+            "count() on Author cannot send SQL '1' of the 'group' option, which names a column by its position",
+            fn() => Author::count(['group' => '1']),
+            ActiveRecord\ActiveRecordException::class
+        );
+    }
+
+    public function test_model_count_of_joins_and_from_is_unchanged(): void
+    {
+        $this->assert_same(2, Author::count(['joins' => ['books']]));
+        $this->assert_same(1, Author::count(['joins' => ['books'], 'conditions' => ['books.name' => 'Another Book']]));
+        $this->assert_same(4, Author::count(['from' => 'authors']));
     }
 
     // Review Focus 1: a subclass overriding a legacy finder keeps its override.
@@ -114,14 +187,21 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same([1], array_map(fn($a) => $a->author_id, OverridingAuthor::all()));
     }
 
-    // Spec §6.3: Model::connection() is a public static that a subclass can override, and count()
-    // has always run its statement on static::connection().
-    public function test_count_still_calls_the_connection_override(): void
+    // Maintainer (2026-11-02): count() runs the builder's count(), on the Table's connection, as find() and
+    // exists() run theirs: the public static Model::connection() that a subclass can override is not called
+    public function test_count_runs_on_the_tables_connection(): void
     {
+        ConnectionCountingAuthor::table();
         ConnectionCountingAuthor::$connection_calls = 0;
 
-        $this->assert_same(4, (int) ConnectionCountingAuthor::count());
-        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+        $this->assert_same(4, ConnectionCountingAuthor::count());
+        $this->assert_same(3, ConnectionCountingAuthor::count(['conditions' => ['author_id > ?', 1], 'limit' => 5]));
+        $this->assert_same(0, ConnectionCountingAuthor::$connection_calls);
+
+        // a dynamic count builds its conditions as find_by_* builds them, through connection(), once; the count
+        // itself does not call it
+        $this->assert_same(2, ConnectionCountingAuthor::count_by_parent_author_id(2));
+        $this->assert_same(1, ConnectionCountingAuthor::$connection_calls);
     }
 
     public function test_get_hydrates_the_models_of_a_legacy_state(): void

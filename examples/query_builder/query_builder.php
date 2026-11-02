@@ -186,8 +186,8 @@ show('exists, doesnt_exist', [Invoice::where('status', 'void')->exists(), Invoic
 show('count', Invoice::where('status', 'open')->count());
 // Invoice::count('note') is the legacy finder (a primary key): COUNT(note) is a query's
 show('count(note), the non-null notes', Invoice::new_query()->count('note'));
-// count() counts the rows of the result: a grouped query counts its groups (the legacy
-// Invoice::count(['group' => ...]) counts the rows of the first group)
+// count() counts the rows of the result: a grouped query counts its groups. The legacy
+// Invoice::count(['group' => ...]) runs this same count on the query of its options
 show('count, grouped', Invoice::group_by('customer_id')->count());
 show('legacy count, grouped', Invoice::count(['group' => 'customer_id']));
 

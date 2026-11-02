@@ -105,7 +105,7 @@
     ],
     "count_group": [
         {
-            "sql": "SELECT COUNT(*) FROM \"authors\" GROUP BY parent_author_id",
+            "sql": "SELECT COUNT(*) FROM (SELECT 1 FROM \"authors\" GROUP BY parent_author_id) AS t",
             "values": []
         }
     ],

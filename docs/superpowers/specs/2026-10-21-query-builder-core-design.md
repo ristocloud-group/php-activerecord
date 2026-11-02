@@ -53,7 +53,8 @@ The decisions already taken for sub-project 1 are recorded in Appendix A.
 
 - Changing the semantics of the existing static methods (`find`, `first`, `last`, `all`, `count`, `exists`,
   `create`, `query`, `upsert`, `update_all`, `delete_all`…). They stay legacy, and a future major could align
-  them (out of scope).
+  them (out of scope). One exception, decided by the maintainer on 2026-11-02: `count` runs the builder's `count()`
+  (§5.3).
 - Collections: terminals return arrays, as `find('all')` does. The library takes no dependency on Laravel.
 - Soft delete in the builder: it comes from scopes (sub-project 3). Until then the builder bypasses the
   finder overrides of consumer subclasses (see §8.3).
@@ -428,7 +429,7 @@ Details settled by the final review (2026-10-30):
 | `value($col)` / `sole_value($col)` | the column of the first record, **cast like a model attribute** (`Column::cast`, exact BIGINT as in #44, and today's DECIMAL → float of #146) | same |
 | `pluck($col, $key = null)` | the values, or a key ⇒ value map, cast as `value()` does, without hydrating models | same |
 | `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does; the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
-| `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` is unchanged |
+| `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` runs this count (see "One count" below) |
 | `min` / `max` / `sum` / `avg` | see §5.4 | Laravel returns the driver's value (`sum()` of none is 0), with no cast |
 
 Details settled while building the terminals (Task 15):
@@ -487,6 +488,31 @@ Details settled while building the terminals (Task 15):
     source rows, even when the select is a lone aggregate whose `get()` returns one row.
   - Residual, SQLite only: SQLite accepts a select alias in WHERE; such a query's `exists()` fails there, because its
     select becomes `1`. The other databases refuse the alias in `get()` already.
+- **One count: `Model::count()` runs the builder's `count()`** (the maintainer, 2026-11-02: "Non mi piace che ci siano
+  due modalità di count. Preferirei avere solo la nuova modalità count del builder", confirmed as a BREAKING change of
+  the legacy API, with the select honoured like the builder's). `Model::count(...)`, and so `count_by_*` and a
+  consumer's override that calls `parent::count()`, builds its query from the legacy options as before
+  (`finder_conditions_from_args()`, `Query::from_options()`) and returns `Query::count()` of it; the legacy execution
+  (`Query::legacy_count()`, which selected `COUNT(*)` in the options and read the first column of the first row) is
+  removed. There is one count rule: `QueryCompiler::compile_aggregate()` reads the clauses of legacy options as those
+  of the builder written by hand (the `select` as `select_raw()`'s, the `group`, `having` and `order` as
+  `group_by_raw()`'s, `having_raw()`'s and `order_by_raw()`'s, the window of `limit` and `offset` as it renders), and
+  sets the select and drops the order of the options themselves, which are compiled as they always are.
+  - Observable changes, all approved: the result is always an `int` (MySQL and MariaDB could return the driver's
+    string; on PHP 8.1+ with the bundled drivers it was an int already); with `group` / `having` it counts the rows of
+    the result (the groups), not the first group's count; with `limit` / `offset` it counts the rows of the window, not
+    the total (or 0 with an offset); a `select` is honoured as the builder honours one of its own: kept in the
+    subquery of a grouped or windowed count, left out (with the order) by a count in place, so
+    `count(['select' => 'DISTINCT x'])` still counts every row, as `select_raw('DISTINCT x')->count()` does, and
+    `count(['select' => 'DISTINCT x', 'limit' => 100])` the distinct values; the statement runs on the Table's
+    connection, as `find()` and `exists()` run theirs, no longer through `static::connection()` (§6.3), and is left in
+    `Table::$last_sql`, which the legacy count left alone. With no `select`, a `group` or a windowed `order` that names a
+    column by its position is refused before any statement, as the builder refuses it; it failed at the database
+    before (MySQL's "Can't group on 'COUNT(*)'").
+  - Unchanged: the arguments and the shapes of the conditions, the alias resolution, the refusal of a `;` or an open
+    block comment in the `conditions`, `joins`, `from`, and the exceptions for bad options. The golden entry
+    `count_group` was re-recorded (the four adapters): `SELECT COUNT(*) FROM (SELECT 1 FROM authors GROUP BY
+    parent_author_id) AS t`; the other `count` entries send the same SQL as before.
 - **`count($column)`** counts the column's non-null values. After `distinct()` with no select of the query's own, it
   counts the column's distinct non-null values: the subquery selects `DISTINCT col`, Eloquent's
   `COUNT(DISTINCT col)` (final review, 2026-10-30; it selected `DISTINCT *`, which a primary key keeps apart, and
@@ -747,7 +773,10 @@ Approved by the maintainer on 2026-10-23 (issue #144):
 
 ### 6.3 Unchanged on purpose
 
-- The semantics of every existing static method, and their overridability.
+- The semantics of every existing static method, and their overridability, except `Model::count()`, which runs the
+  builder's `count()` (§5.3, the maintainer, 2026-11-02): it no longer calls `static::connection()`, a public static that
+  a subclass can override, and runs on the Table's connection; the finders by pk, `update_all()` and `delete_all()`
+  still call it.
 - The public signatures and return values of `Table`.
 - The legacy positional date format (§5.2).
 
@@ -859,6 +888,8 @@ Add them to the GitHub draft release when the code merges, never before (the cha
   column's type, which fixes DATE comparisons on SQLite. Legacy positional and legacy hash binds are unchanged
   (they keep the datetime format).
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
+- **Breaking:** `Model::count()` runs the builder's `count()` (§5.3, the maintainer, 2026-11-02): an `int`, the groups
+  of a `group`, the rows of a window, the `select` honoured as the builder's, the Table's connection.
 
 ### 8.4 Notes for the monolith team
 

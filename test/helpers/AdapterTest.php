@@ -409,12 +409,13 @@ abstract class AdapterTest extends DatabaseTest
         $this->assert_equals(4, Author::count());
     }
 
-    public function test_gh34_count_is_zero_when_the_count_query_returns_no_row()
+    public function test_gh34_count_of_a_window_or_of_no_group_is_zero_or_the_rows_of_the_window()
     {
+        // Model::count() counts the rows of the result (the builder's count()): a window's, and the groups
         $this->assert_same(0, Author::count(['limit' => 0]));
         $this->assert_same(0, Author::count(['limit' => '0']));
-        $this->assert_same(0, Author::count(['offset' => 1]));
-        $this->assert_same(0, Author::count(['limit' => 5, 'offset' => 1]));
+        $this->assert_same(3, Author::count(['offset' => 1]));
+        $this->assert_same(3, Author::count(['limit' => 5, 'offset' => 1]));
         $this->assert_same(0, Author::count(['group' => 'parent_author_id', 'having' => 'COUNT(*) > 99']));
     }
 
@@ -427,7 +428,7 @@ abstract class AdapterTest extends DatabaseTest
 
         $this->assert_equals(3, Author::count(['conditions' => ['author_id > ?', 1]]));
         $this->assert_equals(0, Author::count(['conditions' => ['author_id > ?', 99]]));
-        $this->assert_same($this->conn->query_and_fetch_one('SELECT COUNT(*) FROM authors WHERE author_id > 99'), Author::count(['conditions' => ['author_id > ?', 99]]));
+        $this->assert_same(0, Author::count(['conditions' => ['author_id > ?', 99]]));
         $this->assert_equals(2, Author::count_by_parent_author_id(2));
     }
 

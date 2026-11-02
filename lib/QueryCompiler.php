@@ -30,6 +30,14 @@ final class QueryCompiler
     private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'empty_where', 'skipped_when', 'orders', 'limit'];
 
     /**
+     * The legacy option whose SQL refuse_position_in_own_select() reads as that of a builder method (see
+     * aggregated_clauses()).
+     *
+     * @var array<string, string>
+     */
+    private const array LEGACY_OPTIONS = ['group_by_raw' => 'group', 'order_by_raw' => 'order'];
+
+    /**
      * The name a refusal gives a field of a state, where it is not the field's own: the builder method, or the family
      * of methods, that sets it.
      *
@@ -244,26 +252,28 @@ final class QueryCompiler
     public function compile_aggregate(QueryState $state, string $column, array $functions): SQLBuilder
     {
         $all = '*' === $column;
-        $windowed = null !== $state->limit || null !== $state->offset;
+        // what the rule reads, in the builder's fields: legacy options are aggregated by the same rule
+        $clauses = $this->aggregated_clauses($state);
+        $windowed = null !== $clauses->limit || null !== $clauses->offset;
         $rows = clone $state;
         $apply = fn(string $expression): string => implode(', ', array_map(fn(string $function): string => "$function($expression)", $functions));
 
         if (!$windowed) {
-            $rows->orders = [];
+            self::leave_out_order($rows);
         }
 
-        if (!$windowed && !$state->distinct && [] === $state->groups && [] === $state->havings) {
-            $rows->selects = [['raw' => $apply($all ? '*' : $this->column($column, $state)), 'bindings' => []]];
+        if (!$windowed && !$clauses->distinct && [] === $clauses->groups && [] === $clauses->havings) {
+            $this->select_rows($rows, ['raw' => $apply($all ? '*' : $this->column($column, $state)), 'bindings' => []]);
 
             return $this->compile_select($rows);
         }
 
-        if ($all && !$state->distinct && [] === $state->havings && self::plain_columns($state->selects) && !self::has_raw($state->groups) && !self::has_raw($rows->orders)) {
+        if ($all && !$clauses->distinct && [] === $clauses->havings && self::plain_columns($clauses->selects) && !self::has_raw($clauses->groups) && !($windowed && self::has_raw($clauses->orders))) {
             // the state's select provably cannot matter
-            $rows->selects = [['raw' => '1', 'bindings' => []]];
-        } elseif ([] === $state->selects && !($all && $state->distinct)) {
+            $this->select_rows($rows, ['raw' => '1', 'bindings' => []]);
+        } elseif ([] === $clauses->selects && !($all && $clauses->distinct)) {
             // under DISTINCT, the distinct values of the aggregated column: SELECT DISTINCT * would keep every row apart
-            $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
+            $this->select_rows($rows, $all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]);
         }
 
         $subquery = $this->compile_select($rows);
@@ -272,6 +282,79 @@ final class QueryCompiler
         $aggregate->select($apply($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
 
         return $aggregate;
+    }
+
+    /**
+     * The clauses of $state that compile_aggregate() reads to aggregate its rows, and refuse_position_in_own_select()
+     * to refuse a position, in the builder's fields: the state itself, when it holds no legacy options. Of legacy
+     * options (Model::count()), a state that holds their SQL as the builder holds SQL written by hand: the 'select' as
+     * select_raw()'s, the 'group' as group_by_raw()'s, the 'having' as having_raw()'s and the 'order' as
+     * order_by_raw()'s, each where the legacy SELECT writes it (see compile_legacy(): SQLBuilder leaves out a GROUP BY,
+     * a HAVING and an ORDER BY whose SQL is falsy, and a select that is null or empty selects nothing the count could
+     * keep), and the window that their 'limit' and 'offset' render (an offset of 0 renders none). So a count of legacy
+     * options follows the one rule of the builder's. The state is read, never compiled: the legacy options are
+     * compiled as they always are.
+     */
+    private function aggregated_clauses(QueryState $state): QueryState
+    {
+        if (null === $state->legacy) {
+            return $state;
+        }
+
+        $options = $state->legacy;
+        $sql = fn(string $key): ?string => isset($options[$key]) && is_scalar($options[$key]) && '' !== (string) $options[$key] ? (string) $options[$key] : null;
+        $clauses = new QueryState();
+
+        if (null !== ($select = $sql('select'))) {
+            $clauses->selects = [['raw' => $select, 'bindings' => []]];
+        }
+
+        if (null !== ($group = $sql('group')) && '0' !== $group) {
+            $clauses->groups = [['type' => 'raw', 'sql' => $group, 'bindings' => []]];
+        }
+
+        if (null !== ($having = $sql('having')) && '0' !== $having) {
+            $clauses->havings = [['type' => 'raw', 'boolean' => 'AND', 'sql' => $having, 'bindings' => []]];
+        }
+
+        if (null !== ($order = $sql('order')) && '0' !== $order) {
+            $clauses->orders = [['type' => 'raw', 'sql' => $order, 'bindings' => []]];
+        }
+
+        // as SQLBuilder::limit() reads it: an explicit zero is a LIMIT 0 (#34), and what casts to 0 (null, '') no limit
+        $limit = $options['limit'] ?? null;
+        $clauses->limit = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
+        $clauses->offset = intval($options['offset'] ?? 0) ?: null;
+
+        return $clauses;
+    }
+
+    /**
+     * Leaves the order out of the rows of an aggregate (see compile_aggregate()): the builder's orders, or the 'order'
+     * of legacy options.
+     */
+    private static function leave_out_order(QueryState $rows): void
+    {
+        if (null === $rows->legacy) {
+            $rows->orders = [];
+        } else {
+            unset($rows->legacy['order']);
+        }
+    }
+
+    /**
+     * Has the rows of an aggregate (see compile_aggregate()) select $select alone: the builder's select, or the 'select'
+     * of legacy options, as SQL.
+     *
+     * @param array{column: string, alias: null}|array{raw: string, bindings: list<mixed>} $select
+     */
+    private function select_rows(QueryState $rows, array $select): void
+    {
+        if (null === $rows->legacy) {
+            $rows->selects = [$select];
+        } else {
+            $rows->legacy['select'] = array_key_exists('raw', $select) ? $select['raw'] : $this->column($select['column'], $rows);
+        }
     }
 
     /**
@@ -605,7 +688,15 @@ final class QueryCompiler
      */
     public function refuse_position_in_own_select(QueryState $state, ?string $column, string $method): void
     {
-        if (null !== $state->legacy || [] !== $state->selects) {
+        // exists() sends legacy options as they are, their select included (see compile_exists())
+        if (null !== $state->legacy && null === $column) {
+            return;
+        }
+
+        $legacy = null !== $state->legacy;
+        $state = $this->aggregated_clauses($state);
+
+        if ([] !== $state->selects) {
             return;
         }
 
@@ -626,11 +717,11 @@ final class QueryCompiler
             foreach ($entries as $entry) {
                 if ('raw' === $entry['type'] && $this->names_a_position($entry['sql'])) {
                     throw new ActiveRecordException(sprintf(
-                        "%s() on %s cannot send SQL '%s' of %s(), which names a column by its position: with no select of the query's own, %s() makes the select of its statement itself (1, or the aggregated column), not the columns of get(), so the position would name another column, or none. Give the query a select of its own, or name the column",
+                        "%s() on %s cannot send SQL '%s' of %s, which names a column by its position: with no select of the query's own, %s() makes the select of its statement itself (1, or the aggregated column), not the columns of get(), so the position would name another column, or none. Give the query a select of its own, or name the column",
                         $method,
                         $this->table->class->name,
                         $entry['sql'],
-                        $source,
+                        $legacy ? sprintf("the '%s' option", self::LEGACY_OPTIONS[$source]) : "$source()",
                         $method,
                     ));
                 }
