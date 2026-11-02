@@ -36,6 +36,25 @@ class SQLBuilder
     private string $operation = 'SELECT';
     private ?string $table;
     private ?string $select = '*';
+
+    /** @var list<mixed> */
+    private array $select_values = [];
+
+    /** @var list<mixed> */
+    private array $from_values = [];
+
+    /** @var list<mixed> */
+    private array $join_values = [];
+
+    /** @var list<mixed> */
+    private array $group_values = [];
+
+    /** @var list<mixed> */
+    private array $having_values = [];
+
+    /** @var list<mixed> */
+    private array $order_values = [];
+
     private ?string $joins = null;
     private ?string $order = null;
     private ?int $limit = null;
@@ -154,6 +173,28 @@ class SQLBuilder
     }
 
     /**
+     * The bind values of a SELECT, in the order of its clauses: those of the select (see
+     * select_values()), of the FROM (see from_values()), of the joins (see join_values()), of the
+     * WHERE (see get_where_values()), of the GROUP BY (see group_values()), of the HAVING (see
+     * having_values()), then of the ORDER BY (see order_values()), whatever the order of the calls
+     * that gave them. A value that is an array gives its elements in its place.
+     *
+     * @return list<mixed>
+     */
+    public function select_bind_values(): array
+    {
+        return array_flatten([
+            ...$this->select_values,
+            ...$this->from_values,
+            ...$this->join_values,
+            ...$this->where_values,
+            ...$this->group_values,
+            ...$this->having_values,
+            ...$this->order_values,
+        ]);
+    }
+
+    /**
      * The WHERE fragment (without the keyword) whose bind values get_where_values() returns.
      *
      * @internal Serves Model's primary-key finders; not a supported API.
@@ -186,12 +227,41 @@ class SQLBuilder
     }
 
     /**
+     * The WHERE of a query of the builder, as QueryCompiler renders it: the condition, without the
+     * keyword, and the values of its bind markers in order, both taken as they are (no Expressions
+     * pass, no table added to a name). The values are the statement's where values (see
+     * get_where_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function where_condition(string $condition, array $values): static
+    {
+        $this->where = $condition;
+        $this->where_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $order
      * @return $this
      */
     public function order($order)
     {
         $this->order = $order;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the ORDER BY (see order()): the last values of the statement
+     * (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function order_values(array $values): static
+    {
+        $this->order_values = array_values($values);
         return $this;
     }
 
@@ -221,12 +291,38 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the GROUP BY (see group()): they follow those of the WHERE (see
+     * select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function group_values(array $values): static
+    {
+        $this->group_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $having
      * @return $this
      */
     public function having($having)
     {
         $this->having = $having;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the HAVING (see having()): they follow those of the GROUP BY (see
+     * select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function having_values(array $values): static
+    {
+        $this->having_values = array_values($values);
         return $this;
     }
 
@@ -266,12 +362,51 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the select (see select()): the first values of the statement
+     * (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function select_values(array $values): static
+    {
+        $this->select_values = array_values($values);
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the table of the statement, a FROM written in SQL: they
+     * follow those of the select (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function from_values(array $values): static
+    {
+        $this->from_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $joins
      * @return $this
      */
     public function joins($joins)
     {
         $this->joins = $joins;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the joins (see joins()), those of their ON conditions in
+     * order: they follow those of the FROM (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function join_values(array $values): static
+    {
+        $this->join_values = array_values($values);
         return $this;
     }
 

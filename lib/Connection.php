@@ -403,6 +403,19 @@ abstract class Connection
     }
 
     /**
+     * Whether bind_values() binds $value as an integer, which Query::to_raw_sql() then writes bare, as the adapter binds
+     * it, where every other value is written as the quoted text it binds. Never by default: execute() binds every value
+     * as text, a bool turned into the int 0 or 1 first, and null as NULL. An adapter that binds by type overrides it, with
+     * the rule of its own bind_values().
+     *
+     * @internal Serves Query::to_raw_sql() and the adapters' bind_values(); not a supported API.
+     */
+    public function binds_as_integer(mixed $value): bool
+    {
+        return false;
+    }
+
+    /**
      * Execute a query that returns maximum of one row with one field and return it.
      *
      * @param string $sql Raw SQL string to execute.
@@ -658,6 +671,68 @@ abstract class Connection
     }
 
     /**
+     * The condition of a LIKE on a column, $column_sql as the query names it, with one bind marker
+     * for the pattern (see like_pattern()); with $not, its negation. A pattern takes the wildcards %
+     * (any characters) and _ (one character). By default the condition is "column LIKE ?", which
+     * matches in the case the database's LIKE does (as the column's collation decides on MySQL and
+     * MariaDB, ASCII letters in any case on SQLite). An adapter that can match in the case given
+     * writes the case-sensitive condition its own way; this one cannot.
+     *
+     * @throws ActiveRecordException for a case-sensitive LIKE
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if ($case_sensitive) {
+            throw new ActiveRecordException(sprintf('%s has no case-sensitive LIKE', static::class));
+        }
+
+        return $this->like_column($column_sql) . ($not ? ' NOT LIKE ?' : ' LIKE ?');
+    }
+
+    /**
+     * A column, $column_sql as the query names it, as a LIKE compares it: in like_condition(), and with
+     * any operator of the LIKE family in a comparison of the builder (LIKE, NOT LIKE, ILIKE, ...). As it is
+     * by default; Postgres compares its text, so that a column of another type takes a LIKE too.
+     */
+    public function like_column(string $column_sql): string
+    {
+        return $column_sql;
+    }
+
+    /**
+     * The value bound to the marker of like_condition(), from a pattern with the wildcards % and _:
+     * the pattern as it is by default. An adapter whose case-sensitive condition reads another
+     * syntax translates it.
+     */
+    public function like_pattern(string $pattern, bool $case_sensitive): string
+    {
+        return $pattern;
+    }
+
+    /**
+     * The operators a condition of the query builder takes on this database besides Laravel's own
+     * (see Query::where()), in lower case: those Laravel's grammar of the database adds. None by
+     * default, and none for SQLite, whose grammar adds none. Whatever an adapter lists, the builder
+     * refuses an operator with a ?, which would read as a bind marker: the library binds positionally.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return [];
+    }
+
+    /**
+     * The SQL function that returns a random number, by which an ORDER BY puts the rows in random order
+     * (Query::in_random_order()): RANDOM() by default, which Postgres and SQLite have. MySQL and MariaDB
+     * name it RAND().
+     */
+    public function random_function(): string
+    {
+        return 'RANDOM()';
+    }
+
+    /**
      * Return a date time formatted into the database's date format.
      *
      * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)
@@ -853,7 +928,7 @@ abstract class Connection
      * True by default: MySQL, MariaDB and SQLite compare any value with an INTEGER
      * column, so 'abc' simply matches no row (#92).
      *
-     * @internal Serves Model::find_by_pk(); not a supported API.
+     * @internal Serves the finders by pk (QueryCompiler::keep_integer_pk_values()); not a supported API.
      */
     public function accepts_integer_value(mixed $value): bool
     {

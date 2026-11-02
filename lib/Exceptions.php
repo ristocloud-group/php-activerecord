@@ -21,6 +21,14 @@ class ActiveRecordException extends \Exception {};
 class RecordNotFound extends ActiveRecordException {};
 
 /**
+ * Thrown when a query finds more than the one record it wants: by {@link Query::sole()} and
+ * {@link Query::sole_value()}.
+ *
+ * @package ActiveRecord
+ */
+class MultipleRecordsFound extends ActiveRecordException {};
+
+/**
  * Thrown when there was an error performing a database operation.
  *
  * The error will be specific to whatever database you are running.

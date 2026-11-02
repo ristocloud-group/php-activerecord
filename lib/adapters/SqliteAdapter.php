@@ -71,14 +71,27 @@ class SqliteAdapter extends Connection
 
         foreach ($values as $i => $value) {
             $type = match (true) {
-                is_int($value)  => PDO::PARAM_INT,
-                null === $value => PDO::PARAM_NULL,
-                default         => PDO::PARAM_STR,
+                $this->binds_as_integer($value) => PDO::PARAM_INT,
+                null === $value                 => PDO::PARAM_NULL,
+                default                         => PDO::PARAM_STR,
             };
             $sth->bindValue($i + 1, $value, $type);
         }
 
         return $sth->execute();
+    }
+
+    /**
+     * Whether bind_values() binds $value as an integer: an int, and a bool, which it turns into one first. Everything
+     * else is bound as text, a float and a numeric string included, or as NULL. Query::to_raw_sql() writes what is bound
+     * as an integer bare, and the rest quoted, since SQLite never equals the text '1' to the integer 1, nor an integer
+     * expression to a number written as text.
+     *
+     * @internal Serves bind_values() and Query::to_raw_sql(); not a supported API.
+     */
+    public function binds_as_integer(mixed $value): bool
+    {
+        return is_int($value) || is_bool($value);
     }
 
     public function limit($sql, $offset, $limit)
@@ -201,6 +214,33 @@ class SqliteAdapter extends Connection
     public function accepts_limit_and_order_for_update_and_delete()
     {
         return true;
+    }
+
+    /**
+     * SQLite's LIKE matches ASCII letters in any case, and its GLOB in the case given: a
+     * case-sensitive LIKE is "column GLOB ?", whose pattern like_pattern() translates.
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if (!$case_sensitive) {
+            return parent::like_condition($column_sql, false, $not);
+        }
+
+        return $this->like_column($column_sql) . ($not ? ' NOT GLOB ?' : ' GLOB ?');
+    }
+
+    /**
+     * The GLOB pattern of a case-sensitive LIKE pattern: GLOB's own wildcards * and ? and its bracket
+     * [ stand for themselves in a bracket expression ([*], [?], [[]), then LIKE's wildcards become
+     * GLOB's, % the * and _ the ?. One pass, so that no character is translated twice.
+     */
+    public function like_pattern(string $pattern, bool $case_sensitive): string
+    {
+        if (!$case_sensitive) {
+            return $pattern;
+        }
+
+        return strtr($pattern, ['[' => '[[]', '*' => '[*]', '?' => '[?]', '%' => '*', '_' => '?']);
     }
 
     /**

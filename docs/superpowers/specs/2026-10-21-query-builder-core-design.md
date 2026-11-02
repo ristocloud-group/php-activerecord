@@ -141,6 +141,14 @@ on MySQL and SQLite. Only `find()` passes `mapped_names`. Twenty-two monolith mo
     replay the exact `SQLBuilder` calls `options_to_sql()` makes today, in the same order: joins before
     conditions, so hash keys get qualified (#35); `table.*` as the default select with joins; hashes through the
     name mapping (#92).
+- **`lib/QueryState.php`, `lib/QueryCompiler.php` (new, `@internal`).** The query's structured state, and the code
+  that turns it into `SQLBuilder` calls: `QueryCompiler::column()` is the single column-reference rule (§5.1).
+- **`lib/Conditions.php`, `lib/ConditionCompiler.php` (new, `@internal`).** The where rules: `Conditions` validates
+  and normalizes the arguments into condition shapes, and `ConditionCompiler` renders them. Every condition goes
+  through them: `where*`, `JoinClause`'s `where*`, `having*`. Building shapes elsewhere would skip a rule, e.g. the
+  Postgres `::text` cast of the LIKE operators.
+- **`lib/IncludeTree.php`, `lib/RawSqlWriter.php` (new, `@internal`).** Pure helpers of `Query`: the include-tree
+  rules of `with` / `without` / `with_only`, and the literal writer of `to_raw_sql()`.
 - **`lib/JoinClause.php` (new).** The closure form of joins (`on`, `or_on`, `where`…), with bound values.
 - **`lib/ExactDecimal.php` (new, `@internal`).** It takes the three private helpers of
   `Validations` (#175) — `to_exact_decimal()`, `compare_exact_decimals()`, `exact_integer_digits()` — and adds an
@@ -236,6 +244,33 @@ All names are snake_case, with the `or_` variants Eloquent has.
 
 ---
 
+Details settled while building the utilities (Task 16):
+
+- **`readonly($value = true)`** is a `Query` method, but it is **not forwardable**: `Model` has an instance
+  `readonly()`, so a static `Author::readonly()` is PHP's own Error. Use `Author::new_query()->readonly()`.
+- **`with(...)`** takes names, dot paths (`'author.books'`) and arrays. They merge into the include tree exactly as
+  the `include` option takes it.
+  - An undeclared relation is refused at the call (`RelationshipException`).
+  - `without()` removes by path, so the parent stays as `name => []`, and does not look names up (Eloquent parity).
+  - `with_only()` replaces the tree.
+- **`when()` / `unless()`.**
+  - A Closure value is evaluated first.
+  - The callback receives `($query, $value)`. A Query on the same model that it returns is handed back; any other
+    return is ignored. Eloquent returns any non-null result.
+  - `tap()` calls back and returns the query.
+- **`clone()`** is a deep copy: where groups, `JoinClause`s and includes. Mutating the clone never touches the
+  original.
+- **`to_raw_sql()`** is a debug aid, never for execution.
+  - It replaces the markers in order with the binds.
+  - Each value becomes the literal the adapter binds. Everything is quoted text through `Connection::escape()`, as
+    `execute()` sends it, except a value the adapter binds as an integer, which is written bare: on SQLite, ints and
+    bools turned into ints. `null` becomes `NULL`, and DateTimes are formatted as the builder binds them.
+  - So the raw text runs by hand as the bound statement does on every adapter. Postgres refuses a bare `1` against a
+    boolean or a bare `5` against a text column. SQLite compares a quoted `'1'` with an integer expression
+    differently from the bound integer.
+  - A marker/bind count mismatch throws.
+- **`with()` and `readonly()` count as builder clauses.** Writes refuse them (§5.5), and so does a where group.
+
 ## 5. Semantics
 
 ### 5.1 Column references
@@ -259,9 +294,11 @@ aggregates and join conditions.
 
 | Rule | Example | vs Eloquent |
 |---|---|---|
-| Operators are whitelisted: Laravel's list plus the adapter-specific ones. **An unknown operator throws `ActiveRecordException`** at the call | `where('a', 'like', 'x%')` | Laravel takes it as the value with `=` |
-| `null` with `=` → `IS NULL`; with `!=`/`<>` → `IS NOT NULL`; with any other operator → exception | `where('a', null)` | same |
+| Operators are whitelisted: Laravel's list plus the adapter-specific ones (Laravel 13's grammars: MySQL/MariaDB `sounds like`; Postgres's list without the operators that contain `?`, which collide with PDO's positional markers, and without those that are not a boolean in `col OP ?`: `between`, `||`, `-`, `#`, `#-`). **An unknown operator throws `ActiveRecordException`** at the call | `where('a', 'like', 'x%')` | Laravel takes it as the value with `=` |
+| `null` with `=` or `<=>` → `IS NULL`; with `!=`/`<>` → `IS NOT NULL`; with any other operator → exception | `where('a', null)` | same |
 | The hash form follows **the legacy hash rules** (`Expressions`): array → `IN`, empty array → `1=0`, `null` → `IS NULL`, `null` inside a list → `(… IN(?) OR … IS NULL)` | `where(['a' => [1, null]])` | Laravel binds the null, which never matches |
+| A hash's entries are ANDed, also inside `or_where(hash)`, which renders `OR (a = ? AND b = ?)`, as the legacy hash rule does | `or_where(['a' => 1, 'b' => 2])` | Eloquent's `orWhere(array)` ORs the entries |
+| `where_all` / `where_any` / `where_none` (and `or_`) with an empty column list throw `ActiveRecordException` at the call; `where_key` / `where_key_not` on a composite pk throw too, and a nested array in `where_in` / `where_between` / `where_key` is refused | `where_any([], 'x')` | Laravel's `whereAny([])` adds nothing and matches every row |
 | Laravel's list form is accepted | `where([['a', '>', 1], ['b', 2]])` | same |
 | `where_in` / `where_not_in` with an empty array → `1=0` / `1=1`; a `null` in the list is handled as in the hash | `where_in('id', [])` | same, except the null |
 | A closure is a parenthesized group, and an empty group is omitted. The closure gets a new `Query` on the same model; setting anything but wheres on it throws | `where(fn ($q) => $q->where(...)->or_where(...))` | Eloquent ignores the rest |
@@ -276,10 +313,10 @@ More builder rules:
 
 | Method | Rule |
 |---|---|
-| `where_like($col, $pattern, $case_sensitive = false)` / `where_not_like` | The pattern uses the `%`/`_` wildcards. **Case-insensitive** (default): `LIKE` on MySQL/MariaDB (as the collation decides), `ILIKE` on Postgres, `LIKE` on SQLite (ASCII case folding only). **Case-sensitive:** `LIKE` on Postgres; `GLOB` on SQLite, with the pattern translated (`%` → `*`, `_` → `?`, GLOB metacharacters bracketed); on MySQL/MariaDB **`col LIKE CAST(? AS BINARY)`**, a byte comparison. Laravel's `LIKE BINARY` emits warning 1287 (deprecated `BINARY expr`) on MySQL 9.7, verified; `CAST` works without warnings on MySQL 9.7 and MariaDB 11.4, for latin1 and utf8mb4 columns |
+| `where_like($col, $pattern, $case_sensitive = false)` / `where_not_like` | The pattern uses the `%`/`_` wildcards. **Case-insensitive** (default): `LIKE` on MySQL/MariaDB (as the collation decides), `ILIKE` on Postgres, `LIKE` on SQLite (ASCII case folding only). **Case-sensitive:** `LIKE` on Postgres (on Postgres the column of every LIKE operator is cast `::text`, as Laravel does, so a non-text column works); `GLOB` on SQLite, with the pattern translated (`%` → `*`, `_` → `?`, GLOB metacharacters bracketed); on MySQL/MariaDB **`col LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin`**: the explicit collation converts the column to utf8mb4 and compares binary. Measured right, with no warnings, on latin1, utf8mb3 and utf8mb4 columns with ASCII and non-ASCII patterns, on MySQL 8.4/9.7 and MariaDB 10.11–12.3 (Task 12). Laravel's `LIKE BINARY` emits warning 1287 on MySQL 9.7; the first design, `CAST(? AS BINARY)`, missed non-ASCII patterns on latin1 columns and let `_` match one byte of a multi-byte letter. It assumes the connection's character set is the encoding of the data sent (utf8mb4 recommended). Residual: on MySQL (not MariaDB), a connection made latin1 by the URL's `charset=latin1` (applied with `SET NAMES` under PDO's emulated prepares) misreads non-ASCII patterns. `\` escapes `%`/`_` on MySQL, MariaDB and Postgres, and is literal on SQLite |
 | `where_all($cols, $op, $value)` / `where_any` / `where_none` | A parenthesized group of the same comparison on each column, joined with AND / OR / NOT (… OR …), as in Laravel |
 | `in_random_order()` | `RAND()` on MySQL/MariaDB, `RANDOM()` on Postgres/SQLite, through an adapter hook |
-| `limit` / `offset` | Integers ≥ 0, anything else throws. `limit(0)` is `LIMIT 0` and finds nothing (#34). The legacy `limit`/`offset` options keep their current handling (`SQLBuilder::limit()` / `offset()`) |
+| `limit` / `offset` | Integers ≥ 0: a negative value throws. The parameters are typed `int`, so PHP's own coercion applies to other scalars (`'5'` → 5; a fractional float raises PHP's deprecation). `limit(0)` is `LIMIT 0` and finds nothing (#34). The legacy `limit`/`offset` options keep their current handling (`SQLBuilder::limit()` / `offset()`) |
 | `order_by` | `asc`/`desc` (case-insensitive), anything else throws. The legacy `order` option stays a raw string |
 
 ### 5.3 Read terminals
@@ -294,9 +331,36 @@ More builder rules:
 | `find_or_fail($id)` / `find_many($ids)` / `find_or($id, $cb)` | `RecordNotFound` with the legacy message if any is missing / a list / the callback | — |
 | `value($col)` / `sole_value($col)` | the column of the first record, **cast like a model attribute** (`Column::cast`, exact BIGINT as in #44, and today's DECIMAL → float of #146) | same |
 | `pluck($col, $key = null)` | the values, or a key ⇒ value map, cast as `value()` does, without hydrating models | same |
-| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does | same |
+| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does; the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
 | `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` is unchanged |
 | `min` / `max` / `sum` / `avg` | see §5.4 | Laravel casts `sum` |
+
+Details settled while building the terminals (Task 15):
+
+- **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
+- **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
+- **`exists()`** drops order, limit and offset. It selects `1` unless the query has a GROUP BY or a HAVING, which
+  may name select aliases; an empty select gets `1` in every case.
+  - Without that, an aggregate select such as `COUNT(*)` would make it true with no matching row. Eloquent has that
+    trap, so this is a deliberate deviation.
+  - With a GROUP BY, an aggregate produces no row when nothing matches.
+- **A wrapped `count()`** selects `1` in the subquery only when the select cannot matter. That requires no counted
+  column, no DISTINCT, no HAVING, no `group_by_raw()` entry and no `order_by_raw()` entry in a kept window order
+  (positional references such as `GROUP BY 1` name the select). It also requires a select that is empty or holds
+  only plain column references without an alias. An empty select gets `1` even beside a HAVING, because `*` beside
+  a GROUP BY is refused by Postgres and MySQL's ONLY_FULL_GROUP_BY. Otherwise
+  it keeps the caller's select, because aliases named by GROUP BY or ORDER BY, and aggregates that collapse the rows,
+  need it.
+  - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
+    `authors.name`.
+  - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.
+  - Residual, as in Eloquent: a `count()` that is not wrapped (no group, having, distinct, limit or offset) counts the
+    source rows, even when the select is a lone aggregate whose `get()` returns one row.
+  - Residual, SQLite only: SQLite accepts a select alias in WHERE; such a query's `exists()` fails there, because its
+    select becomes `1`. The other databases refuse the alias in `get()` already.
+- **`count($column)`** counts the column's non-null values. After `distinct()` with no select, it counts distinct rows.
+- **Qualified names.** `value()` / `pluck()` given a qualified name (`'authors.name'`) return the driver's value uncast, because casting needs a model column.
+- **`pluck($col, $key)` keys** are the driver's values. A `null` key becomes `''`, because PHP 8.5 deprecates null array keys.
 
 ### 5.4 Aggregates and exact numerics
 
@@ -379,7 +443,8 @@ the model and the offending input.
 |---|---|
 | unknown operator, `null` with a disallowed operator, invalid direction or negative limit/offset | `ActiveRecordException` |
 | static `Order::update(...)` / `Order::delete()`, an unsupported clause on a write, empty update values | `ActiveRecordException` |
-| `find` / `find_or_fail` on a composite pk | `ActiveRecordException` |
+| `find` / `find_or_fail` / `where_key` / `where_key_not` on a composite pk | `ActiveRecordException` |
+| an empty column list in `where_all` / `where_any` / `where_none`, a nested array in `where_in` / `where_between` / `where_key`, an empty column name or alias | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
 | an unknown method through `__callStatic` | `ActiveRecordException("Call to undefined method: …")`, today's message |
@@ -533,7 +598,8 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 - On MySQL/MariaDB, `update_all()` with a hash `set` returns the matched rows even when no other value changes,
   because `updated_at` changes too.
 - **Dates** (the maintainer asked for this item explicitly): the builder binds a DateTime in the format of its
-  column's type, which fixes DATE comparisons on SQLite. Legacy positional binds are unchanged.
+  column's type, which fixes DATE comparisons on SQLite. Legacy positional and legacy hash binds are unchanged
+  (they keep the datetime format).
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
 
 ### 8.4 Notes for the monolith team

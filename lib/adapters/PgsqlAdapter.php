@@ -61,7 +61,7 @@ class PgsqlAdapter extends Connection
      * '2', but 1.5, INF and 1e15 (sent as '1.0E+15') are rejected. NAN and INF are
      * rejected before the cast, which warns for NAN on PHP 8.5.
      *
-     * @internal Serves Model::find_by_pk(); not a supported API.
+     * @internal Serves the finders by pk (QueryCompiler::keep_integer_pk_values()); not a supported API.
      */
     public function accepts_integer_value(mixed $value): bool
     {
@@ -123,6 +123,39 @@ class PgsqlAdapter extends Connection
     {
         // Postgres EXISTS() returns a boolean (t/f); cast so the scalar is 1/0.
         return "SELECT EXISTS($inner)::int";
+    }
+
+    /**
+     * Postgres's LIKE matches in the case given, and its ILIKE in any case. The column is compared as
+     * text (see like_column()).
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        return $this->like_column($column_sql) . ($not ? ' NOT ' : ' ') . ($case_sensitive ? 'LIKE' : 'ILIKE') . ' ?';
+    }
+
+    /**
+     * The column cast to text, as Laravel's Postgres grammar casts it in its LIKE conditions: Postgres has
+     * no LIKE on an integer, a date or a uuid, and for a text column the cast changes nothing.
+     */
+    public function like_column(string $column_sql): string
+    {
+        return "$column_sql::text";
+    }
+
+    /**
+     * The operators Laravel's Postgres grammar adds that compare (ranges, arrays, JSON, networks, text
+     * search, IS [NOT] DISTINCT FROM). Left out of its list, and so refused at the call:
+     * - those with a ? (?, ?|, ?&, @?), which would read as bind markers, since the library binds
+     *   positionally;
+     * - those that cannot be the boolean of "column OP ?": BETWEEN, which needs AND (where_between()
+     *   writes it), and ||, -, # and #-, which compute a value.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return ['<<=', '>>=', '&&', '@>', '<@', '@@', 'is distinct from', 'is not distinct from'];
     }
 
     /**
