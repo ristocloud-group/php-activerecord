@@ -361,7 +361,7 @@ class Validations
 
             $not_a_number_message = ($options['message'] ?? Errors::$DEFAULT_ERROR_MESSAGES['not_a_number']);
             // an int or a plain decimal string is kept exact for the checks below (#49)
-            $exact_var = self::to_exact_decimal($var);
+            $exact_var = ExactDecimal::parse($var);
 
             if (true === $options['only_integer'] && !is_integer($var)) {
                 if (!preg_match('/\A[+-]?\d+\Z/', (string) ($var))) {
@@ -385,14 +385,14 @@ class Validations
                     if (!is_numeric($options[$option])) {
                         throw new ValidationsArgumentError("$option must be a number");
                     }
-                    $exact_bound = self::to_exact_decimal($options[$option]);
+                    $exact_bound = ExactDecimal::parse($options[$option]);
                     $option_value = (float) $options[$option];
 
                     // an integer bound shows all its digits, any other as before (#49)
-                    $message = str_replace('%d', self::exact_integer_digits($exact_bound) ?? (string) $option_value, $message);
+                    $message = str_replace('%d', ExactDecimal::integer_digits($exact_bound) ?? (string) $option_value, $message);
 
                     // both exact: compared digit by digit, no float rounding; else as floats (#49)
-                    $cmp = null !== $exact_var && null !== $exact_bound ? self::compare_exact_decimals($exact_var, $exact_bound) : null;
+                    $cmp = null !== $exact_var && null !== $exact_bound ? ExactDecimal::compare($exact_var, $exact_bound) : null;
 
                     if ('greater_than' == $option && !(null !== $cmp ? $cmp > 0 : $var > $option_value)) {
                         $this->record->add($attribute, $message);
@@ -415,69 +415,6 @@ class Validations
                 }
             }
         }
-    }
-
-    /**
-     * Splits an int or a numeric string in plain decimal notation (optional
-     * surrounding whitespace and sign, digits with an optional fraction) into
-     * [negative, integer digits, fraction digits], without leading zeros in the
-     * integer digits nor trailing zeros in the fraction ('' for none; zero is
-     * never negative). Returns null for anything else — a float, an exponent
-     * string — which is then compared as a float, as before (#49).
-     *
-     * @return array{bool, string, string}|null
-     */
-    private static function to_exact_decimal(mixed $value): ?array
-    {
-        if (is_int($value)) {
-            $value = (string) $value;
-        } elseif (!is_string($value)) {
-            return null;
-        }
-
-        if (!preg_match('/\A[ \t\n\r\x0B\f]*([+-]?)(\d*)(?:\.(\d*))?[ \t\n\r\x0B\f]*\z/', $value, $matches)
-            || '' === $matches[2] . ($matches[3] ?? '')) {
-            return null;
-        }
-
-        $integer = ltrim($matches[2], '0');
-        $fraction = rtrim($matches[3] ?? '', '0');
-
-        return ['-' === $matches[1] && '' !== $integer . $fraction, $integer, $fraction];
-    }
-
-    /**
-     * The digits of an exact decimal without a fraction (e.g. '-12', '0'), or null.
-     *
-     * @param array{bool, string, string}|null $decimal
-     */
-    private static function exact_integer_digits(?array $decimal): ?string
-    {
-        if (null === $decimal || '' !== $decimal[2]) {
-            return null;
-        }
-
-        return '' === $decimal[1] ? '0' : ($decimal[0] ? '-' : '') . $decimal[1];
-    }
-
-    /**
-     * Compares two exact decimals: -1, 0 or 1.
-     *
-     * @param array{bool, string, string} $a
-     * @param array{bool, string, string} $b
-     */
-    private static function compare_exact_decimals(array $a, array $b): int
-    {
-        if ($a[0] !== $b[0]) {
-            return $a[0] ? -1 : 1;
-        }
-
-        $length = max(strlen($a[2]), strlen($b[2]));
-        $cmp = (strlen($a[1]) <=> strlen($b[1]))
-            ?: strcmp($a[1], $b[1]) <=> 0
-            ?: strcmp(str_pad($a[2], $length, '0'), str_pad($b[2], $length, '0')) <=> 0;
-
-        return $a[0] ? -$cmp : $cmp;
     }
 
     /**

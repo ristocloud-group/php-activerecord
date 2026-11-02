@@ -17,3 +17,5 @@ SELECT setval('user_newsletters_id_seq', max(id)) FROM user_newsletters;
 SELECT setval('valuestore_id_seq', max(id)) FROM valuestore;
 SELECT setval('stories_id_seq', max(id)) FROM stories;
 SELECT setval('composite_items_id_seq', max(id)) FROM composite_items;
+SELECT setval('charset_words_id_seq', max(id)) FROM charset_words;
+SELECT setval('measurements_id_seq', max(id)) FROM measurements;

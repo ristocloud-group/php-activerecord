@@ -186,3 +186,30 @@ CREATE TABLE odd_columns (
   `dash-name` VARCHAR(20),
   `some day` DATE
 );
+
+-- timestamp columns that differ from their attribute names (#92): "created at" is created_at, UPDATED_AT is updated_at (by case only, so mapped on Postgres only)
+CREATE TABLE odd_timestamps (
+  id INTEGER NOT NULL PRIMARY KEY,
+  name VARCHAR(20),
+  `created at` DATETIME,
+  `UPDATED_AT` DATETIME
+);
+
+-- the character sets of these columns are MySQL's (see mysql.sql): here they are text alike
+CREATE TABLE charset_words (
+  id INTEGER NOT NULL PRIMARY KEY,
+  latin1_word VARCHAR(20),
+  utf8mb3_word VARCHAR(20),
+  utf8mb4_word VARCHAR(20)
+);
+
+-- aggregates of the query builder (spec 5.4): DECIMAL has NUMERIC affinity here, so a fraction is stored as a REAL, and REAL is a Column::STRING of raw type real (see AggregateCaster)
+CREATE TABLE measurements (
+  id INTEGER NOT NULL PRIMARY KEY,
+  qty INT,
+  big BIGINT,
+  amount DECIMAL(20,2),
+  ratio DOUBLE,
+  single REAL,
+  label VARCHAR(20)
+);

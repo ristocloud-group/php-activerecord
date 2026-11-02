@@ -40,6 +40,17 @@ class MysqlAdapter extends Connection
         return $this->query("SHOW COLUMNS FROM $table");
     }
 
+    /**
+     * InnoDB's _rowid: another name of a table's single integer primary key column.
+     *
+     * @internal Serves QueryCompiler and Table; not a supported API.
+     * @return list<string>
+     */
+    public function pseudo_columns(): array
+    {
+        return ['_rowid'];
+    }
+
     public function query_for_tables()
     {
         return $this->query('SHOW TABLES');
@@ -111,6 +122,51 @@ class MysqlAdapter extends Connection
     public function accepts_limit_and_order_for_update_and_delete()
     {
         return true;
+    }
+
+    /**
+     * A case-sensitive LIKE compares characters in a binary collation:
+     * "column LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin". The explicit collation has the
+     * strongest coercibility, so the column is converted to utf8mb4 as well. Whatever its character
+     * set (latin1, utf8mb3, utf8mb4), its characters compare with the pattern's in the case given, and
+     * _ is one character. CAST(? AS BINARY) compares bytes: a latin1 column never matches a non-ASCII
+     * pattern, and _ is one byte of an accented letter. LIKE BINARY ? draws MySQL's deprecation
+     * warning 1287.
+     *
+     * It assumes the connection's character set is the encoding of the data the application sends;
+     * utf8mb4 is recommended. Known limit, measured on MySQL 8.4 and 9.7, not on MariaDB: a connection
+     * that set_encoding() made latin1 (charset=latin1 in the connection URL, applied with SET NAMES,
+     * which PDO's emulated prepares do not know of) misreads a non-ASCII pattern, latin1-encoded though
+     * it is, and matches nothing (warning 1300). The same character set given to PDO itself, or
+     * server-side prepares, read it right.
+     *
+     * A case-insensitive LIKE is the default "column LIKE ?", which the column's collation decides.
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if (!$case_sensitive) {
+            return parent::like_condition($column_sql, false, $not);
+        }
+
+        return $this->like_column($column_sql) . ($not ? ' NOT LIKE' : ' LIKE') . ' CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin';
+    }
+
+    /**
+     * The operator Laravel's MySQL grammar adds, SOUNDS LIKE, which MariaDB reads too.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return ['sounds like'];
+    }
+
+    /**
+     * MySQL and MariaDB name the function that returns a random number RAND().
+     */
+    public function random_function(): string
+    {
+        return 'RAND()';
     }
 
     /**

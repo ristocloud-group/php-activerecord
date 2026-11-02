@@ -68,16 +68,12 @@ function array_flatten(array $array): array
 }
 
 /**
- * Somewhat naive way to determine if an array is a hash.
+ * Somewhat naive way to determine if an array is a hash: its first key is a string. An empty array, which has no key,
+ * is no hash, and reading it raises no error.
  */
 function is_hash(mixed &$array): bool
 {
-    if (!is_array($array)) {
-        return false;
-    }
-
-    $keys = array_keys($array);
-    return @is_string($keys[0]) ? true : false;
+    return is_array($array) && is_string(array_key_first($array));
 }
 
 /**

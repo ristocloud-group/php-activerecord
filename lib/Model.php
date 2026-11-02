@@ -77,6 +77,101 @@ use Closure;
  * @property mixed $id Primary-key attribute, present on virtually every table; resolved
  *           dynamically via {@see Model::__get()} -> read_attribute(), never a declared
  *           property since column schema is introspected at runtime.
+ * @method static list<static> get() The models of the rows of a new query on this class
+ * @method static Query<static> select(string|array<mixed> ...$columns) A new query on this class that selects these columns
+ * @method static Query<static> add_select(string|array<mixed> ...$columns) A new query on this class that selects these columns
+ * @method static Query<static> select_raw(string $sql, array<mixed> $bindings = []) A new query on this class that selects this SQL expression
+ * @method static Query<static> distinct(bool $value = true) A new query on this class that selects each row once
+ * @method static Query<static> from(string $table, ?string $as = null) A new query on this class that reads the rows from this table
+ * @method static Query<static> from_raw(string $sql, array<mixed> $bindings = []) A new query on this class that reads the rows from this SQL FROM
+ * @method static Query<static> where(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition
+ * @method static Query<static> or_where(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition
+ * @method static Query<static> where_not(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with the negation of this condition
+ * @method static Query<static> or_where_not(Closure|string|array<mixed> $column, mixed $operator = null, mixed $value = null) A new query on this class with the negation of this condition
+ * @method static Query<static> where_column(string $first, ?string $operator = null, ?string $second = null) A new query on this class that compares these columns
+ * @method static Query<static> or_where_column(string $first, ?string $operator = null, ?string $second = null) A new query on this class that compares these columns
+ * @method static Query<static> where_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition
+ * @method static Query<static> or_where_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition
+ * @method static Query<static> where_in(string $column, array<mixed> $values) A new query on this class with column IN (values)
+ * @method static Query<static> or_where_in(string $column, array<mixed> $values) A new query on this class with column IN (values)
+ * @method static Query<static> where_not_in(string $column, array<mixed> $values) A new query on this class with column NOT IN (values)
+ * @method static Query<static> or_where_not_in(string $column, array<mixed> $values) A new query on this class with column NOT IN (values)
+ * @method static Query<static> where_null(string|array<mixed> $columns) A new query on this class with these columns IS NULL
+ * @method static Query<static> or_where_null(string|array<mixed> $columns) A new query on this class with these columns IS NULL
+ * @method static Query<static> where_not_null(string|array<mixed> $columns) A new query on this class with these columns IS NOT NULL
+ * @method static Query<static> or_where_not_null(string|array<mixed> $columns) A new query on this class with these columns IS NOT NULL
+ * @method static Query<static> where_between(string $column, array<mixed> $values) A new query on this class with column BETWEEN two values
+ * @method static Query<static> or_where_between(string $column, array<mixed> $values) A new query on this class with column BETWEEN two values
+ * @method static Query<static> where_not_between(string $column, array<mixed> $values) A new query on this class with column NOT BETWEEN two values
+ * @method static Query<static> or_where_not_between(string $column, array<mixed> $values) A new query on this class with column NOT BETWEEN two values
+ * @method static Query<static> where_between_columns(string $column, array<mixed> $columns) A new query on this class with column BETWEEN two columns
+ * @method static Query<static> or_where_between_columns(string $column, array<mixed> $columns) A new query on this class with column BETWEEN two columns
+ * @method static Query<static> where_not_between_columns(string $column, array<mixed> $columns) A new query on this class with column NOT BETWEEN two columns
+ * @method static Query<static> or_where_not_between_columns(string $column, array<mixed> $columns) A new query on this class with column NOT BETWEEN two columns
+ * @method static Query<static> where_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column LIKE the pattern
+ * @method static Query<static> or_where_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column LIKE the pattern
+ * @method static Query<static> where_not_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column NOT LIKE the pattern
+ * @method static Query<static> or_where_not_like(string $column, string $value, bool $case_sensitive = false) A new query on this class with column NOT LIKE the pattern
+ * @method static Query<static> where_all(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on every column
+ * @method static Query<static> or_where_all(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on every column
+ * @method static Query<static> where_any(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on any column
+ * @method static Query<static> or_where_any(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on any column
+ * @method static Query<static> where_none(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on no column
+ * @method static Query<static> or_where_none(array<mixed> $columns, mixed $operator = null, mixed $value = null) A new query on this class with this comparison on no column
+ * @method static Query<static> where_key(mixed $id) A new query on this class with this primary key, or these
+ * @method static Query<static> where_key_not(mixed $id) A new query on this class without this primary key, or these
+ * @method static Query<static> join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null) A new query on this class with this INNER JOIN
+ * @method static Query<static> left_join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null) A new query on this class with this LEFT JOIN
+ * @method static Query<static> right_join(string $table, Closure|string $first, ?string $operator = null, ?string $second = null) A new query on this class with this RIGHT JOIN
+ * @method static Query<static> cross_join(string $table) A new query on this class with this CROSS JOIN
+ * @method static Query<static> joins(string|array<mixed> $relationships_or_sql) A new query on this class joined to these relationships, or with these JOIN fragments
+ * @method static Query<static> left_joins(string|array<mixed> $relationships) A new query on this class left joined to these relationships
+ * @method static Query<static> order_by(string $column, string $direction = 'asc') A new query on this class ordered by this column
+ * @method static Query<static> order_by_desc(string $column) A new query on this class ordered by this column, descending
+ * @method static Query<static> order_by_raw(string $sql, array<mixed> $bindings = []) A new query on this class ordered by this SQL expression
+ * @method static Query<static> latest(string $column = 'created_at') A new query on this class with the newest rows first
+ * @method static Query<static> oldest(string $column = 'created_at') A new query on this class with the oldest rows first
+ * @method static Query<static> reorder(?string $column = null, string $direction = 'asc') A new query on this class ordered by this column alone
+ * @method static Query<static> in_random_order() A new query on this class with its rows in random order
+ * @method static Query<static> group_by(string ...$columns) A new query on this class grouped by these columns
+ * @method static Query<static> group_by_raw(string $sql, array<mixed> $bindings = []) A new query on this class grouped by this SQL expression
+ * @method static Query<static> having(string $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition in its HAVING
+ * @method static Query<static> or_having(string $column, mixed $operator = null, mixed $value = null) A new query on this class with this condition in its HAVING
+ * @method static Query<static> having_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition in its HAVING
+ * @method static Query<static> or_having_raw(string $sql, array<mixed> $bindings = []) A new query on this class with this SQL condition in its HAVING
+ * @method static Query<static> having_null(string $column) A new query on this class with this column IS NULL in its HAVING
+ * @method static Query<static> having_not_null(string $column) A new query on this class with this column IS NOT NULL in its HAVING
+ * @method static Query<static> having_between(string $column, array<mixed> $values) A new query on this class with column BETWEEN two values in its HAVING
+ * @method static Query<static> limit(int $value) A new query on this class limited to this many rows
+ * @method static Query<static> take(int $value) A new query on this class limited to this many rows
+ * @method static Query<static> offset(int $value) A new query on this class that skips this many rows
+ * @method static Query<static> skip(int $value) A new query on this class that skips this many rows
+ * @method static Query<static> for_page(int $page, int $per_page = 15) A new query on this class for this page of rows
+ * @method static Query<static> with(string|array<mixed> ...$relations) A new query on this class that eager loads these relationships, in dot notation or as the include option takes them
+ * @method static Query<static> without(string ...$relations) A new query on this class, which loads none of these relationships
+ * @method static Query<static> with_only(string|array<mixed> ...$relations) A new query on this class that eager loads only these relationships
+ * @method static Query<static> when(mixed $value, callable $callback, ?callable $default = null) A new query on this class, which the callback changes when the value is true, or else the default does
+ * @method static Query<static> unless(mixed $value, callable $callback, ?callable $default = null) A new query on this class, which the callback changes when the value is false, or else the default does
+ * @method static Query<static> tap(callable $callback) A new query on this class, passed to the callback
+ * @method static Query<static> clone() A copy of a new query on this class
+ * @method static string to_sql() The SELECT of a new query on this class
+ * @method static string to_raw_sql() The SELECT of a new query on this class with its values written in it, for debugging
+ * @method static list<mixed> get_bindings() The bind values of the SELECT of a new query on this class: none
+ * @method static static first_or_fail() The model of the first row of this class, or RecordNotFound when there is none
+ * @method static mixed first_or(callable $callback) The model of the first row of this class, or what the callback returns when there is none
+ * @method static static sole() The model of the only row of this class: RecordNotFound when there is none, MultipleRecordsFound when there are more
+ * @method static static|list<static> find_or_fail(mixed $id) The model of this primary key, or the models of these: RecordNotFound when one is missing
+ * @method static list<static> find_many(array<mixed> $ids) The models of these primary keys, the missing ones left out
+ * @method static mixed find_or(mixed $id, callable $callback) The model of this primary key, or the models of these: or what the callback returns when one is missing
+ * @method static mixed value(string $column) The value of this column in the first row of this class, cast as its attribute is, or null when there is none
+ * @method static mixed sole_value(string $column) The value of this column in the only row of this class, as sole() reads it
+ * @method static array<mixed> pluck(string $column, ?string $key = null) The values of this column in the rows of this class, or keyed by the values of another
+ * @method static bool doesnt_exist() Whether this class has no row
+ * @method static int|string|float|null min(string $column) The smallest value of this column in the rows of this class, as the column's type reads it, or null when there is none
+ * @method static int|string|float|null max(string $column) The largest value of this column in the rows of this class, as the column's type reads it, or null when there is none
+ * @method static int|string|float|null sum(string $column) The exact sum of this column over the rows of this class, as the column's type reads it: 0 of that type when there is none
+ * @method static string|float|null avg(string $column) The average of this column over the rows of this class: exact for an integer or decimal column, null when there is none
+ * @method static string|float|null average(string $column) The average of this column over the rows of this class, as avg() reads it
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */
@@ -193,15 +288,31 @@ class Model
      *
      * <code>
      * class Person extends ActiveRecord\Model {
-     *   static $alias_attribute = array(
+     *   static $alias_attribute = [
      *     'alias_first_name' => 'first_name',
-     *     'alias_last_name' => 'last_name');
+     *     'alias_last_name' => 'last_name',
+     *   ];
      * }
      *
      * $person = Person::first();
      * $person->alias_first_name = 'Tito';
      * echo $person->alias_first_name;
      * </code>
+     *
+     * An alias names its column in a hash of conditions too: find(), count(), exists(),
+     * update_all() and delete_all() read `['alias_first_name' => 'Tito']` alike, and so does the
+     * declared `conditions` hash of a relationship whose associated model this is (the target of a
+     * has_many through), in the lazy load and the eager include.
+     *
+     * An alias may not have the name of a column of the model's own table, by the column's real
+     * name or by its attribute name (`space_name` for the column `space name`), nor the name of a
+     * column every table has without listing it (`rowid` on SQLite, `ctid` on Postgres): the table
+     * does not load, and the first use of the model throws a ConfigException naming the model, the
+     * alias and the column (#144). Names are compared as the database compares column names:
+     * regardless of case, except on Postgres. The check reads the columns as the table loads. A
+     * shadowing column it does not see, one added to the table afterwards (a long-running process,
+     * a stale metadata cache) or, on SQLite, a generated column (PRAGMA table_info omits it),
+     * leaves the alias winning in every condition; the next load with fresh metadata throws.
      *
      * @var array<string, string>
      */
@@ -895,6 +1006,33 @@ class Model
     }
 
     /**
+     * Starts a query on this model: the entry point of the fluent builder.
+     *
+     * <code>
+     * $authors = Author::new_query()->get();
+     * </code>
+     *
+     * The builder methods can also be called on the class itself, which is this method followed by
+     * the call: Author::get() is Author::new_query()->get() (see {@link __callStatic()}). It is
+     * not find() or any other legacy finder, so what a subclass overrides in those is not run.
+     * It is not query() either, which runs a raw SQL statement.
+     *
+     * Inside an instance method, call this one: a call such as static::where(...) made on the class from
+     * an instance method reaches {@link __call()}, not {@link __callStatic()}, and __call() answers "Call
+     * to undefined method: where". static::new_query()->where(...) is the call that works there.
+     *
+     * @return Query<static>
+     */
+    public static function new_query(): Query
+    {
+        // the query is on the class this was called on, read through its table as the legacy entries do
+        /** @var Query<static> $query */
+        $query = Query::for_table(static::table());
+
+        return $query;
+    }
+
+    /**
      * Creates a model and saves it to the database.
      *
      * @param array<string, mixed> $attributes Array of the models attributes
@@ -913,10 +1051,16 @@ class Model
      * Bulk insert-or-update. Faithful to Laravel Eloquent's upsert: a single
      * atomic operation that bypasses validations, callbacks and dirty-tracking.
      *
+     * Every row gets the created_at and updated_at it lacks, set to the current time (one time for
+     * the whole call), and updated_at is overwritten on a conflict too, unless $update is empty;
+     * the default list never overwrites created_at. {@link without_timestamps()} suspends that for
+     * this class: its rows go as given, and updated_at is not added to the columns a conflict
+     * overwrites.
+     *
      * @param array<array<string,mixed>> $values Rows to insert/update (identical keys)
      * @param array<string>|string $unique_by Column(s) identifying a record
      * @param array<string>|null $update Columns to overwrite on conflict; null = all
-     *   inserted columns; [] = plain insert (error on duplicates)
+     *   inserted columns but created_at; [] = plain insert (error on duplicates)
      * @return int Affected row count (summed across chunks)
      */
     public static function upsert(array $values, array|string $unique_by, ?array $update = null): int
@@ -973,6 +1117,8 @@ class Model
         $read_back = false;
         $returned_pk = null;
 
+        // a save() sends the timestamps its model set (set_timestamps(), which a model can override):
+        // unlike Table::insert(), insert_for_save() and insert_returning_pk() add none of their own
         if ($table->reads_back_pk() && !isset($attributes[$pk])) {
             // the database fills the pk (a sequence, an IDENTITY, a uuid default…): the
             // INSERT omits it and returns the stored value (#47, #153)
@@ -985,10 +1131,10 @@ class Model
                 unset($attributes[$pk]);
             }
 
-            $table->insert($attributes, $pk, $table->sequence);
+            $table->insert_for_save($attributes, $pk, $table->sequence);
             $use_sequence = true;
         } else {
-            $table->insert($attributes);
+            $table->insert_for_save($attributes);
         }
 
         // the row is stored under the pk values this INSERT sent or reads back below; one
@@ -1104,7 +1250,10 @@ class Model
      * An options array takes the following parameters:
      *
      * <ul>
-     * <li><b>conditions:</b> Conditions using a string/hash/array</li>
+     * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
+     * $alias_attribute, as find() reads them, and SQL that holds a statement terminator (;) outside its strings and
+     * comments is refused, as find() refuses it: MySQL, MariaDB and SQLite would end the statement there, and a
+     * limited delete would delete every record it matches</li>
      * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1116,40 +1265,15 @@ class Model
      * @return int Number of rows affected
      * @throws ActiveRecordException before any SQL for an argument that could be misread: a positional
      *   list (pass it as ['conditions' => [...]]), a hash mixing option keys with other keys
-     *   ("Unknown key(s): ..."), or an int, float or bool
+     *   ("Unknown key(s): ..."), or an int, float or bool; and for conditions whose SQL holds a statement
+     *   terminator
      */
     public static function delete_all($options = [])
     {
         $options = self::bulk_write_options($options, 'delete_all');
-        $table = static::table();
-        $conn = static::connection();
-        $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
 
-        $conditions = $options['conditions'] ?? null;
-
-        if (is_array($conditions) && !is_hash($conditions)) {
-            call_user_func_array([$sql, 'delete'], $conditions);
-        } elseif (is_hash($conditions)) {
-            // the keys name the columns (#92); two keys naming one column both stay conditions
-            $sql->delete()->where_hashes($table->condition_hashes($conditions));
-        } else {
-            $sql->delete($conditions);
-        }
-
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
-        }
-
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
-        }
-
-        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
-        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
-
-        $values = $table->format_date_bind_values($sql->bind_values());
-        $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
-        return $ret->rowCount();
+        // on the connection it always took, the hook a subclass can override
+        return self::bulk_write_query($options)->execute_delete(connection: static::connection())->rowCount();
     }
 
     /**
@@ -1169,11 +1293,20 @@ class Model
      * YourModel::update_all(['set' => 'name = "Bob"']);
      * </code>
      *
+     * A 'set' hash also sets updated_at to the current time when the table has that column and the
+     * hash gives it no value (a key gives it one by the column's name or attribute name, pre-quoted
+     * or qualified with the model's table too); without_timestamps() suspends that, and a model's
+     * override of set_timestamps() does not (it governs save() only). A 'set' string is sent as it is
+     * written, and sets nothing more.
+     *
      * An options array takes the following parameters:
      *
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with</li>
-     * <li><b>conditions:</b> Conditions using a string/hash/array</li>
+     * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
+     * $alias_attribute, as find() reads them, and SQL that holds a statement terminator (;) outside its strings and
+     * comments is refused, as find() refuses it: MySQL, MariaDB and SQLite would end the statement there, and a
+     * limited update would update every record it matches</li>
      * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1183,49 +1316,49 @@ class Model
      *
      * @param array<string, mixed> $options
      * @return int Number of rows affected
-     * @throws ActiveRecordException before any SQL: when $options is not an array or has no
-     *   'set' ("Updating requires a hash or string."), is a positional list ("Invalid options
-     *   for update_all(): pass positional conditions as ['conditions' => [...]]"), or has a key
-     *   beside 'set' that is not an option, such as a column name ("Unknown key(s): ...")
+     * @throws ActiveRecordException before any SQL: when $options is not an array, has no 'set',
+     *   or its 'set' is neither a non-empty hash nor a string ("Updating requires a hash or
+     *   string."), is a positional list ("Invalid options for update_all(): pass positional
+     *   conditions as ['conditions' => [...]]"), or has a key beside 'set' that is not an option,
+     *   such as a column name ("Unknown key(s): ..."); and for conditions whose SQL holds a statement
+     *   terminator
      */
     public static function update_all($options = [])
     {
         $options = self::bulk_write_options($options, 'update_all');
-        $table = static::table();
-        $conn = static::connection();
-        $sql = new SQLBuilder($conn, $table->get_fully_qualified_table_name());
-
-        // a DateTime in the 'set' hash is formatted for its column, as save() does (#138);
-        // the keys name the columns (#92)
         $set = $options['set'];
-        $sql->update(is_array($set) ? $table->format_date_bind_values($table->real_column_keys($set)) : $set);
 
-        if (isset($options['conditions']) && ($conditions = $options['conditions'])) {
-            if (is_array($conditions) && !is_hash($conditions)) {
-                call_user_func_array([$sql, 'where'], $conditions);
-            } elseif (is_hash($conditions)) {
-                // the keys name the columns (#92); two keys naming one column both stay conditions
-                $sql->where_hashes($table->condition_hashes($conditions));
-            } else {
-                $sql->where($conditions);
-            }
+        // bulk_write_options() refuses a missing set, and the engine an empty one; a value that is
+        // neither a hash nor a string is refused here, before any SQL, as it always was
+        if (!is_array($set) && !is_string($set)) {
+            throw new ActiveRecordException('Updating requires a hash or string.');
         }
 
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
+        // on the connection it always took, the hook a subclass can override
+        return self::bulk_write_query($options)->execute_update($set, connection: static::connection())->rowCount();
+    }
+
+    /**
+     * The query a bulk write runs: the conditions, order and limit of its options (as
+     * bulk_write_options() returns them), the only ones update_all() and delete_all() ever read,
+     * so the other finder options stay ignored.
+     *
+     * Conditions that are no array are the one argument of a condition, as they always were: a
+     * string, an object that renders one, or a scalar, a falsy one rendering no WHERE; null is none.
+     *
+     * @param array<string, mixed> $options
+     * @return Query<Model>
+     */
+    private static function bulk_write_query(array $options): Query
+    {
+        $clauses = array_intersect_key($options, ['order' => true, 'limit' => true]);
+        $conditions = $options['conditions'] ?? null;
+
+        if (null !== $conditions) {
+            $clauses['conditions'] = is_array($conditions) ? $conditions : [$conditions];
         }
 
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
-        }
-
-        // where the adapter has no LIMIT on UPDATE/DELETE (Postgres), the rows are picked by primary key (#92)
-        $sql->key_columns(array_map($table->real_column_name(...), $table->pk));
-
-        $values = $table->format_date_bind_values($sql->bind_values());
-        $ret = $conn->query(($table->last_sql = $sql->to_s()), $values);
-        return $ret->rowCount();
-
+        return Query::from_options(static::table(), $clauses);
     }
 
     /**
@@ -1526,13 +1659,22 @@ class Model
     }
 
     /**
-     * Updates a model's timestamps.
+     * Updates a model's timestamps: updated_at on every save, created_at on the first one.
+     * Does nothing while the timestamps of the model's class are suspended, see {@link without_timestamps()}.
+     *
+     * A model can override it, for save() alone: update_all() with a hash 'set', a direct Table::insert(),
+     * upsert() and the writes of the query builder fill the timestamps by the library's rule whatever it does,
+     * and only without_timestamps() suspends them.
      *
      * @return void
      */
     public function set_timestamps()
     {
-        $now = date('Y-m-d H:i:s');
+        if (Timestamps::suspended(static::class)) {
+            return;
+        }
+
+        $now = Timestamps::now();
 
         // isset() also sees a delegate of the same name (#54): only the model's own timestamps are set
         if (isset($this->updated_at) && $this->resolves_locally('updated_at')) {
@@ -1542,6 +1684,31 @@ class Model
         if (isset($this->created_at) && $this->resolves_locally('created_at') && $this->is_new_record()) {
             $this->created_at = $now;
         }
+    }
+
+    /**
+     * Runs $fn without this model class's timestamps, and returns what $fn returns: while it runs,
+     * save() (so create(), update_attributes() and the like) sets neither created_at nor updated_at,
+     * a row that Table::insert() writes straight to this class's table gets neither,
+     * update_all() with a hash 'set' does not set updated_at, and upsert() gives its rows neither
+     * and does not add updated_at to the columns a conflict overwrites. A timestamp the caller
+     * writes is still written.
+     *
+     * <code>
+     * $author = Author::without_timestamps(fn() => Author::create(['name' => 'Tito']));
+     * </code>
+     *
+     * Calls nest: the class stays suspended until the outermost one returns. The suspension ends
+     * when $fn does, also when it throws. It is for this class only: not for another model of the
+     * same table, nor for a subclass or a parent class.
+     *
+     * @template TResult
+     * @param callable(): TResult $fn
+     * @return TResult What $fn returns
+     */
+    public static function without_timestamps(callable $fn): mixed
+    {
+        return Timestamps::suspend(static::class, $fn);
     }
 
     /**
@@ -1777,9 +1944,11 @@ class Model
             // a find by pk looks a list of values up in the first pk column only: a
             // composite key names its row by every column
             $conditions = [];
+            $table = static::table();
+            $connection = static::connection(...);
 
             foreach ($pk as $name => $value) {
-                $conditions[$name] = self::date_pk_finder_value($name, $value);
+                $conditions[$name] = QueryCompiler::pk_value_for_column($table, $name, $value, $connection);
             }
 
             $found = static::find('first', ['conditions' => $conditions]);
@@ -1862,17 +2031,32 @@ class Model
      * Person::find_or_create_by_name_and_id(array('name' => 'Tito', 'id' => 1));
      * </code>
      *
+     * Any other name is a call of the query builder: a method named in {@link Query::FORWARDABLE} is
+     * called, with the arguments as given, on a new query of this class ({@link new_query()}), so
+     * that Person::get() is Person::new_query()->get(). The `@method static` tags of the class
+     * describe them. A static update() or delete() is refused, since it would write every row: use
+     * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
+     * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
+     *
+     * The forwarding answers a call made where no instance of the class is at hand: from outside, or from
+     * a static method. Inside an instance method, static::where(...) (or self::where(...), or the class's
+     * own name) reaches {@link __call()} instead, which answers "Call to undefined method: where": use
+     * static::new_query()->where(...) there.
+     *
      * @param string $method Name of method
      * @param mixed $args Method args
-     * @return Model|list<Model>|int|string|null Model or null for the find-by-attributes and
-     *   find-or-create-by-attributes dynamic finders, an array of Model for the
-     *   find-all-by-attributes finder, int|string for the count-by-attributes finder
-     * @throws ActiveRecordException if invalid query
+     * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
+     *   find-or-create-by-attributes), a list of Model (find-all-by-attributes) or an int|string
+     *   (count-by-attributes). For a builder method, what that method returns.
+     * @throws ActiveRecordException if invalid query, for a static update() or delete(), or if there
+     *   is no such method
      * @see find
      */
     public static function __callStatic($method, $args)
     {
-        $options = static::extract_and_validate_options($args);
+        // only a dynamic finder takes an options hash out of its arguments: the call of a builder
+        // method keeps them as they were given
+        $options = self::is_dynamic_finder($method) ? static::extract_and_validate_options($args) : [];
         $create = false;
 
         if (substr($method, 0, 17) == 'find_or_create_by') {
@@ -1918,7 +2102,29 @@ class Model
             return static::count($options);
         }
 
+        if ('update' === $method || 'delete' === $method) {
+            $class = static::class;
+
+            throw new ActiveRecordException("$class::$method() would write every row: use $class::where(...)->$method(...) or $class::new_query()->$method(...)");
+        }
+
+        if (in_array($method, Query::FORWARDABLE, true)) {
+            return static::new_query()->$method(...$args);
+        }
+
         throw new ActiveRecordException("Call to undefined method: $method");
+    }
+
+    /**
+     * Whether $method is one of the dynamic finders that __callStatic() answers: find_by_*,
+     * find_all_by_*, count_by_* and find_or_create_by_*.
+     */
+    private static function is_dynamic_finder(string $method): bool
+    {
+        return str_starts_with($method, 'find_by')
+            || str_starts_with($method, 'find_all_by')
+            || str_starts_with($method, 'count_by')
+            || str_starts_with($method, 'find_or_create_by');
     }
 
     /**
@@ -2064,6 +2270,7 @@ class Model
      *
      * @see find
      * @return list<Model> array of records found
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function all(/* ... */)
     {
@@ -2112,6 +2319,9 @@ class Model
         // argument alone is the pk then
         if ([] !== array_filter($args, fn($arg) => is_hash($arg))) {
             $options['conditions'] = static::pk_conditions($args[0]);
+            // the pk names its column, even where an alias is named like it: a model that declares one does
+            // not load, but a shadow the load did not see must not move the pk (spec §6.2.6)
+            $options['mapped_names'] = [];
 
             return $options;
         }
@@ -2123,14 +2333,18 @@ class Model
      * $options with the primary-key conditions $pk ANDed in front of their own conditions,
      * "<pk> AND (<conditions>)", the latter parenthesized so that an OR of theirs cannot
      * widen the pk (#149). Both are rendered as options_to_sql() renders them (a hash's
-     * names mapped to columns, $mapped_names only for the own conditions; keys qualified
-     * with the table when joining; list values expanded) and passed on as positional
-     * conditions. Without own conditions, or with ones rendering no WHERE, $pk become the
-     * conditions, as they always did.
+     * names mapped to columns, by $mapped_names in the own conditions and by no alias in the
+     * pk; keys qualified with the table when joining; list values expanded) and passed on as
+     * positional conditions. Without own conditions, or with ones rendering no WHERE, $pk become
+     * the conditions, as they always did, and the returned options map no alias in them.
+     *
+     * The pk names its column even where an alias is named like it. A model that declares one
+     * does not load (spec §6.2.6), but a shadow the load did not see (a column the table gained
+     * since, a SQLite generated column) can exist: this is the defense in depth.
      *
      * @param array<string, mixed> $pk
      * @param array<string, mixed> $options
-     * @param array<string, string>|null $mapped_names
+     * @param array<string, string>|null $mapped_names the names mapped in the own conditions; null: the model's aliases
      * @return array<string, mixed>
      */
     private static function and_pk_conditions(array $pk, array $options, ?array $mapped_names = null): array
@@ -2141,13 +2355,16 @@ class Model
             ? $table->options_to_sql(['conditions' => $options['conditions'], 'mapped_names' => $mapped_names] + $scope)
             : null;
         $options['conditions'] = $pk;
+        // the pk names its column, even where an alias is named like it: the conditions of the
+        // options are otherwise read through the model's aliases
+        $options['mapped_names'] = [];
 
         // as SQLBuilder, which renders no WHERE for a falsy one ('0' included)
         if (null === $own || !$own->get_where()) {
             return $options;
         }
 
-        $key = $table->options_to_sql(['conditions' => $pk] + $scope);
+        $key = $table->options_to_sql(['conditions' => $pk, 'mapped_names' => []] + $scope);
         $options['conditions'] = [
             $key->get_where() . ' AND (' . $own->get_where() . ')',
             ...$key->get_where_values(),
@@ -2161,24 +2378,32 @@ class Model
      * Get a count of qualifying records.
      *
      * <code>
-     * YourModel::count(array('conditions' => 'amount > 3.14159265'));
+     * YourModel::count(['conditions' => 'amount > 3.14159265']);
+     * YourModel::count(['group' => 'customer_id']); // the number of customers
      * </code>
      *
+     * It takes the arguments find() takes and builds its query from them as find() does, then counts the rows of
+     * that query with the builder's Query::count(), the one count of the library: the rows of the result. So a
+     * 'group' (and 'having') counts the groups, a 'limit' and an 'offset' the rows of their window, and a 'select'
+     * is honoured as the builder honours a select of its own: a count neither grouped nor windowed counts the rows
+     * in place (SELECT COUNT(*) in place of the select, without the order), and any other keeps the select in its
+     * subquery, SELECT COUNT(*) FROM (…) AS t (see Query::count()). The statement runs on the Table's connection, as
+     * find() and exists() run theirs, and is left in Table::$last_sql.
+     *
+     * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
+     * strings and comments is refused.
+     *
      * @see find
-     * @return int|string Number of records that matched the query; 0 when the count query
-     *   returns no row (e.g. 'limit' => 0, or an 'offset' past its single row) (#34)
+     * @return int Number of records that matched the query
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see
+     *   find()), or, with no 'select', a 'group' or a windowed 'order' that names a column by its position (see
+     *   Query::count())
      */
     public static function count(/* ... */)
     {
         $options = self::finder_conditions_from_args(func_get_args());
-        $options['select'] = 'COUNT(*)';
 
-        $table = static::table();
-        $sql = $table->options_to_sql($options);
-        $values = $table->format_date_bind_values($sql->get_where_values());
-        $row = static::connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
-
-        return false === $row ? 0 : $row[0];
+        return Query::from_options(static::table(), $options)->count();
     }
 
     /**
@@ -2190,18 +2415,25 @@ class Model
      * SomeModel::exists(array('id' => 123, 'name' => 'Tito'));
      * </code>
      *
+     * It takes the arguments find() takes, and answers whether find() would find a record, as count() counts them: the
+     * builder's Query::exists() of the query of those options, which selects 1 in them and asks the database's EXISTS().
+     * A 'limit' and an 'offset' are honoured ('limit' => 0, or an 'offset' past the rows, finds none), with the 'order'
+     * that picks the rows of the window; without a window the 'order' is left out (see Query::exists()).
+     *
+     * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
+     * strings and comments is refused.
+     *
      * @see find
      * @return boolean
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function exists(/* ... */)
     {
         $options = self::finder_conditions_from_args(func_get_args());
 
-        // Existence needs the full filtering shape (conditions, joins, from,
-        // group, having) but not ordering/paging; select a constant so the
-        // database can stop at the first matching row.
+        // whatever the options select, the rows are asked for: a constant, so that the database can stop at the first
+        // matching row, and an aggregate cannot make one row of none
         $options['select'] = '1';
-        unset($options['order'], $options['limit'], $options['offset']);
 
         return static::table()->exists($options);
     }
@@ -2216,7 +2448,8 @@ class Model
      * @see find
      * @return Model|null The first matched record or null if not found
      * @throws RecordNotFound if given pk values and none of them is found
-     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option), and before any
+     *   SQL for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function first(/* ... */)
     {
@@ -2233,7 +2466,8 @@ class Model
      * @see find
      * @return Model|null The last matched record or null if not found
      * @throws RecordNotFound if given pk values and none of them is found
-     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option), and before any
+     *   SQL for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function last(/* ... */)
     {
@@ -2288,7 +2522,11 @@ class Model
      * <li><b>joins:</b> A SQL join fragment such as: 'JOIN roles ON(roles.user_id=user.id)' or a named association on the model</li>
      * <li><b>include:</b> TODO not implemented yet</li>
      * <li><b>conditions:</b> A SQL fragment such as: 'id=1', array('id=1'), array('name=? and id=?','Tito',1), array('name IN(?)', array('Tito','Bob')),
-     * array('name' => 'Tito', 'id' => 1)</li>
+     * array('name' => 'Tito', 'id' => 1). SQL that holds a statement terminator (;) outside its strings and comments
+     * is refused before any SQL, with an ActiveRecordException: MySQL, MariaDB and SQLite would end the statement
+     * there and drop the order and the limit after it, and Postgres refuses it. A ; in a string ('a;b'), a comment
+     * or a bound value is sent as before. SQL that leaves a block comment open (a /* that nothing closes) is refused
+     * too: SQLite would run the comment to the end of the statement, and the other databases refuse it</li>
      * <li><b>limit:</b> Number of records to limit the query to. A first/last find takes one
      * record, none with a limit of 0 (#38)</li>
      * <li><b>offset:</b> The row offset to return results from for the query. A first/last find
@@ -2300,6 +2538,8 @@ class Model
      * </ul>
      *
      * @throws RecordNotFound if no options are passed or finding by pk and no records matched
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator or leaves a
+     *   block comment open
      * @return mixed An array of records found if doing a find_all otherwise a
      *   single Model object or null if it wasn't found. NULL is only return when
      *   doing a first/last find. If doing an all find and no records matched this
@@ -2481,13 +2721,17 @@ class Model
      */
     private static function pk_finder_rows(mixed $values, array $options): array
     {
-        $pk = static::table()->pk[0] ?? null;
+        $table = static::table();
+        $pk = $table->pk[0] ?? null;
+        // the values are checked on connection(), the public static a subclass can override: asked, as it
+        // always was, where a value needs it
+        $connection = static::connection(...);
         $bound = null === $pk ? $values : (is_array($values)
-            ? array_map(fn($value) => self::date_pk_finder_value($pk, $value), $values)
-            : self::date_pk_finder_value($pk, $values));
+            ? array_map(fn($value) => QueryCompiler::pk_value_for_column($table, $pk, $value, $connection), $values)
+            : QueryCompiler::pk_value_for_column($table, $pk, $values, $connection));
         $list = [];
 
-        if (null === $pk || self::keep_integer_pk_finder_values($pk, $bound)) {
+        if (null === $pk || QueryCompiler::keep_integer_pk_values($table, $pk, $bound, $connection)) {
             // ANDed with any conditions, whose alias names map as in find() (#149)
             $options = self::and_pk_conditions(static::pk_conditions($bound), $options, static::$alias_attribute);
             $list = static::table()->find($options);
@@ -2499,60 +2743,6 @@ class Model
     private static function describe_find_value(mixed $value): mixed
     {
         return $value instanceof \DateTimeInterface && !$value instanceof \Stringable ? $value->format('Y-m-d H:i:s') : $value;
-    }
-
-    /**
-     * A DateTime for a DATE pk column, as the date the column stores (like process_data()
-     * does for an update/delete). A finder binds its values positionally, in the datetime
-     * format ('2026-01-02 00:00:00' or '2026-01-02 14:00:00'), which SQLite compares as
-     * text with the stored '2026-01-02' and MySQL/MariaDB compare as a datetime. Any other
-     * value, or a DateTime for another column type, is returned as is.
-     */
-    private static function date_pk_finder_value(string $name, mixed $value): mixed
-    {
-        if (!$value instanceof \DateTimeInterface) {
-            return $value;
-        }
-
-        $table = static::table();
-        $column = $table->columns[$name] ?? $table->get_column_by_inflected_name($name);
-
-        return null !== $column && Column::DATE === $column->type ? static::connection()->date_to_string($value) : $value;
-    }
-
-    /**
-     * Leaves out of $values (a finder's pk value, or list of values) those the connection
-     * cannot compare with an INTEGER pk column: on Postgres 'abc' fails the query (22P02)
-     * and aborts the open transaction, while it can only match no row (#92). Values for
-     * another column type, and values that are all accepted, are left as they are.
-     * When no value is left no query runs, so the table's last_sql still shows the
-     * previous query.
-     *
-     * @return bool False when no value is left, so there is nothing to query
-     */
-    private static function keep_integer_pk_finder_values(string $name, mixed &$values): bool
-    {
-        $table = static::table();
-        $column = $table->columns[$table->real_column_name($name)] ?? null;
-
-        if (null === $column || Column::INTEGER !== $column->type) {
-            return true;
-        }
-
-        $connection = static::connection();
-
-        if (!is_array($values)) {
-            return $connection->accepts_integer_value($values);
-        }
-
-        $accepted = array_filter($values, $connection->accepts_integer_value(...));
-
-        if (count($accepted) === count($values)) {
-            return true;
-        }
-        $values = array_values($accepted);
-
-        return [] !== $values;
     }
 
     /**

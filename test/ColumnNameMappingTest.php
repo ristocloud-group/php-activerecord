@@ -347,9 +347,10 @@ class ColumnNameMappingTest extends DatabaseTest
 
     public function test_update_all_and_delete_all_sql_is_unchanged_for_plain_columns()
     {
+        // a 'set' hash also sets updated_at (spec §6.2.2), under its plain name too
         $this->assert_equals(1, Author::update_all(['set' => ['name' => 'x'], 'conditions' => ['author_id' => 1, 'parent_author_id' => 3]]));
         $this->assert_equals(
-            'UPDATE ' . $this->quote('authors') . ' SET ' . $this->quote('name') . '=? WHERE ' . $this->quote('author_id') . '=? AND ' . $this->quote('parent_author_id') . '=?',
+            'UPDATE ' . $this->quote('authors') . ' SET ' . $this->quote('name') . '=?, ' . $this->quote('updated_at') . '=? WHERE ' . $this->quote('author_id') . '=? AND ' . $this->quote('parent_author_id') . '=?',
             Author::table()->last_sql
         );
 

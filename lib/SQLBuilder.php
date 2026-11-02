@@ -36,6 +36,25 @@ class SQLBuilder
     private string $operation = 'SELECT';
     private ?string $table;
     private ?string $select = '*';
+
+    /** @var list<mixed> */
+    private array $select_values = [];
+
+    /** @var list<mixed> */
+    private array $from_values = [];
+
+    /** @var list<mixed> */
+    private array $join_values = [];
+
+    /** @var list<mixed> */
+    private array $group_values = [];
+
+    /** @var list<mixed> */
+    private array $having_values = [];
+
+    /** @var list<mixed> */
+    private array $order_values = [];
+
     private ?string $joins = null;
     private ?string $order = null;
     private ?int $limit = null;
@@ -50,6 +69,15 @@ class SQLBuilder
     /** @var list<mixed> */
     private array $where_values = [];
 
+    /**
+     * With joins, the only hash keys that get the table: the model's columns and pseudo-columns,
+     * by the key the database compares their names by (see Connection::column_name_key()). Null:
+     * every unqualified key gets it. See qualify_hash_keys().
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $model_columns = null;
+
     // for insert/update
     /** @var array<string, mixed>|null */
     private ?array $data = null;
@@ -60,11 +88,12 @@ class SQLBuilder
     /** The column an INSERT returns (RETURNING), if any (#47). */
     private ?string $returning = null;
 
-    // for upsert
+    // for a multi-row insert, and for an upsert, which is one
     /** @var list<string>|null */
-    private ?array $upsert_columns = null;
-    private ?int $upsert_row_count = null;
+    private ?array $rows_columns = null;
+    private ?int $rows_count = null;
 
+    // for upsert
     /** @var list<string>|null */
     private ?array $upsert_unique_by = null;
 
@@ -136,11 +165,52 @@ class SQLBuilder
     }
 
     /**
+     * The bind values of an UPDATE or a DELETE, in the order of their markers: those of the SET (see update()), of
+     * the WHERE, then of the ORDER BY when the statement writes it (see order_values()). An adapter without ORDER BY
+     * on UPDATE and DELETE writes the order only beside a limit, in the condition that picks the rows (see
+     * limited_rows_condition()), so an order it leaves out binds nothing. A value that is an array gives its elements
+     * in its place. The legacy writes give their ORDER BY no values: theirs are those of bind_values().
+     *
+     * @internal Serves the UPDATE and the DELETE of the Query engine; not a supported API.
+     * @return list<mixed>
+     */
+    public function write_bind_values(): array
+    {
+        if ([] === $this->order_values || !$this->writes_order()) {
+            return $this->bind_values();
+        }
+
+        return array_flatten([...$this->bind_values(), ...$this->order_values]);
+    }
+
+    /**
      * @return list<mixed>
      */
     public function get_where_values()
     {
         return $this->where_values;
+    }
+
+    /**
+     * The bind values of a SELECT, in the order of its clauses: those of the select (see
+     * select_values()), of the FROM (see from_values()), of the joins (see join_values()), of the
+     * WHERE (see get_where_values()), of the GROUP BY (see group_values()), of the HAVING (see
+     * having_values()), then of the ORDER BY (see order_values()), whatever the order of the calls
+     * that gave them. A value that is an array gives its elements in its place.
+     *
+     * @return list<mixed>
+     */
+    public function select_bind_values(): array
+    {
+        return array_flatten([
+            ...$this->select_values,
+            ...$this->from_values,
+            ...$this->join_values,
+            ...$this->where_values,
+            ...$this->group_values,
+            ...$this->having_values,
+            ...$this->order_values,
+        ]);
     }
 
     /**
@@ -166,12 +236,28 @@ class SQLBuilder
      * WHERE from several conditions hashes, ANDed in order: like where($hash) for each,
      * without one hash overwriting a key of another.
      *
-     * @internal Serves Table, for hashes whose keys name the same column; not a supported API.
+     * @internal Serves QueryCompiler, for hashes whose keys name the same column; not a supported API.
      * @param list<array<string, mixed>> $hashes
      */
     public function where_hashes(array $hashes): static
     {
         $this->apply_where_hashes($hashes);
+        return $this;
+    }
+
+    /**
+     * The WHERE of a query of the builder, as QueryCompiler renders it: the condition, without the
+     * keyword, and the values of its bind markers in order, both taken as they are (no Expressions
+     * pass, no table added to a name). The values are the statement's where values (see
+     * get_where_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function where_condition(string $condition, array $values): static
+    {
+        $this->where = $condition;
+        $this->where_values = array_values($values);
         return $this;
     }
 
@@ -186,12 +272,25 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the ORDER BY (see order()): the last values of the statement
+     * (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function order_values(array $values): static
+    {
+        $this->order_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * The columns that identify a row of the table (its primary key), unquoted. An adapter
      * without LIMIT/ORDER BY on UPDATE and DELETE (Postgres) picks the rows of a limited
      * UPDATE/DELETE by these columns in a subquery; without any it uses the adapter's own
      * row identity (#92). Other adapters do not use them.
      *
-     * @internal Serves Model::update_all() and Model::delete_all(); not a supported API.
+     * @internal Serves the UPDATE and DELETE of QueryCompiler; not a supported API.
      * @param list<string> $columns
      */
     public function key_columns(array $columns): static
@@ -211,12 +310,38 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the GROUP BY (see group()): they follow those of the WHERE (see
+     * select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function group_values(array $values): static
+    {
+        $this->group_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $having
      * @return $this
      */
     public function having($having)
     {
         $this->having = $having;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the HAVING (see having()): they follow those of the GROUP BY (see
+     * select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function having_values(array $values): static
+    {
+        $this->having_values = array_values($values);
         return $this;
     }
 
@@ -256,12 +381,72 @@ class SQLBuilder
     }
 
     /**
+     * The values of the bind markers in the select (see select()): the first values of the statement
+     * (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function select_values(array $values): static
+    {
+        $this->select_values = array_values($values);
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the table of the statement, a FROM written in SQL: they
+     * follow those of the select (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function from_values(array $values): static
+    {
+        $this->from_values = array_values($values);
+        return $this;
+    }
+
+    /**
      * @param string|null $joins
      * @return $this
      */
     public function joins($joins)
     {
         $this->joins = $joins;
+        return $this;
+    }
+
+    /**
+     * The values of the bind markers in the joins (see joins()), those of their ON conditions in
+     * order: they follow those of the FROM (see select_bind_values()).
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param array<mixed> $values The values, in order
+     */
+    public function join_values(array $values): static
+    {
+        $this->join_values = array_values($values);
+        return $this;
+    }
+
+    /**
+     * With joins, prefix a hash of conditions with the table only where its key names one of
+     * $columns, the model's own (its pseudo-columns included): any other key is a column of a
+     * joined table, and stays as written. Without this call every unqualified key is prefixed (#35).
+     *
+     * A key names a column the way the database matches it (see Connection::column_reference_key()):
+     * regardless of case where Connection::column_names_are_case_sensitive() is false (MySQL, MariaDB
+     * and SQLite match 'author_id' to Author_Id), and a single pre-quoted identifier by its text.
+     * Like joins(), this is read when where() applies a hash, so it comes first.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param list<string> $columns the real names of the model's columns, and the connection's
+     *                              pseudo-columns (see Connection::pseudo_columns())
+     */
+    public function qualify_hash_keys(array $columns): static
+    {
+        $this->model_columns = array_fill_keys(array_map($this->connection->column_name_key(...), $columns), true);
+
         return $this;
     }
 
@@ -290,12 +475,31 @@ class SQLBuilder
     /**
      * End the INSERT with RETURNING $column, the column's real name (#47).
      *
-     * @internal Serves Table::insert_returning_pk(); not a supported API.
+     * @internal Serves Table::insert_returning_pk(), through the Query engine; not a supported API.
      * @return $this
      */
     public function returning(string $column): static
     {
         $this->returning = $column;
+        return $this;
+    }
+
+    /**
+     * A multi-row INSERT: $row_count rows of one bind marker per column, as in
+     * "INSERT INTO t (c1, c2) VALUES (?, ?), (?, ?)". The statement holds no values: the caller
+     * binds them, row after row, each in the order of $columns. (insert() renders the INSERT of
+     * one row from a hash, which is another statement.)
+     *
+     * @internal Serves the Query engine; not a supported API.
+     * @param list<string> $columns The real names of the columns, unquoted
+     * @param int $row_count How many rows the statement inserts: at least one
+     */
+    public function insert_rows(array $columns, int $row_count): static
+    {
+        $this->operation = 'INSERT_ROWS';
+        $this->rows_columns = $columns;
+        $this->rows_count = $row_count;
+
         return $this;
     }
 
@@ -308,8 +512,8 @@ class SQLBuilder
     public function upsert(array $columns, int $row_count, array $unique_by, array $update)
     {
         $this->operation = 'UPSERT';
-        $this->upsert_columns = $columns;
-        $this->upsert_row_count = $row_count;
+        $this->rows_columns = $columns;
+        $this->rows_count = $row_count;
         $this->upsert_unique_by = $unique_by;
         $this->upsert_update = $update;
 
@@ -560,7 +764,8 @@ class SQLBuilder
 
     /**
      * prepends table name to hash of field names to get around ambiguous fields when SQL builder
-     * has joins. A key that is already table-qualified is kept as is (#35).
+     * has joins. A key that is already table-qualified is kept as is (#35), and so is one that
+     * names no column of the model, once qualify_hash_keys() gave them: a joined table's.
      *
      * Keys that end up naming the same column ('id' and `id` both become `t`.`id`) would
      * overwrite each other in one hash, so a repeated key starts a new hash: every
@@ -577,7 +782,7 @@ class SQLBuilder
         $table = $this->connection->quote_name($this->table ?? '');
 
         foreach ($hash as $key => $value) {
-            $k = $this->is_qualified_key((string) $key) ? (string) $key : $table . '.' . $this->connection->quote_name($key);
+            $k = $this->is_qualified_key((string) $key) || !$this->names_model_column((string) $key) ? (string) $key : $table . '.' . $this->connection->quote_name($key);
 
             if (array_key_exists($k, $new)) {
                 $hashes[] = $new;
@@ -608,6 +813,16 @@ class SQLBuilder
         }
 
         return count(Connection::split_name_parts($key, $q) ?? []) > 1;
+    }
+
+    /**
+     * Whether an unqualified hash-condition key names a column of the model (see
+     * qualify_hash_keys()). A single pre-quoted identifier is read by its text. Every key
+     * does until the model's columns are given.
+     */
+    private function names_model_column(string $key): bool
+    {
+        return null === $this->model_columns || isset($this->model_columns[$this->connection->column_reference_key($key)]);
     }
 
     /**
@@ -712,19 +927,39 @@ class SQLBuilder
         return $e->to_s();
     }
 
+    private function build_insert_rows(): string
+    {
+        if (null === $this->rows_columns || null === $this->rows_count) {
+            throw new ActiveRecordException('SQLBuilder: insert_rows() must be called before building an INSERT statement');
+        }
+
+        return $this->rows_insert($this->rows_columns, $this->rows_count);
+    }
+
+    /**
+     * The INSERT of a statement of several rows: all that insert_rows() renders, and what an
+     * upsert goes on from, with its conflict clause.
+     *
+     * @param list<string> $columns
+     */
+    private function rows_insert(array $columns, int $row_count): string
+    {
+        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $columns));
+
+        $one_row = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $rows = implode(', ', array_fill(0, $row_count, $one_row));
+
+        return "INSERT INTO $this->table ($keys) VALUES $rows";
+    }
+
     private function build_upsert(): string
     {
-        if (null === $this->upsert_columns || null === $this->upsert_row_count
+        if (null === $this->rows_columns || null === $this->rows_count
             || null === $this->upsert_unique_by || null === $this->upsert_update) {
             throw new ActiveRecordException('SQLBuilder: upsert() must be called before building an UPSERT statement');
         }
 
-        $keys = implode(', ', array_map([$this->connection, 'quote_name'], $this->upsert_columns));
-
-        $one_row = '(' . implode(', ', array_fill(0, count($this->upsert_columns), '?')) . ')';
-        $rows = implode(', ', array_fill(0, $this->upsert_row_count, $one_row));
-
-        $sql = "INSERT INTO $this->table ($keys) VALUES $rows";
+        $sql = $this->rows_insert($this->rows_columns, $this->rows_count);
 
         if (!empty($this->upsert_update)) {
             $sql .= ' ' . $this->connection->upsert_conflict_clause($this->upsert_unique_by, $this->upsert_update);
@@ -797,10 +1032,27 @@ class SQLBuilder
     }
 
     /**
+     * Whether an UPDATE or a DELETE writes its ORDER BY (see build_update() and build_delete()): where the adapter
+     * takes ORDER BY on them, or else inside the condition that picks the rows of a limited one.
+     */
+    private function writes_order(): bool
+    {
+        if (!$this->order) {
+            return false;
+        }
+
+        return $this->connection->accepts_limit_and_order_for_update_and_delete() || null !== $this->limited_rows_condition();
+    }
+
+    /**
      * Where the adapter has no LIMIT/ORDER BY on UPDATE and DELETE, the WHERE of a limited
      * one: the adapter's condition picking the rows, with the statement's own WHERE inside
      * it, so the bind values keep their order (#92). Null when there is no limit (an order
-     * alone is left out, as before) or the adapter offers no such condition.
+     * alone is left out, as before: it cannot widen the statement).
+     *
+     * @throws ActiveRecordException for a limit the adapter can apply neither way, with no
+     *   LIMIT on UPDATE and DELETE and no such condition: without it the statement would write
+     *   every row it matches
      */
     private function limited_rows_condition(): ?string
     {
@@ -814,7 +1066,10 @@ class SQLBuilder
             $this->order ?: null,
             $this->limit,
             array_map($this->connection->quote_name(...), $this->key_columns),
-        );
+        ) ?? throw new ActiveRecordException(sprintf(
+            '%s cannot apply the limit of an UPDATE or a DELETE: it has no LIMIT on them and no limited_rows_condition(), and the statement would write every row it matches without it, so it is not built',
+            $this->connection::class,
+        ));
     }
 
     /**

@@ -189,3 +189,30 @@ CREATE TABLE odd_columns (
   "dash-name" varchar(20),
   "some day" date
 );
+
+-- timestamp columns that differ from their attribute names (#92): "created at" is created_at, UPDATED_AT is updated_at (by case only, so mapped on Postgres only)
+CREATE TABLE odd_timestamps (
+  id serial primary key,
+  name varchar(20),
+  "created at" timestamp,
+  "UPDATED_AT" timestamp
+);
+
+-- the character sets of these columns are MySQL's (see mysql.sql): here they are text alike
+CREATE TABLE charset_words (
+  id serial primary key,
+  latin1_word varchar(20),
+  utf8mb3_word varchar(20),
+  utf8mb4_word varchar(20)
+);
+
+-- aggregates of the query builder (spec 5.4): an INT, an exact BIGINT and DECIMAL(20,2), a floating DOUBLE PRECISION and a single-precision real (a Column::STRING of raw type real: see AggregateCaster), and a text label
+CREATE TABLE measurements (
+  id serial primary key,
+  qty int,
+  big bigint,
+  amount decimal(20,2),
+  ratio double precision,
+  single real,
+  label varchar(20)
+);

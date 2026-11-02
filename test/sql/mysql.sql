@@ -187,3 +187,30 @@ CREATE TABLE odd_columns (
   `dash-name` VARCHAR(20),
   `some day` DATE
 ) ENGINE=InnoDB;
+
+-- timestamp columns that differ from their attribute names (#92): "created at" is created_at, UPDATED_AT is updated_at (by case only, so mapped on Postgres only)
+CREATE TABLE odd_timestamps (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(20),
+  `created at` DATETIME,
+  `UPDATED_AT` DATETIME
+) ENGINE=InnoDB;
+
+-- a case-sensitive LIKE in each character set a column can have: latin1, utf8mb3 (utf8) and utf8mb4
+CREATE TABLE charset_words (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `latin1_word` VARCHAR(20) CHARACTER SET latin1,
+  `utf8mb3_word` VARCHAR(20) CHARACTER SET utf8mb3,
+  `utf8mb4_word` VARCHAR(20) CHARACTER SET utf8mb4
+) ENGINE=InnoDB;
+
+-- aggregates of the query builder (spec 5.4): an INT, an exact BIGINT and DECIMAL(20,2), a floating DOUBLE and a single-precision FLOAT (real on Postgres, REAL on SQLite), and a text label
+CREATE TABLE measurements (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `qty` INT,
+  `big` BIGINT,
+  `amount` DECIMAL(20,2),
+  `ratio` DOUBLE,
+  `single` FLOAT,
+  `label` VARCHAR(20)
+) ENGINE=InnoDB;

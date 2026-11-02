@@ -403,6 +403,31 @@ abstract class Connection
     }
 
     /**
+     * Whether bind_values() binds $value as an integer, which Query::to_raw_sql() then writes bare, as the adapter binds
+     * it, where every other value is written as the quoted text it binds. Never by default: execute() binds every value
+     * as text, a bool turned into the int 0 or 1 first, and null as NULL. An adapter that binds by type overrides it, with
+     * the rule of its own bind_values().
+     *
+     * @internal Serves Query::to_raw_sql() and the adapters' bind_values(); not a supported API.
+     */
+    public function binds_as_integer(mixed $value): bool
+    {
+        return false;
+    }
+
+    /**
+     * Whether the database keeps the digits of a DECIMAL or NUMERIC column, so that its aggregates can be the exact strings
+     * it returns (spec §5.4). By default it does. An adapter whose database stores them as floating-point numbers
+     * overrides it, and the aggregates of those columns are floats.
+     *
+     * @internal Serves the aggregates of Query (AggregateCaster::kind()); not a supported API.
+     */
+    public function exact_decimals(): bool
+    {
+        return true;
+    }
+
+    /**
      * Execute a query that returns maximum of one row with one field and return it.
      *
      * @param string $sql Raw SQL string to execute.
@@ -658,6 +683,68 @@ abstract class Connection
     }
 
     /**
+     * The condition of a LIKE on a column, $column_sql as the query names it, with one bind marker
+     * for the pattern (see like_pattern()); with $not, its negation. A pattern takes the wildcards %
+     * (any characters) and _ (one character). By default the condition is "column LIKE ?", which
+     * matches in the case the database's LIKE does (as the column's collation decides on MySQL and
+     * MariaDB, ASCII letters in any case on SQLite). An adapter that can match in the case given
+     * writes the case-sensitive condition its own way; this one cannot.
+     *
+     * @throws ActiveRecordException for a case-sensitive LIKE
+     */
+    public function like_condition(string $column_sql, bool $case_sensitive, bool $not): string
+    {
+        if ($case_sensitive) {
+            throw new ActiveRecordException(sprintf('%s has no case-sensitive LIKE', static::class));
+        }
+
+        return $this->like_column($column_sql) . ($not ? ' NOT LIKE ?' : ' LIKE ?');
+    }
+
+    /**
+     * A column, $column_sql as the query names it, as a LIKE compares it: in like_condition(), and with
+     * any operator of the LIKE family in a comparison of the builder (LIKE, NOT LIKE, ILIKE, ...). As it is
+     * by default; Postgres compares its text, so that a column of another type takes a LIKE too.
+     */
+    public function like_column(string $column_sql): string
+    {
+        return $column_sql;
+    }
+
+    /**
+     * The value bound to the marker of like_condition(), from a pattern with the wildcards % and _:
+     * the pattern as it is by default. An adapter whose case-sensitive condition reads another
+     * syntax translates it.
+     */
+    public function like_pattern(string $pattern, bool $case_sensitive): string
+    {
+        return $pattern;
+    }
+
+    /**
+     * The operators a condition of the query builder takes on this database besides Laravel's own
+     * (see Query::where()), in lower case: those Laravel's grammar of the database adds. None by
+     * default, and none for SQLite, whose grammar adds none. Whatever an adapter lists, the builder
+     * refuses an operator with a ?, which would read as a bind marker: the library binds positionally.
+     *
+     * @return list<string>
+     */
+    public function extra_operators(): array
+    {
+        return [];
+    }
+
+    /**
+     * The SQL function that returns a random number, by which an ORDER BY puts the rows in random order
+     * (Query::in_random_order()): RANDOM() by default, which Postgres and SQLite have. MySQL and MariaDB
+     * name it RAND().
+     */
+    public function random_function(): string
+    {
+        return 'RANDOM()';
+    }
+
+    /**
      * Return a date time formatted into the database's date format.
      *
      * @param \DateTimeInterface $datetime The DateTime object (native \DateTime, \DateTimeImmutable or ActiveRecord\DateTime)
@@ -775,8 +862,9 @@ abstract class Connection
      * For an adapter without LIMIT/ORDER BY on UPDATE and DELETE (see
      * accepts_limit_and_order_for_update_and_delete()): a WHERE condition that keeps the
      * statement to the first $limit rows in $order, which replaces the statement's own
-     * WHERE. Null by default: the statement is built without the limit and the order, as
-     * it always has been (#92).
+     * WHERE. Null by default: SQLBuilder then refuses the limited statement (an
+     * ActiveRecordException), which it could only build without the limit, writing every
+     * row it matches. An order without a limit is left out, as it always has been (#92).
      *
      * @internal Serves SQLBuilder; not a supported API.
      * @param string $table The table as the statement names it (already quoted)
@@ -802,11 +890,57 @@ abstract class Connection
     }
 
     /**
+     * The name of a column as the database compares column names: in lower case where they are not
+     * case-sensitive (see column_names_are_case_sensitive()), else as it is. The column a query names
+     * is the one whose key equals the key of the reference (see column_reference_key()).
+     *
+     * @internal Serves SQLBuilder, Timestamps and Table; not a supported API.
+     */
+    public function column_name_key(string $name): string
+    {
+        return $this->column_names_are_case_sensitive() ? $name : strtolower($name);
+    }
+
+    /**
+     * The key, as column_name_key() gives one, of the column a query names with $reference (a hash
+     * key, a data key), read as the database reads it: a single pre-quoted identifier by its text
+     * (`a``b` is the identifier a`b), anything else as written. A name of several parts is kept
+     * whole, so it is the key of no column.
+     *
+     * @internal Serves SQLBuilder, Timestamps and Table; not a supported API.
+     */
+    public function column_reference_key(string $reference): string
+    {
+        $q = static::$QUOTE_CHARACTER;
+        $parts = str_contains($reference, $q) ? self::split_name_parts($reference, $q) : null;
+
+        // `a``b` is the identifier a`b
+        if (null !== $parts && 1 === count($parts) && $parts[0][1]) {
+            $reference = str_replace($q . $q, $q, substr($parts[0][0], 1, -1));
+        }
+
+        return $this->column_name_key($reference);
+    }
+
+    /**
+     * Columns every table has that schema introspection never lists; with joins a hash key
+     * naming one is qualified like a model column (spec §6.1), and an $alias_attribute key may
+     * not be named like one (spec §6.2.6). None by default.
+     *
+     * @internal Serves QueryCompiler and Table; not a supported API.
+     * @return list<string>
+     */
+    public function pseudo_columns(): array
+    {
+        return [];
+    }
+
+    /**
      * Whether $value can be compared with an INTEGER column without a database error.
      * True by default: MySQL, MariaDB and SQLite compare any value with an INTEGER
      * column, so 'abc' simply matches no row (#92).
      *
-     * @internal Serves Model::find_by_pk(); not a supported API.
+     * @internal Serves the finders by pk (QueryCompiler::keep_integer_pk_values()); not a supported API.
      */
     public function accepts_integer_value(mixed $value): bool
     {

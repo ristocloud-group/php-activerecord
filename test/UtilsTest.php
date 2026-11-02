@@ -63,6 +63,35 @@ class UtilsTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_equals([1, 2, 3, 4, 5, 6], AR\array_flatten([1, [2, 3], 4, [5, 6]]));
     }
 
+    // is_hash() reads the first key of an array: a hash has a string one. A list, an array whose first key is an int and an
+    // empty array, which has no key, are no hash, and neither is anything but an array
+    public function test_is_hash_reads_the_first_key_of_an_array(): void
+    {
+        foreach ([
+            'empty' => [[], false],
+            'a list' => [[1, 2], false],
+            'a hash' => [['a' => 1, 'b' => 2], true],
+            'an int key first' => [[0 => 'a', 'b' => 1], false],
+            'a string key first' => [['b' => 1, 0 => 'a'], true],
+            'a string' => ['ab', false],
+            'null' => [null, false],
+            'an int' => [1, false],
+            'an object' => [new stdClass(), false],
+        ] as $case => [$value, $hash]) {
+            $this->assert_same($hash, AR\is_hash($value), $case);
+        }
+    }
+
+    // ... and an empty array raises no error at all: is_hash() read its first key as $keys[0], whose "Undefined array key 0"
+    // warning was suppressed with @, which an error handler is called for all the same (strict_call()'s handler, or one
+    // that logs every error). The engine reads the conditions of every legacy entry with it, [] included
+    public function test_is_hash_raises_no_error_for_an_empty_array(): void
+    {
+        $empty = [];
+
+        $this->assert_false($this->strict_call(fn() => AR\is_hash($empty)));
+    }
+
     public function test_all()
     {
         $this->assert_true(AR\all(null, [null,null]));
