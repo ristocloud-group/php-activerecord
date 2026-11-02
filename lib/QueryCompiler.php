@@ -198,7 +198,7 @@ final class QueryCompiler
      * compile_aggregate(), whose rules (counted in place, or as a subquery) it follows.
      *
      * @internal Serves Query::count(); not a supported API.
-     * @throws ActiveRecordException for a state of legacy options (see compile_select())
+     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both (see compile_select())
      */
     public function compile_count(QueryState $state, string $column): SQLBuilder
     {
@@ -247,7 +247,7 @@ final class QueryCompiler
      *
      * @internal Serves Query; not a supported API.
      * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
-     * @throws ActiveRecordException for a state of legacy options (see compile_select())
+     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both (see compile_select())
      */
     public function compile_aggregate(QueryState $state, string $column, array $functions): SQLBuilder
     {

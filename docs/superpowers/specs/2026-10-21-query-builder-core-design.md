@@ -525,8 +525,11 @@ Details settled while building the terminals (Task 15):
     `count(['select' => 'DISTINCT x', 'limit' => 100])` the distinct values; the statement runs on the Table's
     connection, as `find()` and `exists()` run theirs, no longer through `static::connection()` (§6.3), and is left in
     `Table::$last_sql`, which the legacy count left alone. With no `select`, a `group` or a windowed `order` that names a
-    column by its position is refused before any statement, as the builder refuses it; it failed at the database
-    before (MySQL's "Can't group on 'COUNT(*)'").
+    column by its position is refused before any statement, as the builder refuses it. A positional `group` failed at
+    the database before (MySQL's "Can't group on 'COUNT(*)'"); a positional `order` with a window ran, its window
+    ignored (`count(['order' => '1', 'limit' => 2])` returned every row, 4 in the fixtures), and now throws. A kept
+    select with two result columns of one name meets MySQL's and MariaDB's error 1060 in the subquery
+    (`count(['joins' => ['books'], 'select' => '*', 'limit' => 5])` returned 2 before and now fails there).
   - Unchanged: the arguments and the shapes of the conditions, the alias resolution, the refusal of a `;` or an open
     block comment in the `conditions`, `joins`, `from`, and the exceptions for bad options. The golden entry
     `count_group` was re-recorded (the four adapters): `SELECT COUNT(*) FROM (SELECT 1 FROM authors GROUP BY
