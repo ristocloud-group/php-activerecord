@@ -40,6 +40,17 @@ class MysqlAdapter extends Connection
         return $this->query("SHOW COLUMNS FROM $table");
     }
 
+    /**
+     * InnoDB's _rowid: another name of a table's single integer primary key column.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @return list<string>
+     */
+    public function pseudo_columns(): array
+    {
+        return ['_rowid'];
+    }
+
     public function query_for_tables()
     {
         return $this->query('SHOW TABLES');

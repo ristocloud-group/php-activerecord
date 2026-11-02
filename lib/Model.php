@@ -2112,6 +2112,7 @@ class Model
         // argument alone is the pk then
         if ([] !== array_filter($args, fn($arg) => is_hash($arg))) {
             $options['conditions'] = static::pk_conditions($args[0]);
+            $options['mapped_names'] = []; // the pk names its column, even where an alias is named like it
 
             return $options;
         }
@@ -2123,14 +2124,15 @@ class Model
      * $options with the primary-key conditions $pk ANDed in front of their own conditions,
      * "<pk> AND (<conditions>)", the latter parenthesized so that an OR of theirs cannot
      * widen the pk (#149). Both are rendered as options_to_sql() renders them (a hash's
-     * names mapped to columns, $mapped_names only for the own conditions; keys qualified
-     * with the table when joining; list values expanded) and passed on as positional
-     * conditions. Without own conditions, or with ones rendering no WHERE, $pk become the
-     * conditions, as they always did.
+     * names mapped to columns, by $mapped_names in the own conditions and by no alias in the
+     * pk, which names its column even where an alias is named like it; keys qualified with
+     * the table when joining; list values expanded) and passed on as positional conditions.
+     * Without own conditions, or with ones rendering no WHERE, $pk become the conditions, as
+     * they always did, and the returned options map no alias in them.
      *
      * @param array<string, mixed> $pk
      * @param array<string, mixed> $options
-     * @param array<string, string>|null $mapped_names
+     * @param array<string, string>|null $mapped_names the names mapped in the own conditions; null: the model's aliases
      * @return array<string, mixed>
      */
     private static function and_pk_conditions(array $pk, array $options, ?array $mapped_names = null): array
@@ -2141,13 +2143,16 @@ class Model
             ? $table->options_to_sql(['conditions' => $options['conditions'], 'mapped_names' => $mapped_names] + $scope)
             : null;
         $options['conditions'] = $pk;
+        // the pk names its column, even where an alias is named like it: the conditions of the
+        // options are otherwise read through the model's aliases
+        $options['mapped_names'] = [];
 
         // as SQLBuilder, which renders no WHERE for a falsy one ('0' included)
         if (null === $own || !$own->get_where()) {
             return $options;
         }
 
-        $key = $table->options_to_sql(['conditions' => $pk] + $scope);
+        $key = $table->options_to_sql(['conditions' => $pk, 'mapped_names' => []] + $scope);
         $options['conditions'] = [
             $key->get_where() . ' AND (' . $own->get_where() . ')',
             ...$key->get_where_values(),
@@ -2173,12 +2178,7 @@ class Model
         $options = self::finder_conditions_from_args(func_get_args());
         $options['select'] = 'COUNT(*)';
 
-        $table = static::table();
-        $sql = $table->options_to_sql($options);
-        $values = $table->format_date_bind_values($sql->get_where_values());
-        $row = static::connection()->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
-
-        return false === $row ? 0 : $row[0];
+        return Query::from_options(static::table(), $options)->legacy_count(static::connection());
     }
 
     /**

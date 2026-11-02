@@ -81,14 +81,10 @@
     ],
     "count_alias_hash": [
         {
-            "sql": "SELECT COUNT(*) FROM `venues` WHERE `marquee`=?",
+            "sql": "SELECT COUNT(*) FROM `venues` WHERE `name`=?",
             "values": [
                 "Warner Theatre"
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'marquee' in 'WHERE'"
         }
     ],
     "count_bare_hash": [
@@ -197,14 +193,10 @@
     ],
     "exists_alias_hash": [
         {
-            "sql": "SELECT EXISTS(SELECT 1 FROM `venues` WHERE `marquee`=?)",
+            "sql": "SELECT EXISTS(SELECT 1 FROM `venues` WHERE `name`=?)",
             "values": [
                 "Warner Theatre"
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'marquee' in 'WHERE'"
         }
     ],
     "exists_conditions": [
@@ -377,14 +369,10 @@
     ],
     "joins_assoc_non_model_key": [
         {
-            "sql": "SELECT `books`.* FROM `books` INNER JOIN `authors` ON(`books`.author_id = `authors`.author_id) WHERE `books`.`parent_author_id`=?",
+            "sql": "SELECT `books`.* FROM `books` INNER JOIN `authors` ON(`books`.author_id = `authors`.author_id) WHERE `parent_author_id`=?",
             "values": [
                 3
             ]
-        },
-        {
-            "exception": "ActiveRecord\\DatabaseException",
-            "message": "PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'books.parent_author_id' in 'WHERE'"
         }
     ],
     "joins_raw": [

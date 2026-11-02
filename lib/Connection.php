@@ -802,6 +802,18 @@ abstract class Connection
     }
 
     /**
+     * Columns every table has that schema introspection never lists; with joins a hash key
+     * naming one is qualified like a model column (spec §6.1). None by default.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @return list<string>
+     */
+    public function pseudo_columns(): array
+    {
+        return [];
+    }
+
+    /**
      * Whether $value can be compared with an INTEGER column without a database error.
      * True by default: MySQL, MariaDB and SQLite compare any value with an INTEGER
      * column, so 'abc' simply matches no row (#92).
