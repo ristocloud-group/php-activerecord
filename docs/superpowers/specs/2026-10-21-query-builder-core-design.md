@@ -464,12 +464,22 @@ Details settled while building the terminals (Task 15):
     query's own; not `SELECT DISTINCT *` of a count of distinct rows, whose columns are `get()`'s; not an aggregate in
     place, which has no GROUP BY and leaves its order out). The `ActiveRecordException` says why, and to give the
     query a select of its own or to name the column. With a select of the query's own positions are accepted.
-  - A position is a top-level item of the SQL that is an integer, alone or with a direction (`ASC`, `DESC`, `NULLS
-    FIRST`, `NULLS LAST`) or `WITH ROLLUP`, its comments read as spaces: `'1'`, `'name, 2'`, `'1 DESC'`, `'1 -- c'`.
-    An integer in parentheses or after a unary `+` is one too: `(1)` is a position on the four databases and `+1` on
-    MySQL, MariaDB and SQLite (measured). An integer in an expression (`CASE WHEN a THEN 1 ELSE 0 END`,
-    `LEFT(name, 1)`), a string or a comment is none. Residual: a position bound to a `?` marker
-    (`group_by_raw('?', [1])`, which MySQL's emulated prepares inline) is not read.
+  - A position is a top-level item of the SQL that is an integer, alone or followed by the suffixes of an order in
+    any combination (`ASC`, `DESC`, `NULLS FIRST`, `NULLS LAST`, `COLLATE <name>`, `USING <operator>`, `WITH ROLLUP`):
+    `'1'`, `'name, 2'`, `'1 DESC'`, `'1 -- c'`, `'1 COLLATE NOCASE DESC'`, `'1 USING >'`. An integer in parentheses or
+    after a unary `+` is one too: `(1)` is a position on the four databases and `+1` on MySQL, MariaDB and SQLite
+    (measured). An integer in an expression (`CASE WHEN a THEN 1 ELSE 0 END`, `LEFT(name, 1)`), a string or a comment
+    is none.
+  - The SQL is read as the database of the connection reads its strings and comments, with the readings of the
+    statement terminator (`RawSqlWriter::without_literals_and_comments()`): a backslash escapes a quote on MySQL and
+    MariaDB only, `--` opens a comment there only before a space, and `#` opens one there only. Re-review of the fix,
+    measured: a first reading of every database's strings at once missed the `1` of `'C:\', 1, 'x'` on SQLite (the
+    count gave 1 where `get()` reads 4 rows) and refused `2--1` (`2 - -1`) on MySQL; and it knew no `COLLATE` or
+    `USING` after a position, which SQLite (`1 COLLATE NOCASE`) and Postgres (`1 USING >`) read as the position, so a
+    window's `sum()` gave 5 where `get()`'s rows give 3. Each is read right now; a database that does not read a
+    suffix refuses the statement anyway.
+  - Residual: a position bound to a `?` marker (`group_by_raw('?', [1])`, which MySQL's emulated prepares inline) is
+    not read.
   - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
     `authors.name`.
   - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.

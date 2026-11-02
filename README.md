@@ -661,7 +661,8 @@ Invoice::where('status', 'open')->count();                  // 3
   values (Eloquent's `COUNT(DISTINCT column)`), with the refusal of a window ordered by another column that the
   [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. With no select of the query's own,
   `count()` and `exists()` make their select themselves (`1`), so SQL of `group_by_raw()`, or of a window's
-  `order_by_raw()`, that names a column by its position (`group_by_raw('1')`, `'name, 2'`, `'(1)'`) is refused at the
+  `order_by_raw()`, that names a column by its position (`group_by_raw('1')`, `'name, 2'`, `'(1)'`,
+  `'1 COLLATE NOCASE DESC'`), read as the database of the connection reads its strings and comments, is refused at the
   call: the position would name the constant, not the column it names in `get()`. Give the query a select of its own
   (`select('name')->group_by_raw('1')->count()`), or name the column (`group_by_raw('parent_author_id')`). On a grouped
   query the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
