@@ -756,6 +756,37 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
     }
 
+    // BREAKING (the maintainer, 2026-11-02): so is the SQL of the legacy 'conditions' option that leaves a block comment
+    // open, a /* outside its strings and comments with no */ after it. SQLite ran the comment to the end of the statement:
+    // a read lost the ORDER BY and the LIMIT after it and found every row, a limited update_all() or delete_all() wrote
+    // every row it matched (the four authors here, the same SQL as master's); MySQL, MariaDB and Postgres refused it. A
+    // closed comment, or a /* in a string, is none, and the limited delete deletes the one row it picks
+    public function test_legacy_conditions_that_leave_a_block_comment_open_are_refused(): void
+    {
+        Author::table();
+        $refusal = fn(string $sql): string => "SQL '$sql' in the 'conditions' option on Author leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+
+        foreach ([
+            'all' => [fn() => Author::all(['conditions' => 'author_id > 0 /* note', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0 /* note'],
+            'find all, a positional list' => [fn() => Author::find('all', ['conditions' => ['author_id > ? /* note', 0], 'order' => 'author_id', 'limit' => 1]), 'author_id > ? /* note'],
+            'first' => [fn() => Author::first(['conditions' => 'author_id > 1 /* note', 'order' => 'author_id']), 'author_id > 1 /* note'],
+            'count' => [fn() => Author::count(['conditions' => 'author_id > 0 /* note']), 'author_id > 0 /* note'],
+            'exists' => [fn() => Author::exists(['conditions' => 'author_id > 10 /* note']), 'author_id > 10 /* note'],
+            'update_all' => [fn() => Author::update_all(['set' => ['name' => 'Z'], 'conditions' => ['author_id > ? /* note', 0], 'order' => 'author_id', 'limit' => 1]), 'author_id > ? /* note'],
+            'delete_all' => [fn() => Author::delete_all(['conditions' => 'author_id > 0 /* note', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0 /* note'],
+        ] as $case => [$call, $sql]) {
+            $this->assert_same([['exception' => ActiveRecord\ActiveRecordException::class, 'message' => $refusal($sql)]], GoldenStatements::capture($call), $case);
+        }
+
+        // nothing was written
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
+
+        $this->assert_same([1], array_map(fn(Author $author): int => $author->author_id, Author::all(['conditions' => 'author_id > 0 /* note */', 'order' => 'author_id', 'limit' => 1])));
+        $this->assert_same(1, Author::delete_all(['conditions' => "name != '/*'", 'order' => 'author_id', 'limit' => 1]));
+        $this->assert_same(3, (int) Author::count());
+    }
+
     // No options array turns the refusal off: the WHERE of Table::update() and Table::delete() is sent as given through an
     // argument of the engine (Query::execute_update(), execute_delete()), which no caller's options reach. A
     // 'refuse_terminator' key in the options of the public Table::find(), exists() and options_to_sql(), or of the

@@ -275,7 +275,8 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
-     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator, and the query is left as it was
+     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator or leaves a block comment open,
+     *   and the query is left as it was
      */
     public function select_raw(string $sql, array $bindings = []): static
     {
@@ -338,7 +339,8 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
-     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator, and the query is left as it was
+     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator or leaves a block comment open,
+     *   and the query is left as it was
      */
     public function from_raw(string $sql, array $bindings = []): static
     {
@@ -464,7 +466,9 @@ class Query
      * database of the connection reads them (see QueryCompiler::refuse_statement_terminator()), is refused too: MySQL,
      * MariaDB and SQLite would end the statement there, which cuts off the clauses that follow it, on a write its ORDER BY
      * and LIMIT, so a limited write would touch every row it matches; Postgres refuses the statement. A ; in a string
-     * ('a;b'), a comment or a bound value is sent as it is.
+     * ('a;b'), a comment or a bound value is sent as it is. SQL that leaves a block comment open, a /* outside its
+     * strings and comments that nothing closes, is refused too: SQLite runs the comment to the end of the statement,
+     * with the same effect, and MySQL, MariaDB and Postgres refuse the statement.
      *
      * Warning: the SQL is sent as written, so it must never come from user input. A line comment at its end (--, or #
      * on MySQL and MariaDB) ends at the newline that follows it, where the legacy 'conditions' option sends its SQL as
@@ -961,7 +965,7 @@ class Query
      * @throws RelationshipException at the call, for a name that is no relationship of the model, and the query
      *   is left as it was
      * @throws ActiveRecordException at the call, for an entry that is not a string, or a JOIN fragment that holds a
-     *   statement terminator, and the query is left as it was
+     *   statement terminator or leaves a block comment open, and the query is left as it was
      */
     public function joins(string|array $relationships_or_sql): static
     {

@@ -140,6 +140,35 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(1, (int) Author::count());
     }
 
+    // A block comment left open is read as Postgres reads it (QueryCompiler::refuse_statement_terminator()): it nests, so
+    // /* /* */ is still open, and /* /* */ */ closed. A dollar-quoted string holds a /*, and # is an operator, after which
+    // a /* opens a comment. The fragments accepted here are sent, and their limited delete writes one row; an open one is
+    // refused at the call, by the builder and by the legacy conditions alike, where Postgres refused the statement
+    public function test_a_block_comment_left_open_is_read_as_postgres_reads_it(): void
+    {
+        foreach (['author_id > 0 /* /* */ */', 'name != $$/*$$', "name != E'a\\'/*'"] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        Author::table();
+
+        foreach (['author_id > 0 /* /* */', "name != 'C:\\' /* '", 'author_id > 0 # /*'] as $sql) {
+            $message = "leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author $message"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in the 'conditions' option on Author $message"]],
+                GoldenStatements::capture(fn() => Author::delete_all(['conditions' => $sql, 'order' => 'author_id', 'limit' => 1])),
+                "delete_all $sql"
+            );
+        }
+
+        $this->assert_same(1, (int) Author::count());
+    }
+
     // Spec §5.3: a value that an INTEGER pk can never equal fails the statement on Postgres (22P02) and aborts the
     // transaction, so a find looks it up in no statement, as the legacy finders by pk do (#92). The table is loaded
     // first: a table read cold adds its schema read to the capture.

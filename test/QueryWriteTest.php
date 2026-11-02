@@ -583,6 +583,39 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same([2 => 'Commented', 3 => 'Bill Clinton', 4 => 'Bound'], $this->names_by_id());
     }
 
+    // SQL written by hand that leaves a block comment open, a /* outside its strings and comments with no */ after it, is
+    // refused at the call (QueryCompiler::refuse_statement_terminator()), so no write of it runs: SQLite ran the comment to
+    // the end of the statement, and wrote every row the WHERE matched, without the ORDER BY and the LIMIT (the four
+    // authors here); MySQL, MariaDB and Postgres refused it. A closed comment, or a /* in a string, is none, and the
+    // limited write writes the one row it picks
+    public function test_a_raw_fragment_that_leaves_a_block_comment_open_never_writes(): void
+    {
+        Author::table();
+
+        foreach ([
+            'where_raw' => [fn() => Author::where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->delete(), 'author_id > 0 /* note'],
+            'or_where_raw' => [fn() => Author::where('author_id', 1)->or_where_raw('author_id > 0 /* note')->limit(1)->update(['name' => 'Z']), 'author_id > 0 /* note'],
+            'order_by_raw' => [fn() => Author::where('author_id', '>', 0)->order_by_raw('author_id /* x')->limit(1)->delete(), 'author_id /* x'],
+        ] as $method => [$write, $sql]) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "SQL '$sql' in $method() on Author leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */"]],
+                GoldenStatements::capture($write),
+                $method
+            );
+        }
+
+        $this->assert_same(
+            [['exception' => ActiveRecordException::class, 'message' => "SQL 'author_id > 0 /* note' in where_raw() on Author leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */"]],
+            GoldenStatements::capture(fn() => Author::where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->update(['name' => 'X']))
+        );
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        $this->assert_same(1, Author::where_raw("name != '/*'")->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(1, Author::where_raw('author_id > 0 /* note */')->order_by('author_id')->limit(1)->update(['name' => 'Commented']));
+        $this->assert_same(1, Author::where_raw('author_id > 0')->order_by_raw('author_id DESC /* x */')->limit(1)->update(['name' => 'Closed']));
+        $this->assert_same([2 => 'Commented', 3 => 'Bill Clinton', 4 => 'Closed'], $this->names_by_id());
+    }
+
     // A limited write on an adapter that can apply the limit neither way, with no LIMIT on UPDATE and DELETE and no
     // limited_rows_condition(), is refused before any statement, as the legacy writes are (QueryEngineTest): without the
     // limit it would write every row it matches. No adapter of the library is one

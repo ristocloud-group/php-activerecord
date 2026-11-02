@@ -148,8 +148,9 @@ final class QueryCompiler
      * comment (# on MySQL and MariaDB), which would otherwise run to the end of the statement and swallow what is
      * written after the fragment: the ORDER BY and LIMIT of a limited write, which would then write every row it
      * matches, or the parenthesis that closes a group. The newline ends the comment. SQL without them is written as
-     * given. A statement terminator (;) would end the statement as surely: the methods refuse it at the call (see
-     * refuse_statement_terminator()). The legacy options never come here: their SQL is sent as given.
+     * given. A statement terminator (;) would end the statement as surely, and a block comment left open (/*) swallow
+     * what follows it on SQLite: the methods refuse both at the call (see refuse_statement_terminator()). The legacy
+     * options never come here: their SQL is sent as given.
      *
      * @internal Serves QueryCompiler and ConditionCompiler; not a supported API.
      */
@@ -401,15 +402,17 @@ final class QueryCompiler
 
     /**
      * Refuses SQL written by hand that holds a statement terminator, a ; outside its strings, its quoted identifiers
-     * and its comments as the database of the connection the statement is rendered for reads them (MySQL and MariaDB,
-     * Postgres or SQLite: see RawSqlWriter::holds_statement_terminator()), given to $source: a builder method that
-     * sends its SQL as written (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(), group_by_raw(),
+     * and its comments, or that leaves a block comment open, a /* there that nothing closes, as the database of the
+     * connection the statement is rendered for reads them (MySQL and MariaDB, Postgres or SQLite: see
+     * RawSqlWriter::holds_statement_terminator() and leaves_block_comment_open()), given to $source: a builder method
+     * that sends its SQL as written (select_raw(), from_raw(), a JOIN fragment of joins(), where_raw(), group_by_raw(),
      * having_raw(), order_by_raw() and the or_ forms), at the call (spec §5.7), or the legacy 'conditions' option,
-     * before any statement (see refuse_terminated_conditions()). MySQL and MariaDB end the statement there and run what
-     * follows it as another statement, whose error is never read, and SQLite drops what follows it: either way the
-     * clauses after it are lost, those of a limited write its ORDER BY and its LIMIT, so it writes every row it
-     * matches. Postgres refuses the statement. A ; in a string, a quoted identifier, a comment or a bound value is no
-     * terminator, and a value is bound with a ? marker.
+     * before any statement (see refuse_terminated_conditions()). MySQL and MariaDB end the statement at a ; and run what
+     * follows it as another statement, whose error is never read, and SQLite drops what follows it, or what follows an
+     * open block comment, which it runs to the end of the statement: either way the clauses after it are lost, those of
+     * a limited write its ORDER BY and its LIMIT, so it writes every row it matches. Postgres refuses both, and MySQL and
+     * MariaDB an open block comment. A ; or a /* in a string, a quoted identifier, a comment or a bound value is
+     * neither, and a value is bound with a ? marker.
      *
      * @internal Serves Conditions and Query, and the legacy conditions; not a supported API.
      * @param string $source Where the SQL was given, for the message of the exception: "where_raw()", "the 'conditions'
@@ -421,6 +424,15 @@ final class QueryCompiler
         if (RawSqlWriter::holds_statement_terminator($sql, $this->connection())) {
             throw new ActiveRecordException(sprintf(
                 "SQL '%s' in %s on %s holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker",
+                $sql,
+                $source,
+                $this->table->class->name,
+            ));
+        }
+
+        if (RawSqlWriter::leaves_block_comment_open($sql, $this->connection())) {
+            throw new ActiveRecordException(sprintf(
+                "SQL '%s' in %s on %s leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */",
                 $sql,
                 $source,
                 $this->table->class->name,
@@ -1171,12 +1183,13 @@ final class QueryCompiler
      * through the model's aliases (#144), unless the options give the names to map as
      * 'mapped_names' (an empty list maps no alias), and are then named as the columns (#92).
      *
-     * The SQL of a string or a list is refused, before any statement, when it holds a statement terminator (see
-     * refuse_terminated_conditions()), for every legacy entry that reads conditions here: the finders, count(), exists(),
+     * The SQL of a string or a list is refused, before any statement, when it holds a statement terminator or leaves a
+     * block comment open (see refuse_terminated_conditions()), for every legacy entry that reads conditions here: the finders, count(), exists(),
      * update_all() and delete_all(), and the loads of a relationship, whose declared conditions they are given.
      *
      * @param array<string, mixed> $options
-     * @throws ActiveRecordException for SQL of the conditions that holds a statement terminator
+     * @throws ActiveRecordException for SQL of the conditions that holds a statement terminator or leaves a block comment
+     *   open
      */
     private function apply_conditions(SQLBuilder $sql, array $options): void
     {
@@ -1263,9 +1276,9 @@ final class QueryCompiler
 
     /**
      * Refuses the legacy conditions of $options, a list (a string comes as a list of one), when their SQL, the first
-     * element, holds a statement terminator (see refuse_statement_terminator()). They were sent as given, and MySQL,
-     * MariaDB and SQLite ended the statement there: a limited update_all() or delete_all() wrote every row it matched,
-     * and a find read every row. Their values are bound, and a hash names columns, so neither is read.
+     * element, holds a statement terminator or leaves a block comment open (see refuse_statement_terminator()). They
+     * were sent as given, and MySQL, MariaDB and SQLite ended the statement at the one, SQLite at the other: a limited
+     * update_all() or delete_all() wrote every row it matched, and a find read every row. Their values are bound, and a hash names columns, so neither is read.
      *
      * The WHERE that Table::update() and Table::delete() are given is sent as it always was: they compile it with a
      * compiler made with $refuse_terminator false (see the constructor), an argument of the engine that no options array

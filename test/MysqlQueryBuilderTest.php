@@ -135,6 +135,36 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(4, (int) Author::count());
     }
 
+    // A block comment left open is read as MySQL and MariaDB read it (QueryCompiler::refuse_statement_terminator()): it
+    // does not nest, so /* /* */ is closed, and an executable one (/*! */, /*M! */) is open until its */. A # comment, and
+    // a string in which a backslash escapes the quote, hold a /*. The fragments accepted here are sent, and their limited
+    // delete writes one row; an open one is refused at the call, by the builder and by the legacy conditions alike, where
+    // these databases refused the statement
+    public function test_a_block_comment_left_open_is_read_as_mysql_and_mariadb_read_it(): void
+    {
+        foreach (['author_id > 0 /* /* */', 'author_id > 0 /*! AND 1 */', 'author_id > 0 /*M! AND 1 */', "name != 'a\\'/*' # /*"] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        Author::table();
+
+        foreach (['author_id > 0 /*! AND 1', 'author_id > 0 /*M! AND 1', 'author_id > 0 /*+ hint'] as $sql) {
+            $message = "leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author $message"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in the 'conditions' option on Author $message"]],
+                GoldenStatements::capture(fn() => Author::delete_all(['conditions' => $sql, 'order' => 'author_id', 'limit' => 1])),
+                "delete_all $sql"
+            );
+        }
+
+        $this->assert_same(0, (int) Author::count());
+    }
+
     // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the
     // order is an order like any other, and the database runs it
     public function test_in_random_order_is_rand(): void

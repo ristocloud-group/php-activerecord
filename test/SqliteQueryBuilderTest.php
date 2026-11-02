@@ -80,6 +80,39 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same(3, (int) Author::count());
     }
 
+    // A block comment left open is read as SQLite reads it (QueryCompiler::refuse_statement_terminator()): it does not
+    // nest, so /* /* */ is closed; a backslash escapes nothing in a string, so the /* after 'C:\' opens one; and a /* in
+    // the Tcl-style suffix of a parameter is the parameter's. SQLite runs an open comment to the end of the statement:
+    // the ORDER BY and the LIMIT of the limited delete were lost, and it deleted the four authors, builder and legacy
+    // alike (the review's case). An open one is refused at the call; the fragments accepted here are sent, and their
+    // limited delete writes one row
+    public function test_a_block_comment_left_open_is_read_as_sqlite_reads_it(): void
+    {
+        Author::table();
+        $message = "leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+
+        foreach (['author_id > 0 /* note', "name != 'C:\\' /* '", 'author_id > 0 AND [a] /* [b]'] as $sql) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author $message"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in the 'conditions' option on Author $message"]],
+                GoldenStatements::capture(fn() => Author::delete_all(['conditions' => $sql, 'order' => 'author_id', 'limit' => 1])),
+                "delete_all $sql"
+            );
+        }
+
+        $this->assert_same(4, (int) Author::count());
+
+        foreach (['author_id > 0 /* /* */', 'author_id IS NOT $a(/*)', "name != 'a/*'"] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        $this->assert_same(1, (int) Author::count());
+    }
+
     // Spec §5.2: a DATE column holds '2026-01-02', which a positional DateTime, sent as a date and time, never
     // equals as text; the builder knows the column, and sends a date
     public function test_legacy_positional_date_differs_from_the_builder(): void

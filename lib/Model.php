@@ -2513,7 +2513,8 @@ class Model
      * array('name' => 'Tito', 'id' => 1). SQL that holds a statement terminator (;) outside its strings and comments
      * is refused before any SQL, with an ActiveRecordException: MySQL, MariaDB and SQLite would end the statement
      * there and drop the order and the limit after it, and Postgres refuses it. A ; in a string ('a;b'), a comment
-     * or a bound value is sent as before</li>
+     * or a bound value is sent as before. SQL that leaves a block comment open (a /* that nothing closes) is refused
+     * too: SQLite would run the comment to the end of the statement, and the other databases refuse it</li>
      * <li><b>limit:</b> Number of records to limit the query to. A first/last find takes one
      * record, none with a limit of 0 (#38)</li>
      * <li><b>offset:</b> The row offset to return results from for the query. A first/last find
@@ -2525,7 +2526,8 @@ class Model
      * </ul>
      *
      * @throws RecordNotFound if no options are passed or finding by pk and no records matched
-     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator or leaves a
+     *   block comment open
      * @return mixed An array of records found if doing a find_all otherwise a
      *   single Model object or null if it wasn't found. NULL is only return when
      *   doing a first/last find. If doing an all find and no records matched this

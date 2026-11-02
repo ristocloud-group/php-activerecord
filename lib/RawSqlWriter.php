@@ -12,8 +12,9 @@ namespace ActiveRecord;
  * connection binds as an integer bare (see Connection::binds_as_integer()), every other value as quoted text. The
  * markers are read as PDO reads them, in one pass, so what is written is never read again.
  *
- * It also reads SQL written by hand for a statement terminator, as the database of a connection reads its strings and
- * its comments, with the sub-patterns of that reading where they agree (see holds_statement_terminator()).
+ * It also reads SQL written by hand for a statement terminator, and for a block comment left open, as the database of a
+ * connection reads its strings and its comments, with the sub-patterns of that reading where they agree (see
+ * holds_statement_terminator() and leaves_block_comment_open()).
  *
  * @internal Serves Query and QueryCompiler; not a supported API.
  * @package ActiveRecord
@@ -44,6 +45,12 @@ final class RawSqlWriter
      */
     private const string BIND_MARKER = '/' . self::SINGLE_QUOTED . '|' . self::DOUBLE_QUOTED . '|' . self::DASH_COMMENT . '|' . self::BLOCK_COMMENT . '|\?\??/s';
 
+    /**
+     * The opener of a block comment that the readings below match where no closed comment of theirs does: one that
+     * nothing closes, which runs to the end of the SQL, an open block comment (see leaves_block_comment_open()).
+     */
+    private const string OPEN_COMMENT = '\/\*';
+
     /** An identifier in backticks (MySQL, MariaDB and SQLite), a doubled backtick in it reading as two side by side. */
     private const string BACKTICKED = '`[^`]*+`';
 
@@ -52,10 +59,11 @@ final class RawSqlWriter
      * their default sql_mode: strings in single and double quotes with backslash escapes, identifiers in backticks, a
      * comment from # to the end of the line, a comment from -- only where a space or a control character follows the
      * dashes (0--1 is 0 - -1), and a block comment, which does not nest, but for an executable one (opened by /*! or
-     * /*M!), whose text they run as SQL and which is read as such. There is no dollar quote: $ is a character of
-     * identifiers and of variables (@a$$). And ;.
+     * /*M!), whose text they run as SQL and which is read as such: its opener alone, when a close follows it. There is
+     * no dollar quote: $ is a character of identifiers and of variables (@a$$). And ;, and a /* that nothing closes, an
+     * open block comment.
      */
-    private const string MYSQL_TERMINATOR = '/' . self::SINGLE_QUOTED . '|' . self::DOUBLE_QUOTED . '|' . self::BACKTICKED . '|#[^\n]*+|--(?=[\x00-\x20\x7F])[^\n]*+|\/\*(?!!|M!).*?\*\/|;/s';
+    private const string MYSQL_TERMINATOR = '/' . self::SINGLE_QUOTED . '|' . self::DOUBLE_QUOTED . '|' . self::BACKTICKED . '|#[^\n]*+|--(?=[\x00-\x20\x7F])[^\n]*+|\/\*(?!!|M!).*?\*\/|\/\*M?!(?=.*?\*\/)|' . self::OPEN_COMMENT . '|;/s';
 
     /**
      * How Postgres reads it: a standard string in single quotes, in which a backslash is a character; an escape string
@@ -63,9 +71,10 @@ final class RawSqlWriter
      * a quote; an identifier in double quotes; a dollar-quoted string ($$...$$, or $tag$...$tag$ with a tag of the
      * letters, digits and underscores of an identifier, not a digit first) opened by a $ that follows no character of an
      * identifier (a$$ is an identifier, $1 a parameter); a comment from -- to the end of the line; and a block comment,
-     * which nests. # is an operator, and a backtick no quote. And ;.
+     * which nests. # is an operator, and a backtick no quote. And ;, and a /* that nothing closes at its depth, an
+     * open block comment.
      */
-    private const string PGSQL_TERMINATOR = '/(?<![A-Za-z0-9_$\x80-\xFF])[Ee]\'(?:[^\'\\\\]++|\\\\.|\'\')*+\'|\'[^\']*+\'|"[^"]*+"|(?<![A-Za-z0-9_$\x80-\xFF])\$(?<tag>(?:[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*+)?)\$.*?\$\k<tag>\$|--[^\r\n]*+|(?<comment>\/\*(?:[^\/*]++|\*(?!\/)|\/(?!\*)|(?&comment))*+\*\/)|;/s';
+    private const string PGSQL_TERMINATOR = '/(?<![A-Za-z0-9_$\x80-\xFF])[Ee]\'(?:[^\'\\\\]++|\\\\.|\'\')*+\'|\'[^\']*+\'|"[^"]*+"|(?<![A-Za-z0-9_$\x80-\xFF])\$(?<tag>(?:[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*+)?)\$.*?\$\k<tag>\$|--[^\r\n]*+|(?<comment>\/\*(?:[^\/*]++|\*(?!\/)|\/(?!\*)|(?&comment))*+\*\/)|' . self::OPEN_COMMENT . '|;/s';
 
     /**
      * How SQLite reads it: a parameter, read first as one token as SQLite's tokenizer reads it: #, @ or :, or a $ that
@@ -73,9 +82,10 @@ final class RawSqlWriter
      * and :: of an identifier (#a, $$a, @a$$, :a::b), then a Tcl-style suffix from ( to the first ) or whitespace, in
      * which a quote, a bracket or a ; is the parameter's ($a(') and $a(;) are each one parameter); a string in single
      * quotes and an identifier in double quotes, in backticks or in brackets, where a backslash escapes nothing; a comment
-     * from -- to the end of the line; and a block comment, which does not nest. There is no dollar quote. And ;.
+     * from -- to the end of the line; and a block comment, which does not nest. There is no dollar quote. And ;, and a
+     * /* that nothing closes, an open block comment.
      */
-    private const string SQLITE_TERMINATOR = '/(?:(?<![A-Za-z0-9_$\x80-\xFF])\$|[#@:])(?:[A-Za-z0-9_$\x80-\xFF]|::)++(?:\([^\s)]*+\)?)?|\'[^\']*+\'|"[^"]*+"|' . self::BACKTICKED . '|\[[^\]]*+\]|--[^\n]*+|' . self::BLOCK_COMMENT . '|;/s';
+    private const string SQLITE_TERMINATOR = '/(?:(?<![A-Za-z0-9_$\x80-\xFF])\$|[#@:])(?:[A-Za-z0-9_$\x80-\xFF]|::)++(?:\([^\s)]*+\)?)?|\'[^\']*+\'|"[^"]*+"|' . self::BACKTICKED . '|\[[^\]]*+\]|--[^\n]*+|' . self::BLOCK_COMMENT . '|' . self::OPEN_COMMENT . '|;/s';
 
     /**
      * @param Table $table The table of the model, whose connection quotes the values and whose columns format its dates
@@ -98,10 +108,37 @@ final class RawSqlWriter
     public static function holds_statement_terminator(string $sql, Connection $connection): bool
     {
         // most SQL holds no ; at all
-        if (!str_contains($sql, ';')) {
-            return false;
-        }
+        return str_contains($sql, ';') && self::reads(';', $sql, $connection, 'a statement terminator');
+    }
 
+    /**
+     * Whether SQL written by hand leaves a block comment open for $connection: a /* outside its strings, its quoted
+     * identifiers and its comments that nothing closes, read as the database of the connection reads them, in the pass
+     * of holds_statement_terminator() (MySQL, MariaDB and SQLite do not nest block comments, and read the first close as
+     * theirs; Postgres nests them, and a comment in a comment closed once is still open there; the text of MySQL's
+     * executable comment, /*! or /*M!, is SQL, open until its close). SQLite runs such a comment to the end of the
+     * statement, so the clauses after the SQL are lost; MySQL, MariaDB and Postgres refuse the statement. A connection
+     * of no adapter of the library is read by the three, and leaves one open when any of them finds one.
+     *
+     * @internal Serves QueryCompiler::refuse_statement_terminator(); not a supported API.
+     * @throws ActiveRecordException for SQL that the pattern cannot read
+     */
+    public static function leaves_block_comment_open(string $sql, Connection $connection): bool
+    {
+        // most SQL holds no block comment at all
+        return str_contains($sql, '/*') && self::reads('/*', $sql, $connection, 'an open block comment');
+    }
+
+    /**
+     * Whether a reading of $sql by $connection (see holds_statement_terminator()) reads $token, the ; or the /* of an
+     * open block comment, outside the strings, the quoted identifiers and the comments: each match of a reading is one of
+     * those, the opener of an executable comment, or a token.
+     *
+     * @param string $what The token as the message of the exception names it
+     * @throws ActiveRecordException for SQL that the pattern cannot read
+     */
+    private static function reads(string $token, string $sql, Connection $connection, string $what): bool
+    {
         $readings = match (true) {
             $connection instanceof MysqlAdapter => [self::MYSQL_TERMINATOR],
             $connection instanceof PgsqlAdapter => [self::PGSQL_TERMINATOR],
@@ -111,10 +148,10 @@ final class RawSqlWriter
 
         foreach ($readings as $reading) {
             if (false === preg_match_all($reading, $sql, $matches)) {
-                throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for a statement terminator: %s", $sql, preg_last_error_msg()));
+                throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for %s: %s", $sql, $what, preg_last_error_msg()));
             }
 
-            if (in_array(';', $matches[0], true)) {
+            if (in_array($token, $matches[0], true)) {
                 return true;
             }
         }
