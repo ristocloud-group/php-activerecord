@@ -659,12 +659,12 @@ Invoice::where('status', 'open')->count();                  // 3
   one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)`
   counts the column's non-null values, and after `distinct()` with no select of the query's own its distinct non-null
   values (Eloquent's `COUNT(DISTINCT column)`), with the refusal of a window ordered by another column that the
-  [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. SQL of `group_by_raw()`, or of an
-  `order_by_raw()` of a window, can name the select by position (`GROUP BY 1`), so with no select of the query's own the
-  subquery selects what `get()` selects: `group_by_raw('1')->count()` counts the groups of `get()`, and with a
-  `group_by_raw()` that names a column that is not the primary key MySQL and Postgres refuse it as they refuse `get()`
-  (give the query a select of its own). On a grouped query
-  the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
+  [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. With no select of the query's own,
+  `count()` and `exists()` make their select themselves (`1`), so SQL of `group_by_raw()`, or of a window's
+  `order_by_raw()`, that names a column by its position (`group_by_raw('1')`, `'name, 2'`, `'(1)'`) is refused at the
+  call: the position would name the constant, not the column it names in `get()`. Give the query a select of its own
+  (`select('name')->group_by_raw('1')->count()`), or name the column (`group_by_raw('parent_author_id')`). On a grouped
+  query the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
 
 ### Aggregates ###
 
@@ -700,8 +700,8 @@ databases' own AVG differ in type and scale.
   aggregates every row. After `distinct()` with no select of the query's own, the subquery selects `DISTINCT col`, so
   `sum()` and `avg()` run over the column's distinct values, Eloquent's `SUM(DISTINCT col)` and `AVG(DISTINCT col)`
   (`min()` and `max()` are the same either way); with a select of its own they run over the distinct rows it selects.
-  Without `distinct()` and a select, SQL of `group_by_raw()` or of a window's `order_by_raw()`, which can name the select
-  by position, makes the subquery select what `get()` selects, as `count()` does.
+  With no select of the query's own the subquery selects the aggregated column alone, so a position in SQL of
+  `group_by_raw()` or of a window's `order_by_raw()` is refused at the call, as `count()` refuses it.
 - **A distinct aggregate refuses a window ordered by another column.** With a `limit` or an `offset`, the order of the
   query picks the distinct values in that subquery, and `SELECT DISTINCT col` cannot be ordered by another column: MySQL
   and Postgres refuse it, and MariaDB and SQLite pick the values arbitrarily. So

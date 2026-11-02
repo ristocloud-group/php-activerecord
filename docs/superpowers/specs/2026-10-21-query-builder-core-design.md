@@ -447,24 +447,29 @@ Details settled while building the terminals (Task 15):
   a GROUP BY is refused by Postgres and MySQL's ONLY_FULL_GROUP_BY. Otherwise
   it keeps the caller's select, because aliases named by GROUP BY or ORDER BY, and aggregates that collapse the rows,
   need it.
-  - An empty select is kept too where a `group_by_raw()` entry or a kept `order_by_raw()` entry may name it by
-    position (second final review, 2026-11-02): the code honoured the exclusion only for a select of the caller's own,
-    so `group_by_raw('1')->count()` sent `SELECT 1 ... GROUP BY 1`, grouped by the constant and counted 1 where `get()`
-    reads 4 rows, and `order_by_raw('2')->limit(2)->count()` was refused (no column 2 in `SELECT 1`), on the four
-    databases. The subquery now selects what `get()` selects. The cost: a `group_by_raw()` that names a column other
-    than the primary key, with no select of the query's own, is refused by MySQL and Postgres there (`*` beside such a
-    GROUP BY), as its `get()` is, where `SELECT 1` counted its groups; MariaDB and SQLite count them. A select of the
-    query's own (`select('col')->group_by_raw('col')`) counts them on every database.
-  - The aggregates of a column (§5.4) make the same choice: without DISTINCT, an empty select beside such raw SQL is
-    kept, where the aggregated column alone made `GROUP BY 1` group by that column (`group_by_raw('1')->
-    sum('parent_author_id')` summed the distinct values, 6 where `get()`'s rows sum to 8) and `ORDER BY 1` of a window
-    pick the rows of its smallest values. Under DISTINCT the subquery still selects `DISTINCT col`.
-  - Not changed, by reading: `exists()` with a `group_by_raw()` entry, a HAVING and no select selects `1`, so
-    `group_by_raw('1')->having_raw('COUNT(*) > 1')->exists()` is true where `get()` finds no row. Keeping the empty
-    select fixes it on MySQL, Postgres and SQLite but not on MariaDB 11.4, which reads `SELECT *` inside `EXISTS()` as
-    `SELECT 1` before it resolves `GROUP BY 1` (measured: `SELECT EXISTS(SELECT * FROM authors GROUP BY 1 HAVING
-    COUNT(*) > 1)` is 1 there, 0 on the others), and it would make MySQL and Postgres refuse a named raw group with a
-    HAVING, which runs today. Left for the maintainer.
+  - **A position in raw SQL is refused where the terminal makes its own select** (the maintainer, 2026-11-02, after
+    the second final review). The exclusion above held only for a select of the caller's own: with none, a wrapped
+    `count()` selected `1`, an aggregate of a column the column alone, and `exists()` `1`, raw groups included, so a
+    position named the constant or that column. On the four databases `group_by_raw('1')->count()` counted 1 group
+    where `get()` reads 4 rows, `group_by_raw('1')->sum('parent_author_id')` summed the distinct values (6, not 8),
+    `order_by_raw('1')->limit(2)->sum(...)` picked the rows of the smallest values,
+    `group_by_raw('1')->having_raw('COUNT(*) > 1')->exists()` was true where `get()` finds no row, and
+    `order_by_raw('2')->limit(2)->count()` was refused by the database. A first fix kept the empty select there (`*`,
+    as `get()`); it made MySQL and Postgres refuse the common `group_by_raw('parent_author_id')->count()` (`*` beside a
+    GROUP BY that is not the key), which `SELECT 1` counts on the four, and it could not fix `exists()` on MariaDB
+    11.4, which reads `SELECT *` inside `EXISTS()` as `SELECT 1` before it resolves `GROUP BY 1` (measured). So the
+    select choice stays as it was, and `QueryCompiler::refuse_position_in_own_select()` refuses, at the call of
+    `count()`, `min()`, `max()`, `sum()`, `avg()` and `exists()`, a `group_by_raw()` entry, or an `order_by_raw()`
+    entry that a window keeps, that holds a position, when the statement makes its select itself (no select of the
+    query's own; not `SELECT DISTINCT *` of a count of distinct rows, whose columns are `get()`'s; not an aggregate in
+    place, which has no GROUP BY and leaves its order out). The `ActiveRecordException` says why, and to give the
+    query a select of its own or to name the column. With a select of the query's own positions are accepted.
+  - A position is a top-level item of the SQL that is an integer, alone or with a direction (`ASC`, `DESC`, `NULLS
+    FIRST`, `NULLS LAST`) or `WITH ROLLUP`, its comments read as spaces: `'1'`, `'name, 2'`, `'1 DESC'`, `'1 -- c'`.
+    An integer in parentheses or after a unary `+` is one too: `(1)` is a position on the four databases and `+1` on
+    MySQL, MariaDB and SQLite (measured). An integer in an expression (`CASE WHEN a THEN 1 ELSE 0 END`,
+    `LEFT(name, 1)`), a string or a comment is none. Residual: a position bound to a `?` marker
+    (`group_by_raw('?', [1])`, which MySQL's emulated prepares inline) is not read.
   - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
     `authors.name`.
   - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.
@@ -662,6 +667,7 @@ the model and the offending input.
 | blank raw SQL in `where_raw` / `having_raw` (and `or_` forms), blank or `'0'` in `order_by_raw` / `group_by_raw`, a clause a write cannot take (a `when()` / `unless()` that skipped its callback, on `insert` / `upsert`), a write whose where came out empty | `ActiveRecordException` |
 | a statement terminator (`;` outside strings, quoted identifiers and comments), or a block comment left open, in the SQL of a `*_raw` method or a `JOIN` fragment of `joins` (§5.2) | `ActiveRecordException` |
 | a distinct aggregate of a column in a window ordered by another column (§5.4) | `ActiveRecordException` |
+| a position (`GROUP BY 1`) in `group_by_raw` or in a window's `order_by_raw`, in `count`, an aggregate of a column or `exists`, with no select of the query's own (§5.3) | `ActiveRecordException` |
 | legacy: a statement terminator, or a block comment left open, in the SQL of the `conditions` option, before any statement (§5.2, breaking §8.3) | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
