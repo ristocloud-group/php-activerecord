@@ -169,7 +169,7 @@ class QueryForwardingTest extends DatabaseTest
     // What the list may hold (spec §4.1): public builder methods of Query, once each. Not update() and
     // delete(), which are refused; not a name that Model defines, static or not, which PHP calls itself
     // and so keeps its legacy meaning (find, first, count, update_all, upsert, query, readonly, ...); not
-    // the engine's internals (from_options, to_sql_builder, state, execute_*, legacy_*).
+    // the engine's internals (from_options, to_sql_builder, state, execute_*).
     public function test_forwardable_lists_only_public_builder_methods_that_model_does_not_define(): void
     {
         $names = Query::FORWARDABLE;

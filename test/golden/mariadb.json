@@ -105,7 +105,7 @@
     ],
     "count_group": [
         {
-            "sql": "SELECT COUNT(*) FROM `authors` GROUP BY parent_author_id",
+            "sql": "SELECT COUNT(*) FROM (SELECT 1 FROM `authors` GROUP BY parent_author_id) AS t",
             "values": []
         }
     ],
@@ -130,6 +130,32 @@
             "values": [
                 "Warner Theatre"
             ]
+        }
+    ],
+    "delete_all_falsy_conditions": [
+        {
+            "sql": "DELETE FROM `authors`",
+            "values": []
+        },
+        {
+            "sql": "DELETE FROM `authors`",
+            "values": []
+        },
+        {
+            "sql": "DELETE FROM `authors`",
+            "values": []
+        },
+        {
+            "sql": "DELETE FROM `authors`",
+            "values": []
+        },
+        {
+            "sql": "DELETE FROM `authors`",
+            "values": []
+        },
+        {
+            "sql": "DELETE FROM `authors`",
+            "values": []
         }
     ],
     "delete_all_hash": [
@@ -259,6 +285,15 @@
             ]
         }
     ],
+    "find_pk_joins": [
+        {
+            "sql": "SELECT `books`.* FROM `books` INNER JOIN `authors` ON(`books`.author_id = `authors`.author_id) WHERE `books`.`book_id`=? AND (`books`.`name`=?)",
+            "values": [
+                1,
+                "Ancient Art of Main Tanking"
+            ]
+        }
+    ],
     "find_pk_list": [
         {
             "sql": "SELECT * FROM `authors` WHERE `author_id` IN(?,?)",
@@ -298,6 +333,20 @@
             ]
         }
     ],
+    "include_belongs_to_qualified_conditions": [
+        {
+            "sql": "SELECT * FROM `books`",
+            "values": []
+        },
+        {
+            "sql": "SELECT * FROM `authors` WHERE (`authors`.`name`=?) AND `author_id` IN(?,?)",
+            "values": [
+                "Tito",
+                1,
+                2
+            ]
+        }
+    ],
     "include_has_many": [
         {
             "sql": "SELECT * FROM `authors`",
@@ -306,6 +355,40 @@
         {
             "sql": "SELECT * FROM `books` WHERE `author_id` IN(?,?,?,?)",
             "values": [
+                1,
+                2,
+                3,
+                4
+            ]
+        }
+    ],
+    "include_has_many_conditions": [
+        {
+            "sql": "SELECT * FROM `venues`",
+            "values": []
+        },
+        {
+            "sql": "SELECT * FROM `events` WHERE (`type`=?) AND `venue_id` IN(?,?,?,?,?,?) ORDER BY id asc",
+            "values": [
+                "Music",
+                1,
+                2,
+                6,
+                7,
+                8,
+                9
+            ]
+        }
+    ],
+    "include_has_one_through_conditions": [
+        {
+            "sql": "SELECT * FROM `authors`",
+            "values": []
+        },
+        {
+            "sql": "SELECT `awesome_people`.*, `books`.author_id AS ar_through_author_id FROM `awesome_people` INNER JOIN `books` ON(`awesome_people`.id = `books`.book_id) WHERE (`name`=?) AND `books`.`author_id` IN(?,?,?,?)",
+            "values": [
+                "Ancient Art of Main Tanking",
                 1,
                 2,
                 3,
@@ -371,6 +454,20 @@
             ]
         }
     ],
+    "joins_from_hash": [
+        {
+            "sql": "SELECT `books`.* FROM books INNER JOIN `authors` ON(`books`.author_id = `authors`.author_id) WHERE `books`.`name`=?",
+            "values": [
+                "Ancient Art of Main Tanking"
+            ]
+        },
+        {
+            "sql": "SELECT `books`.* FROM authors INNER JOIN books ON(books.author_id = authors.author_id) WHERE `authors`.`parent_author_id`=?",
+            "values": [
+                3
+            ]
+        }
+    ],
     "joins_raw": [
         {
             "sql": "SELECT `books`.* FROM `books` INNER JOIN authors a ON a.author_id = books.Author_Id",
@@ -389,6 +486,21 @@
             "values": []
         }
     ],
+    "lazy_belongs_to_qualified_conditions": [
+        {
+            "sql": "SELECT * FROM `books` WHERE `book_id`=?",
+            "values": [
+                1
+            ]
+        },
+        {
+            "sql": "SELECT * FROM `authors` WHERE (`authors`.`name`=?) AND `author_id`=? LIMIT 0,1",
+            "values": [
+                "Tito",
+                1
+            ]
+        }
+    ],
     "lazy_has_many": [
         {
             "sql": "SELECT * FROM `authors` WHERE `author_id`=?",
@@ -399,6 +511,21 @@
         {
             "sql": "SELECT * FROM `books` WHERE `author_id`=?",
             "values": [
+                1
+            ]
+        }
+    ],
+    "lazy_has_one_through_conditions": [
+        {
+            "sql": "SELECT * FROM `authors` WHERE `author_id`=?",
+            "values": [
+                1
+            ]
+        },
+        {
+            "sql": "SELECT `awesome_people`.* FROM `awesome_people` INNER JOIN `books` ON(`awesome_people`.id = `books`.book_id) WHERE (`name`=?) AND `books`.`author_id`=? LIMIT 0,1",
+            "values": [
+                "Ancient Art of Main Tanking",
                 1
             ]
         }
@@ -414,6 +541,19 @@
             "sql": "DELETE FROM `authors` WHERE `author_id`=?",
             "values": [
                 4
+            ]
+        }
+    ],
+    "model_delete_composite_pk": [
+        {
+            "sql": "SELECT * FROM `dated_counts` ORDER BY day LIMIT 0,1",
+            "values": []
+        },
+        {
+            "sql": "DELETE FROM `dated_counts` WHERE `day`=? AND `at`=?",
+            "values": [
+                "2026-01-01",
+                "2026-01-01 10:00:00"
             ]
         }
     ],
@@ -443,6 +583,59 @@
             ]
         }
     ],
+    "save_update_composite_pk": [
+        {
+            "sql": "SELECT * FROM `dated_counts` ORDER BY day LIMIT 0,1",
+            "values": []
+        },
+        {
+            "sql": "UPDATE `dated_counts` SET `hits`=? WHERE `day`=? AND `at`=?",
+            "values": [
+                99,
+                "2026-01-01",
+                "2026-01-01 10:00:00"
+            ]
+        }
+    ],
+    "table_delete_direct": [
+        {
+            "sql": "DELETE FROM `authors` WHERE `author_id`=?",
+            "values": [
+                3
+            ]
+        },
+        {
+            "sql": "DELETE FROM `dated_counts` WHERE `day`=? AND `at`=?",
+            "values": [
+                "2026-01-02",
+                "2026-01-02 10:00:00"
+            ]
+        }
+    ],
+    "table_delete_direct_positional": [
+        {
+            "exception": "TypeError",
+            "message": "Cannot assign array to property ActiveRecord\\SQLBuilder::$where of type ?string"
+        }
+    ],
+    "table_exists_direct": [
+        {
+            "sql": "SELECT EXISTS(SELECT * FROM `authors` WHERE author_id > 1)",
+            "values": []
+        },
+        {
+            "sql": "SELECT EXISTS(SELECT * FROM `authors` WHERE author_id > ?)",
+            "values": [
+                1
+            ]
+        },
+        {
+            "sql": "SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM `authors` WHERE `name`=? ORDER BY name LIMIT 1) AS t)",
+            "values": [
+                "Tito"
+            ]
+        }
+    ],
     "table_insert_direct": [
         {
             "sql": "INSERT INTO `authors`(`name`,`created_at`,`updated_at`) VALUES(?,?,?)",
@@ -453,6 +646,27 @@
             ]
         }
     ],
+    "table_update_direct": [
+        {
+            "sql": "UPDATE `authors` SET `name`=? WHERE author_id = 1",
+            "values": [
+                "String"
+            ]
+        },
+        {
+            "sql": "UPDATE `authors` SET `name`=? WHERE `author_id`=?",
+            "values": [
+                "Hash",
+                3
+            ]
+        }
+    ],
+    "table_update_direct_positional": [
+        {
+            "exception": "TypeError",
+            "message": "Cannot assign array to property ActiveRecord\\SQLBuilder::$where of type ?string"
+        }
+    ],
     "update_all_alias_hash": [
         {
             "sql": "UPDATE `venues` SET `state`=? WHERE `name`=?",
@@ -460,6 +674,32 @@
                 "XX",
                 "Warner Theatre"
             ]
+        }
+    ],
+    "update_all_falsy_conditions": [
+        {
+            "sql": "UPDATE `authors` SET name = 'Z'",
+            "values": []
+        },
+        {
+            "sql": "UPDATE `authors` SET name = 'Z'",
+            "values": []
+        },
+        {
+            "sql": "UPDATE `authors` SET name = 'Z'",
+            "values": []
+        },
+        {
+            "sql": "UPDATE `authors` SET name = 'Z'",
+            "values": []
+        },
+        {
+            "sql": "UPDATE `authors` SET name = 'Z'",
+            "values": []
+        },
+        {
+            "sql": "UPDATE `authors` SET name = 'Z'",
+            "values": []
         }
     ],
     "update_all_hash": [

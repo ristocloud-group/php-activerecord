@@ -95,6 +95,80 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same(['Tito'], array_map(fn(Author $author): string => $author->name, Author::select('name')->group_by('name')->having('name', 'ilike', 't%')->get()));
     }
 
+    // A ; in a dollar-quoted string ($$...$$, $tag$...$tag$) or in an identifier in double quotes is no statement
+    // terminator: the SQL is sent, and Postgres reads the string and the identifier (a ; outside them is refused at the call,
+    // QueryWhereTest). A $1 opens no dollar quote, and a ; after it is refused
+    public function test_a_semicolon_in_a_dollar_quoted_string_is_sent(): void
+    {
+        $names = fn(array $authors): array => array_map(fn(Author $author): string => $author->name, $authors);
+        Author::new_query()->insert(['name' => 'a;b']);
+
+        $this->assert_same(['a;b'], $names(Author::where_raw('name = $$a;b$$')->get()));
+        $this->assert_same(['a;b'], $names(Author::where_raw('name IN($tag$a;b$tag$, $$;$$)')->get()));
+        $this->assert_same(1, Author::where_raw('name != $$a;b$$')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(['George W. Bush'], array_map(fn(Author $author): string => $author->{'a;b'}, Author::select_raw('name AS "a;b"')->order_by('author_id')->limit(1)->get()));
+        $this->assert_exception_message_contains("SQL 'name = $1;' in where_raw() on Author holds a statement terminator (;)", fn() => Author::where_raw('name = $1;'), ActiveRecord\ActiveRecordException::class);
+    }
+
+    // Postgres reads a statement terminator as it reads SQL (QueryCompiler::refuse_statement_terminator()): a standard
+    // string has no backslash escape, an E'' string has them (and a doubled quote), an identifier is in double quotes, a
+    // dollar quote opens at a $ that follows no character of an identifier (a$$ is an identifier), -- always opens a
+    // comment, and a block comment nests. # is an operator and a backtick no quote: a ; after them is refused, as is one
+    // after 'C:\', where the string ends. The fragments accepted here are sent, and their limited delete writes one row
+    public function test_a_statement_terminator_is_read_as_postgres_reads_it(): void
+    {
+        foreach (["name != e'it''s;' AND name != E'a\\';b'", 'author_id > 0 /* /* */ ; */', 'author_id > 0--1;'] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        Author::table();
+
+        foreach ([
+            "name != 'C:\\' ; '",
+            'author_id > 0 # ;',
+            'author_id > 0 AND `a;b` IS NULL',
+            'author_id > 0 OR @a$$ IS NULL; @b$$',
+            'author_id > 0 OR a$$ IS NULL; $$',
+        ] as $sql) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+        }
+
+        $this->assert_same(1, (int) Author::count());
+    }
+
+    // A block comment left open is read as Postgres reads it (QueryCompiler::refuse_statement_terminator()): it nests, so
+    // /* /* */ is still open, and /* /* */ */ closed. A dollar-quoted string holds a /*, and # is an operator, after which
+    // a /* opens a comment. The fragments accepted here are sent, and their limited delete writes one row; an open one is
+    // refused at the call, by the builder and by the legacy conditions alike, where Postgres refused the statement
+    public function test_a_block_comment_left_open_is_read_as_postgres_reads_it(): void
+    {
+        foreach (['author_id > 0 /* /* */ */', 'name != $$/*$$', "name != E'a\\'/*'"] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        Author::table();
+
+        foreach (['author_id > 0 /* /* */', "name != 'C:\\' /* '", 'author_id > 0 # /*'] as $sql) {
+            $message = "leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author $message"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in the 'conditions' option on Author $message"]],
+                GoldenStatements::capture(fn() => Author::delete_all(['conditions' => $sql, 'order' => 'author_id', 'limit' => 1])),
+                "delete_all $sql"
+            );
+        }
+
+        $this->assert_same(1, (int) Author::count());
+    }
+
     // Spec §5.3: a value that an INTEGER pk can never equal fails the statement on Postgres (22P02) and aborts the
     // transaction, so a find looks it up in no statement, as the legacy finders by pk do (#92). The table is loaded
     // first: a table read cold adds its schema read to the capture.

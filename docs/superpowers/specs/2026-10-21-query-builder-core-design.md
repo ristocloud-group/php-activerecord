@@ -53,7 +53,8 @@ The decisions already taken for sub-project 1 are recorded in Appendix A.
 
 - Changing the semantics of the existing static methods (`find`, `first`, `last`, `all`, `count`, `exists`,
   `create`, `query`, `upsert`, `update_all`, `delete_all`…). They stay legacy, and a future major could align
-  them (out of scope).
+  them (out of scope). Two exceptions, decided by the maintainer on 2026-11-02: `count` runs the builder's `count()`,
+  and `exists` honours a `limit` and an `offset` as the builder's `exists()` does (§5.3).
 - Collections: terminals return arrays, as `find('all')` does. The library takes no dependency on Laravel.
 - Soft delete in the builder: it comes from scopes (sub-project 3). Until then the builder bypasses the
   finder overrides of consumer subclasses (see §8.3).
@@ -101,7 +102,9 @@ on MySQL and SQLite. Only `find()` passes `mapped_names`. Twenty-two monolith mo
   - An unknown operator is silently taken as the value with `=` (`Query\Builder::where`).
   - `count()` wraps the query in a subquery only with `having` or `union`. So with `group_by` alone it returns
     the first group's count, and with an offset it returns 0.
-  - `sum()` casts the driver's string with `(int)` or `(float)`.
+  - `sum()` returns the driver's value as it is, or 0 when it is falsy, with no cast: the cast is in
+    `numericAggregate()`, which `sum()` does not call (corrected by the final review, 2026-10-30, from the 13.x
+    source; this line said that `sum()` casts with `(int)` or `(float)`).
 - **`Column`** maps `float`, `double`, `numeric` and `decimal` all to `Column::DECIMAL` and keeps no scale.
   Exact vs floating point is told apart by `Column::$raw_type` (§5.4).
 - **The monolith** (read-only check):
@@ -327,6 +330,92 @@ More builder rules:
 | `limit` / `offset` | Integers ≥ 0: a negative value throws. The parameters are typed `int`, so PHP's own coercion applies to other scalars (`'5'` → 5; a fractional float raises PHP's deprecation). `limit(0)` is `LIMIT 0` and finds nothing (#34). The legacy `limit`/`offset` options keep their current handling (`SQLBuilder::limit()` / `offset()`) |
 | `order_by` | `asc`/`desc` (case-insensitive), anything else throws. The legacy `order` option stays a raw string |
 
+Details settled by the final review (2026-10-30):
+
+- **SQL written by hand is followed by a newline when it holds `--` or `#`.** `select_raw`, `from_raw`, a `JOIN`
+  fragment of `joins()`, `where_raw`, `having_raw`, `group_by_raw`, `order_by_raw` and the `or_` forms send their SQL
+  as written, but SQL that holds `--` or `#` and does not end with a newline gets one (`QueryCompiler::raw_fragment()`).
+  A line comment at its end (`--`, or `#` on MySQL and MariaDB) then stops there, and cannot swallow the clauses
+  that follow: the ORDER BY and LIMIT of a limited write, which would otherwise write every row it matches, or the
+  parenthesis of a group. SQL without those markers renders byte-identically, and a `#` that is no comment (the
+  Postgres operator, a literal) only gains a harmless newline. This supersedes the Task 19 ruling (document only):
+  the fix has no false positive. The legacy `conditions` option is unchanged by it: its SQL is sent as given, so a
+  trailing comment still cuts off what follows it there. A `;` was first left to the documentation; it is refused
+  since (below).
+- **A statement terminator in SQL written by hand is refused** (the maintainer, 2026-10-30, after the final
+  re-review). A `;` outside the strings, the quoted identifiers and the comments of a fragment ends the statement on
+  MySQL and MariaDB (PDO's emulated prepares send it with what follows, which runs as another statement whose error is
+  never read) and on SQLite (the prepare drops what follows): the clauses after it were lost, and a limited write wrote
+  every row it matched, a read read every row. Postgres refuses the statement. One rule in the engine, read as the
+  database of the connection reads SQL (review of the residual patch: a reading of every database's quoting at once let
+  through a `;` that one of them reads outside, and a limited delete wrote every row it matched):
+  `RawSqlWriter::holds_statement_terminator()` reads the SQL in one pass, only when it holds a `;`, with the
+  sub-patterns of `to_raw_sql()`'s scanner where they agree, and `QueryCompiler::refuse_statement_terminator()` throws
+  an `ActiveRecordException` that names where the SQL was given, the model and the SQL, and says why.
+  - MySQL and MariaDB, in the default sql_mode: strings in single and double quotes with `''` and `\` escapes,
+    backtick identifiers, `#` comments, `--` comments only before a space or a control character (`0--1` is `0 - -1`),
+    block comments that do not nest, and the text of an executable comment (`/*!`, `/*M!`) read as the SQL they run.
+    No dollar quote: `$` is a character of identifiers and of variables (`@a$$`).
+  - Postgres: standard strings with no backslash escape, `E''` strings with them and with `''`, double-quoted
+    identifiers, dollar quotes (`$$...$$`, `$tag$...$tag$`) opened by a `$` that follows no identifier character (`a$$`
+    is an identifier, `$1` a parameter), `--` comments and nested block comments. `#` is an operator, a backtick no
+    quote.
+  - SQLite: strings, and double-quoted, backtick and bracket identifiers, with no backslash escape; `--` comments and
+    block comments that do not nest. No dollar quote: `#`, `$`, `@` and `:` start a parameter, read first as one token
+    as SQLite's tokenizer reads it, its name (`::` in it) and a Tcl-style suffix from `(` to the first `)` or
+    whitespace, in which a quote, a bracket or a `;` is the parameter's (`$a(')`, `$a(;)`).
+  - A connection of no adapter of the library is read the three ways, and refused when any finds a `;` outside.
+  - The builder refuses it at the call (§5.7), reads and writes alike, in `select_raw`, `from_raw`, a `JOIN` fragment
+    of `joins`, `where_raw`, `having_raw`, `group_by_raw`, `order_by_raw` and the `or_` forms.
+  - The legacy `conditions` option refuses it before any statement, a string or the SQL of a positional list, in
+    `find` (every form, a find by pk with conditions included), `count`, `exists`, `update_all` and `delete_all`
+    (`QueryCompiler::apply_conditions()`): a breaking change (§8.3). A `;` with nothing after it, which every database
+    ran, is refused too. A relationship's declared conditions reach the same point, ANDed with the key in
+    parentheses, which every database refused before (a `DatabaseException`); they now throw the
+    `ActiveRecordException` before the load's statement.
+  - Not read: the other legacy options (`select`, `joins`, `from`, `group`, `having`, `order`), the `$where` of
+    `Table::update()` / `Table::delete()` (an argument of the engine, `Query::execute_update()` / `execute_delete()`,
+    which no options array reaches, so the public `Table::find()`, `exists()` and `options_to_sql()` cannot turn the
+    refusal off; `save()` and `Model::delete()` give a pk hash) and `find_by_sql()`. A hash binds its values and names
+    columns.
+  - A `;` in a string, a quoted identifier, a comment or a bound value is no terminator, and SQL without a `;` is
+    never scanned. Golden unchanged: no corpus case holds one.
+  - Measured on the four (a limited delete of `limit(1)` over four authors), every `;` that a reading of all the
+    databases at once let through is refused on the database that reads it outside: `author_id > 0--1;` on MySQL and
+    MariaDB (it deleted three authors), `name != 'C:\' ; '`, `author_id IS NOT #a;` and `author_id IS NOT $$a;b$$` on
+    SQLite (four each), `author_id > 0 OR @a$$ IS NULL; @b$$` on MySQL, MariaDB and SQLite (four), and a
+    `/*! ; */` on MySQL and MariaDB. Each is accepted where its database reads it inside: `0--1;` and `$$a;b$$` on
+    Postgres, `'C:\' ; '` and `# ;` on MySQL and MariaDB. After the review of that round, SQLite's Tcl-style parameters
+    too: `author_id IS NOT $a(') ; '` and `author_id IS NOT @a([) ; ]` (a reading that opened a string or a bracket in
+    the parentheses let them through, and the limited delete, builder or legacy, deleted the four authors) are refused,
+    and `author_id IS NOT $a(;)` is accepted: its LIMIT applies (one author deleted).
+  - Residual, measured: the MySQL and MariaDB reading is that of the default sql_mode. A session with
+    `NO_BACKSLASH_ESCAPES` reads `'C:\'` as a whole string, and `name != 'C:\' ; '`, accepted, deleted the four
+    authors there; with `ANSI_QUOTES` a double-quoted identifier ending in a backslash is an unknown column. The library
+    sets no sql_mode. Residual, by reading (second final review, 2026-11-02): the reading also assumes a connection
+    character set in which a `\` byte is always a backslash (utf8mb4, utf8, latin1, ...). In GBK, Big5 or SJIS a `0x5C`
+    byte can be the second byte of a character, so `'\xbf\x5c' ; '` reads as one string to the check and as a string, a
+    terminator and an open quote to the server: a fragment built for it can hide a `;`. Conservative, the other way
+    (measured on SQLite 3.46): a `;` in a block comment left open, which SQLite runs to the end of the SQL, is refused
+    as a terminator.
+- **A block comment left open in SQL written by hand is refused** (the maintainer, 2026-11-02, after the second final
+  review). A `/*` outside the strings, the quoted identifiers and the comments of a fragment that nothing closes runs,
+  on SQLite, to the end of the statement: `where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->delete()`
+  deleted the four authors, an update updated them, a read read them, and so did the legacy
+  `delete_all(['conditions' => 'author_id > 0 /* note', 'order' => 'author_id', 'limit' => 1])`. MySQL, MariaDB (1064)
+  and Postgres (42601, "unterminated /* comment") refuse the statement.
+  - One rule with the `;`: `RawSqlWriter::leaves_block_comment_open()` reads the SQL in the pass of
+    `holds_statement_terminator()`, with the same readings (each gains the opener of a comment that no closed comment
+    of its own matches), only when the SQL holds `/*`, and `QueryCompiler::refuse_statement_terminator()` throws an
+    `ActiveRecordException` that names the open comment, after the `;` check (a `;` in an open comment is refused as a
+    terminator, as before).
+  - The comment rules are each database's: MySQL, MariaDB and SQLite do not nest block comments (`/* /* */` is
+    closed), Postgres nests them (`/* /* */` is open, `/* /* */ */` closed), and MySQL's executable comments (`/*!`,
+    `/*M!`), whose text is SQL, are open until their `*/`. A `/*` in a string, a quoted identifier, a line comment, a
+    dollar quote (Postgres), the Tcl-style suffix of a parameter (SQLite: `$a(/*)`) or a bound value is none.
+  - The scope is the `;`'s: the builder's raw methods and `JOIN` fragments at the call, and the legacy `conditions`
+    option before any statement, a breaking change (§8.3), in the same entries; nothing else of the legacy API.
+
 ### 5.3 Read terminals
 
 | Terminal | Semantics | vs Eloquent / legacy |
@@ -339,15 +428,33 @@ More builder rules:
 | `find_or_fail($id)` / `find_many($ids)` / `find_or($id, $cb)` | `RecordNotFound` with the legacy message if any is missing / a list / the callback | — |
 | `value($col)` / `sole_value($col)` | the column of the first record, **cast like a model attribute** (`Column::cast`, exact BIGINT as in #44, and today's DECIMAL → float of #146) | same |
 | `pluck($col, $key = null)` | the values, or a key ⇒ value map, cast as `value()` does, without hydrating models | same |
-| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does; the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
-| `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` is unchanged |
-| `min` / `max` / `sum` / `avg` | see §5.4 | Laravel casts `sum` |
+| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; true exactly when `count()` is not 0: a window (limit, offset) is honoured, the rows of the window in a subquery as `count()` reads them; without one the order is dropped and the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
+| `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` runs this count (see "One count" below) |
+| `min` / `max` / `sum` / `avg` | see §5.4 | Laravel returns the driver's value (`sum()` of none is 0), with no cast |
 
 Details settled while building the terminals (Task 15):
 
 - **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
 - **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
-- **`exists()`** drops order, limit and offset. It selects `1` unless the query has a GROUP BY or a HAVING, which
+- **`exists()` follows the window** (the maintainer, 2026-11-02: "Vorrei sistemare il discorso di order, limit e offset
+  come fatto per count"; it dropped order, limit and offset, as the legacy `exists` did). With a limit or an offset, of
+  the builder or of legacy options, `QueryCompiler::compile_exists()` asks for the rows that `count()` counts: the same
+  subquery (`over_rows()`, shared with `compile_aggregate()`), with the order that picks the window and the select
+  chosen by the wrapped `count()`'s rules below (the positional refusal included), as `SELECT EXISTS(SELECT 1 FROM (…)
+  AS t)`. So `exists()` is true exactly when `count()` is not 0: `limit(0)` and an offset past the rows are false, as in
+  Eloquent. A derived table, not the window inline in `EXISTS(…)`: the four databases measured honour an inline
+  `LIMIT`/`OFFSET` there too, but a derived table's rows are defined by the window on every version. `Model::exists()`
+  runs the same path (an approved BREAKING change): it keeps its `limit`, `offset` and `order` and selects `1` in its
+  options. Without a window the SQL is as before: the order is dropped (also for a direct `Table::exists()`, which
+  sent it), and so are its values.
+  - Golden: `table_exists_direct`'s third statement (a direct `Table::exists()` with `order` + `limit`) was
+    re-recorded on the four adapters, `SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM authors WHERE name=? ORDER BY name
+    LIMIT 1) AS t)` for `SELECT EXISTS(SELECT * FROM authors WHERE name=? ORDER BY name LIMIT 1)`; no other entry
+    changed.
+  - Residual, by the rule: in a window, a select of the query's own that is an aggregate (`select_raw('COUNT(*) AS
+    n')->where(…)->limit(1)`) is kept, as `count()` keeps it, so its one row exists for no matching row; without a
+    window it is replaced by `1`, as below. `exists()` and `count()` agree in both cases.
+- **Without a window, `exists()`** drops the order. It selects `1` unless the query has a GROUP BY or a HAVING, which
   may name select aliases; an empty select gets `1` in every case.
   - Without that, an aggregate select such as `COUNT(*)` would make it true with no matching row. Eloquent has that
     trap, so this is a deliberate deviation.
@@ -359,6 +466,39 @@ Details settled while building the terminals (Task 15):
   a GROUP BY is refused by Postgres and MySQL's ONLY_FULL_GROUP_BY. Otherwise
   it keeps the caller's select, because aliases named by GROUP BY or ORDER BY, and aggregates that collapse the rows,
   need it.
+  - **A position in raw SQL is refused where the terminal makes its own select** (the maintainer, 2026-11-02, after
+    the second final review). The exclusion above held only for a select of the caller's own: with none, a wrapped
+    `count()` selected `1`, an aggregate of a column the column alone, and `exists()` `1`, raw groups included, so a
+    position named the constant or that column. On the four databases `group_by_raw('1')->count()` counted 1 group
+    where `get()` reads 4 rows, `group_by_raw('1')->sum('parent_author_id')` summed the distinct values (6, not 8),
+    `order_by_raw('1')->limit(2)->sum(...)` picked the rows of the smallest values,
+    `group_by_raw('1')->having_raw('COUNT(*) > 1')->exists()` was true where `get()` finds no row, and
+    `order_by_raw('2')->limit(2)->count()` was refused by the database. A first fix kept the empty select there (`*`,
+    as `get()`); it made MySQL and Postgres refuse the common `group_by_raw('parent_author_id')->count()` (`*` beside a
+    GROUP BY that is not the key), which `SELECT 1` counts on the four, and it could not fix `exists()` on MariaDB
+    11.4, which reads `SELECT *` inside `EXISTS()` as `SELECT 1` before it resolves `GROUP BY 1` (measured). So the
+    select choice stays as it was, and `QueryCompiler::refuse_position_in_own_select()` refuses, at the call of
+    `count()`, `min()`, `max()`, `sum()`, `avg()` and `exists()`, a `group_by_raw()` entry, or an `order_by_raw()`
+    entry that a window keeps, that holds a position, when the statement makes its select itself (no select of the
+    query's own; not `SELECT DISTINCT *` of a count of distinct rows, whose columns are `get()`'s; not an aggregate in
+    place, which has no GROUP BY and leaves its order out). The `ActiveRecordException` says why, and to give the
+    query a select of its own or to name the column. With a select of the query's own positions are accepted.
+  - A position is a top-level item of the SQL that is an integer, alone or followed by the suffixes of an order in
+    any combination (`ASC`, `DESC`, `NULLS FIRST`, `NULLS LAST`, `COLLATE <name>`, `USING <operator>`, `WITH ROLLUP`):
+    `'1'`, `'name, 2'`, `'1 DESC'`, `'1 -- c'`, `'1 COLLATE NOCASE DESC'`, `'1 USING >'`. An integer in parentheses or
+    after a unary `+` is one too: `(1)` is a position on the four databases and `+1` on MySQL, MariaDB and SQLite
+    (measured). An integer in an expression (`CASE WHEN a THEN 1 ELSE 0 END`, `LEFT(name, 1)`), a string or a comment
+    is none.
+  - The SQL is read as the database of the connection reads its strings and comments, with the readings of the
+    statement terminator (`RawSqlWriter::without_literals_and_comments()`): a backslash escapes a quote on MySQL and
+    MariaDB only, `--` opens a comment there only before a space, and `#` opens one there only. Re-review of the fix,
+    measured: a first reading of every database's strings at once missed the `1` of `'C:\', 1, 'x'` on SQLite (the
+    count gave 1 where `get()` reads 4 rows) and refused `2--1` (`2 - -1`) on MySQL; and it knew no `COLLATE` or
+    `USING` after a position, which SQLite (`1 COLLATE NOCASE`) and Postgres (`1 USING >`) read as the position, so a
+    window's `sum()` gave 5 where `get()`'s rows give 3. Each is read right now; a database that does not read a
+    suffix refuses the statement anyway.
+  - Residual: a position bound to a `?` marker (`group_by_raw('?', [1])`, which MySQL's emulated prepares inline) is
+    not read.
   - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
     `authors.name`.
   - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.
@@ -366,7 +506,38 @@ Details settled while building the terminals (Task 15):
     source rows, even when the select is a lone aggregate whose `get()` returns one row.
   - Residual, SQLite only: SQLite accepts a select alias in WHERE; such a query's `exists()` fails there, because its
     select becomes `1`. The other databases refuse the alias in `get()` already.
-- **`count($column)`** counts the column's non-null values. After `distinct()` with no select, it counts distinct rows.
+- **One count: `Model::count()` runs the builder's `count()`** (the maintainer, 2026-11-02: "Non mi piace che ci siano
+  due modalità di count. Preferirei avere solo la nuova modalità count del builder", confirmed as a BREAKING change of
+  the legacy API, with the select honoured like the builder's). `Model::count(...)`, and so `count_by_*` and a
+  consumer's override that calls `parent::count()`, builds its query from the legacy options as before
+  (`finder_conditions_from_args()`, `Query::from_options()`) and returns `Query::count()` of it; the legacy execution
+  (`Query::legacy_count()`, which selected `COUNT(*)` in the options and read the first column of the first row) is
+  removed. There is one count rule: `QueryCompiler::compile_aggregate()` reads the clauses of legacy options as those
+  of the builder written by hand (the `select` as `select_raw()`'s, the `group`, `having` and `order` as
+  `group_by_raw()`'s, `having_raw()`'s and `order_by_raw()`'s, the window of `limit` and `offset` as it renders), and
+  sets the select and drops the order of the options themselves, which are compiled as they always are.
+  - Observable changes, all approved: the result is always an `int` (MySQL and MariaDB could return the driver's
+    string; on PHP 8.1+ with the bundled drivers it was an int already); with `group` / `having` it counts the rows of
+    the result (the groups), not the first group's count; with `limit` / `offset` it counts the rows of the window, not
+    the total (or 0 with an offset); a `select` is honoured as the builder honours one of its own: kept in the
+    subquery of a grouped or windowed count, left out (with the order) by a count in place, so
+    `count(['select' => 'DISTINCT x'])` still counts every row, as `select_raw('DISTINCT x')->count()` does, and
+    `count(['select' => 'DISTINCT x', 'limit' => 100])` the distinct values; the statement runs on the Table's
+    connection, as `find()` and `exists()` run theirs, no longer through `static::connection()` (§6.3), and is left in
+    `Table::$last_sql`, which the legacy count left alone. With no `select`, a `group` or a windowed `order` that names a
+    column by its position is refused before any statement, as the builder refuses it. A positional `group` failed at
+    the database before (MySQL's "Can't group on 'COUNT(*)'"); a positional `order` with a window ran, its window
+    ignored (`count(['order' => '1', 'limit' => 2])` returned every row, 4 in the fixtures), and now throws. A kept
+    select with two result columns of one name meets MySQL's and MariaDB's error 1060 in the subquery
+    (`count(['joins' => ['books'], 'select' => '*', 'limit' => 5])` returned 2 before and now fails there).
+  - Unchanged: the arguments and the shapes of the conditions, the alias resolution, the refusal of a `;` or an open
+    block comment in the `conditions`, `joins`, `from`, and the exceptions for bad options. The golden entry
+    `count_group` was re-recorded (the four adapters): `SELECT COUNT(*) FROM (SELECT 1 FROM authors GROUP BY
+    parent_author_id) AS t`; the other `count` entries send the same SQL as before.
+- **`count($column)`** counts the column's non-null values. After `distinct()` with no select of the query's own, it
+  counts the column's distinct non-null values: the subquery selects `DISTINCT col`, Eloquent's
+  `COUNT(DISTINCT col)` (final review, 2026-10-30; it selected `DISTINCT *`, which a primary key keeps apart, and
+  counted every row). `count()` of the rows after `distinct()` counts distinct rows, as before.
 - **Qualified names.** `value()` / `pluck()` given a qualified name (`'authors.name'`) return the driver's value uncast, because casting needs a model column.
 - **`pluck($col, $key)` keys** are the driver's values. A `null` key becomes `''`, because PHP 8.5 deprecates null array keys.
 
@@ -398,6 +569,22 @@ Details settled while building the aggregates (Task 18):
   dropped. A grouped, distinct or windowed query (limit/offset) aggregates the rows of its result:
   `SELECT SUM(t.col) FROM (…) AS t`. Eloquent ignores the LIMIT and aggregates every row; this is a deviation, listed
   in the README.
+- **A distinct aggregate of a column runs over its distinct values** (final review, 2026-10-30). With `distinct()`,
+  no select of the query's own and an aggregated column, the subquery selects `DISTINCT col` instead of `*`: `sum` and
+  `avg` are Eloquent's `SUM(DISTINCT col)` and `AVG(DISTINCT col)` (`avg` exact at the SUM's scale plus 4, as always),
+  `count($col)` its `COUNT(DISTINCT col)`, and `min` / `max` are the same either way. The limit and the offset stay on
+  the subquery, where they pick values. With a select of its own, the aggregate runs over the distinct rows the select
+  gives, where Eloquent aggregates the column's distinct values: a deviation, in the README.
+- **A distinct aggregate refuses a window ordered by another column** (final re-review, 2026-10-30). The subquery of
+  such an aggregate is `SELECT DISTINCT col … ORDER BY … LIMIT n`, and a window (a limit, or an offset alone) keeps
+  the query's order there: an order by another column is refused by MySQL (3065) and Postgres (42P10), and MariaDB
+  and SQLite pick the values arbitrarily. `count($col)`, `min`, `max`, `sum` and `avg` refuse it at the call
+  (`QueryCompiler::refuse_distinct_window_ordered_by_another_column()`), naming the column and the order and saying to
+  order by the column or to give the query a select of its own. The aggregated column ordered by any of its names
+  (an alias, its attribute name, qualified with the model's table or the `from()` alias) picks the values, as before;
+  without a window the order is dropped; a select of the query's own and `count()` of the rows are not concerned.
+  SQL of `order_by_raw()` is not read, and goes to the database as it is, as does the random order (Postgres
+  refuses it there).
 - **A non-model column over no row** returns the driver's `NULL` from `sum()`, so `sum()`'s type is
   `int|string|float|null`.
 - **SQLite** stores DECIMAL as REAL (NUMERIC affinity), so its DECIMAL columns classify as floating: `sum`/`avg` are
@@ -418,7 +605,9 @@ Details settled while building the aggregates (Task 18):
 - **Postgres `bytea`.** A `min`/`max` over it arrives as a stream, which is read into a string. `MIN`/`MAX` of bytea
   exist from PostgreSQL 18; earlier versions refuse them with a `DatabaseException`.
 - **An expression aliased with a model column's name** is classified by that column's kind. On SQLite, where
-  DECIMAL is floating, an exact integer under such a name reads as a float.
+  DECIMAL is floating, an exact integer under such a name reads as a float. It is aggregated where the query's select
+  is kept, in a query aggregated as a subquery (grouped, distinct or windowed); a query aggregated in place drops its
+  select, as Eloquent's aggregates do, and aggregates the column itself.
 
 ### 5.5 Writes
 
@@ -435,7 +624,7 @@ Details settled while building the aggregates (Task 18):
 | Terminal | Semantics |
 |---|---|
 | `update(array $values): int` | UPDATE with the query's where, order and limit. On Postgres the limit picks the rows by pk in a subquery (#92). `updated_at` follows §5.6. Empty values throw `ActiveRecordException('Updating requires a hash or string.')`, as `update_all` does today. Returns the affected rows (`rowCount`; on MySQL the changed rows, as today) |
-| `delete(): int` | DELETE with the same rules, returns `rowCount`. Without a where it deletes every row, but only from an explicit form such as `new_query()->delete()`, because static forwarding refuses it |
+| `delete(): int` | DELETE with the same rules, returns `rowCount`. Without a where condition it deletes every row its limit allows: `new_query()->delete()`, or a chain of `order_by()` / `limit()` alone (SQLite refuses an `ORDER BY` without a `LIMIT` on a write). Static forwarding refuses `Model::delete()` / `update()`, and a write whose where calls all came out empty, or whose `when()` / `unless()` skipped its callback, is refused (see below) |
 | `insert(array $values): bool` | One row (hash) or several (list). Several rows become one multi-VALUES INSERT, split on the adapter's bind limit, inside a transaction when there is more than one chunk (the `upsert` logic, reused). Every row must have the same keys, else an exception. `created_at` / `updated_at` follow §5.6 |
 | `upsert($values, $unique_by, $update = null): int` | Today's semantics, with the timestamps of §5.6 |
 
@@ -459,7 +648,14 @@ Details settled while building the write terminals (Task 19):
   clause.
 - **An empty where is refused.** A write whose where calls all rendered no condition (`where([])`, an empty closure
   group) is refused: a dynamic filter that came out empty must not write every row. A write with no where call at all
-  is an explicit whole-table write (`new_query()->delete()`), and reads are unchanged.
+  writes every row its limit allows (`new_query()->delete()`, an `order_by()` or a `limit()` alone), and reads are
+  unchanged. A `when()` or `unless()` that ran neither its callback nor a default marks the query as an empty where
+  call does (final review, 2026-10-30): the optional filter came out empty, so a write with no other where condition
+  is refused, with a message that names the skipped `when()` / `unless()` and the whole-table form
+  `new_query()->delete()` / `->update(...)`; reads are unchanged, and a clone keeps the mark. `insert()` and `upsert()`,
+  which take no clause, refuse it too, as they refuse `where([])`, and name it: "insert() cannot use a when() or
+  unless() that skipped its callback" (final re-review, 2026-10-30), its own mark (`QueryState::$skipped_when`) beside
+  that of an empty where call.
 - **Values.**
   - Their keys map aliases and #92 attribute names to real columns. The legacy `update_all` set and `upsert` keep
     today's #92-only mapping.
@@ -468,17 +664,23 @@ Details settled while building the write terminals (Task 19):
   - `insert()` validates its rows (at least one, identical keys, at least one column) and stamps them with one
     `now()` per call.
 - **The returned count.** `update()`'s count on MySQL/MariaDB is the rows changed, and with `updated_at` set to now
-  that is every matched row.
+  that is normally every matched row; a row already stamped within the same second, its other values unchanged, is
+  not counted (final review, 2026-10-30).
 - **Limited writes.** Postgres limits a write through the pk subquery (#92). MySQL, MariaDB and SQLite (3.46, compiled
   with `UPDATE/DELETE … LIMIT`) limit natively. SQLite refuses an order without a limit on a write, as the legacy path
-  does.
+  does. An adapter with neither LIMIT on UPDATE and DELETE nor a `limited_rows_condition()` refuses a limited write,
+  the legacy ones included, with an `ActiveRecordException` that names the adapter, rather than send it without its
+  limit and write every row it matches (`SQLBuilder`; final review, 2026-10-30). No adapter of the library is one, and
+  an order without a limit is still left out there: it cannot widen a write.
 
 ### 5.6 Timestamps: one rule, in the engine
 
 | Statement | `created_at` | `updated_at` |
 |---|---|---|
-| INSERT (`save()` of a new record, `->insert()`, `Table::insert()`) | missing → now | missing → now |
-| UPDATE (`save()`, `->update()`, `update_all` with a hash `set`) | — | missing → now |
+| `save()` of a new record (its `set_timestamps()`, see the notes below) | now, over a value given | now, over a value given |
+| `save()` of a record read | — | now, over a value given |
+| INSERT (`->insert()`, `Table::insert()`) | missing → now | missing → now |
+| UPDATE (`->update()`, `update_all` with a hash `set`) | — | missing → now |
 | UPSERT | the INSERT part: missing → now | missing → now; it is also updated on conflict when the update list is not empty (today's behavior). A suspended class gets no `updated_at` in the conflict clause, because assigning it there would overwrite the existing row's value with NULL |
 | raw SQL (`update_all` with a string `set`) | untouched | untouched |
 
@@ -492,6 +694,22 @@ Details settled while building the write terminals (Task 19):
 - For `save()` nothing changes: the data already contains the timestamps, so the engine adds nothing.
 - *Deviation from Eloquent:* Eloquent's `insert()` is raw and sets no timestamps.
 
+Details settled by the final review (2026-10-30):
+
+- **`save()` keeps master's rule.** Its `set_timestamps()` sets `updated_at` on every save and `created_at` on a new
+  record, over a value the model was given; "missing → now" is the rule of the engine's own statements (`->insert()`,
+  `->update()`, `update_all()` with a hash `set`, `upsert`, a direct `Table::insert()`).
+- **One rule for the engine's statements (the maintainer, 2026-10-30).** A model's override of `set_timestamps()`
+  governs `save()` only: `update_all()` with a hash `set`, a direct `Table::insert()`, `upsert` and the builder's
+  writes stamp the timestamps of every model, one that opts out by overriding it included, and only
+  `without_timestamps()` suspends them. No model of the monolith overrides `set_timestamps()`. A breaking change, in
+  the release notes (§8.3).
+- **A key qualified with the model's table names its column.** A data key of two parts whose first is the model's
+  table name, quoted or not (`` `authors`.`updated_at` ``, `authors.updated_at`), is read as the column of its second
+  part, so a timestamp it gives is kept and assigned once (`Timestamps::fill()`): on MySQL and MariaDB, which take a
+  qualified column in a SET or an INSERT, the value given was replaced by now. Postgres and SQLite refuse a qualified
+  column there, as they always did. A key qualified with another table names no column of the model.
+
 ### 5.7 Errors
 
 `Query` validates **at the call that introduces the problem**, not when the query runs. Messages name the method,
@@ -503,7 +721,11 @@ the model and the offending input.
 | static `Order::update(...)` / `Order::delete()`, an unsupported clause on a write, empty update values | `ActiveRecordException` |
 | `find` / `find_or_fail` / `where_key` / `where_key_not` on a composite pk | `ActiveRecordException` |
 | an empty column list in `where_all` / `where_any` / `where_none`, a nested array in `where_in` / `where_between` / `where_key`, an empty column name or alias | `ActiveRecordException` |
-| blank raw SQL in `where_raw` / `having_raw` (and `or_` forms), blank or `'0'` in `order_by_raw` / `group_by_raw`, a clause a write cannot take, a write whose where came out empty | `ActiveRecordException` |
+| blank raw SQL in `where_raw` / `having_raw` (and `or_` forms), blank or `'0'` in `order_by_raw` / `group_by_raw`, a clause a write cannot take (a `when()` / `unless()` that skipped its callback, on `insert` / `upsert`), a write whose where came out empty | `ActiveRecordException` |
+| a statement terminator (`;` outside strings, quoted identifiers and comments), or a block comment left open, in the SQL of a `*_raw` method or a `JOIN` fragment of `joins` (§5.2) | `ActiveRecordException` |
+| a distinct aggregate of a column in a window ordered by another column (§5.4) | `ActiveRecordException` |
+| a position (`GROUP BY 1`) in `group_by_raw` or in a window's `order_by_raw`, in `count`, an aggregate of a column or `exists`, with no select of the query's own (§5.3) | `ActiveRecordException` |
+| legacy: a statement terminator, or a block comment left open, in the SQL of the `conditions` option, before any statement (§5.2, breaking §8.3) | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
 | an unknown method through `__callStatic` | `ActiveRecordException("Call to undefined method: …")`, today's message |
@@ -533,9 +755,10 @@ These were explicitly approved by the maintainer on 2026-10-21, and all go in th
    The monolith never calls `Table::insert()` directly. `upsert` follows the same rule (§5.6), so it recognizes a
    timestamp column by its attribute name: a table whose timestamp columns have odd names (#92: `"created at"`,
    `UPDATED_AT`) now gets them filled by `upsert` too. A row key that respells a timestamp column (`UPDATED_AT`,
-   `` `created_at` ``) is recognized as that column: on MySQL/MariaDB the duplicated column error 1110 becomes a
-   success, and SQLite (which tolerated the duplicate) sends the column once and stores the same rows. The monolith
-   never calls `upsert`.
+   `` `created_at` ``, or the column qualified with the model's table, §5.6) is recognized as that column: on
+   MySQL/MariaDB the duplicated column error 1110 becomes a success, and SQLite (which tolerated the duplicate) sends
+   a respelled column once and stores the same rows. A qualified column in an INSERT is refused by Postgres and by
+   SQLite (a syntax error), as before. The monolith never calls `upsert`.
 4. With joins, legacy hash keys that are not model columns are no longer qualified with the model's table.
    Those calls fail today.
 5. The PHP warning before `update_all`'s "Updating requires a hash or string." disappears. The exception is
@@ -571,7 +794,10 @@ Approved by the maintainer on 2026-10-23 (issue #144):
 
 ### 6.3 Unchanged on purpose
 
-- The semantics of every existing static method, and their overridability.
+- The semantics of every existing static method, and their overridability, except `Model::count()`, which runs the
+  builder's `count()` (§5.3, the maintainer, 2026-11-02): it no longer calls `static::connection()`, a public static that
+  a subclass can override, and runs on the Table's connection; the finders by pk, `update_all()` and `delete_all()`
+  still call it. And `Model::exists()` honours a `limit` and an `offset` (§5.3, the maintainer, 2026-11-02).
 - The public signatures and return values of `Table`.
 - The legacy positional date format (§5.2).
 
@@ -642,7 +868,14 @@ scopes (sub-project 3). The maintainer confirmed that the monolith base model wi
   - `sum` / `min` / `max` / `avg` over a grouped, distinct or windowed query aggregate its result rows (Eloquent
     ignores the LIMIT); a grouped aggregate of an ungrouped column is refused at the call;
   - `or_where(hash)` ANDs its entries; `where_all` / `where_any` / `where_none` refuse an empty column list;
-  - `exists()` selects `1`, so an aggregate select cannot make it true;
+  - `exists()` selects `1` without a window, so an aggregate select cannot make it true;
+  - `sum` and `avg` after `distinct()` with a select of the query's own run over the distinct rows it gives
+    (Eloquent's run over the column's distinct values);
+  - a write whose `when()` / `unless()` skipped its callback, with no other where condition, is refused (Eloquent
+    writes every row);
+  - SQL written by hand that holds a statement terminator is refused at the call (Eloquent sends it), and so is a
+    distinct aggregate in a window ordered by another column;
+  - Laravel's `sum()` returns the driver's value, with no cast, where the builder's is exact and typed by the column;
   - `find_or($ids)` calls the callback when any id is missing; `when()` / `unless()` hand back only a same-model
     query; `readonly()` is not forwardable;
   - and the rest of the "Details settled" notes (§4.2, §5.2, §5.3, §5.4).
@@ -662,11 +895,23 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 - **Breaking:** an `$alias_attribute` key named like a column of its own table throws `ConfigException` when the
   table loads (#144).
 - On MySQL/MariaDB, `update_all()` with a hash `set` returns the matched rows even when no other value changes,
-  because `updated_at` changes too.
+  because `updated_at` changes too, unless the row already holds the current second.
+- **Breaking:** `update_all()` with a hash `set`, a direct `Table::insert()`, `upsert` and the builder's writes stamp
+  the timestamps even for a model whose `set_timestamps()` override opts out; only `without_timestamps()` suspends
+  them, and `save()` still follows the override (the maintainer, 2026-10-30).
+- **Breaking:** the SQL of the legacy `conditions` option (a string, or the first element of a positional list) that
+  holds a statement terminator outside its strings and comments, or leaves a block comment open, throws an
+  `ActiveRecordException` before any statement, in the finders, `count`, `exists`, `update_all` and `delete_all` (the
+  maintainer, 2026-10-30 and 2026-11-02, §5.2); the other legacy options, `Table::update()` / `Table::delete()` and
+  `find_by_sql()` are not read.
 - **Dates** (the maintainer asked for this item explicitly): the builder binds a DateTime in the format of its
   column's type, which fixes DATE comparisons on SQLite. Legacy positional and legacy hash binds are unchanged
   (they keep the datetime format).
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
+- **Breaking:** `Model::count()` runs the builder's `count()` (§5.3, the maintainer, 2026-11-02): an `int`, the groups
+  of a `group`, the rows of a window, the `select` honoured as the builder's, the Table's connection.
+- **Breaking:** `Model::exists()` honours a `limit` and an `offset` (§5.3, the maintainer, 2026-11-02): `'limit' => 0`
+  and an `offset` past the rows are `false`.
 
 ### 8.4 Notes for the monolith team
 

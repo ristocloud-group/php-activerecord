@@ -382,6 +382,35 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same([2, 3, 4], array_keys($this->names_by_id()));
     }
 
+    // An insert() and an upsert() take no clause, and refuse a when() or an unless() that skipped its callback as they
+    // refuse where([]) (see test_insert_and_upsert_refuse_every_clause()), with a message that names the when() or unless(),
+    // not a where the caller never wrote. One whose callback ran and added nothing leaves no clause
+    public function test_insert_and_upsert_refuse_a_when_or_unless_that_skipped_its_callback(): void
+    {
+        $by_ids = fn(Query $query, mixed $ids): Query => $query->where_key($ids);
+        $skipped = 'a when() or unless() that skipped its callback';
+
+        foreach ([
+            'when([])' => fn() => Author::when([], $by_ids),
+            'unless(true)' => fn() => Author::unless(true, fn(Query $q) => $q->where('author_id', 1)),
+            'a clone' => fn() => Author::when(false, $by_ids)->clone(),
+        ] as $name => $query) {
+            $this->assert_same([ActiveRecordException::class, "insert() cannot use $skipped, on Author: it takes no clause"], $this->thrown(fn() => $query()->insert(['name' => 'x'])), "insert() after $name");
+            $this->assert_same([ActiveRecordException::class, "upsert() cannot use $skipped, on Author: it takes no clause"], $this->thrown(fn() => $query()->upsert([['author_id' => 1, 'name' => 'x']], 'author_id')), "upsert() after $name");
+        }
+
+        // beside an empty where call, both; beside a where, the where too
+        $this->assert_same([ActiveRecordException::class, "insert() cannot use where or $skipped, on Author: it takes no clause"], $this->thrown(fn() => Author::where([])->when(false, $by_ids)->insert(['name' => 'x'])));
+        $this->assert_same([ActiveRecordException::class, "upsert() cannot use where or $skipped, on Author: it takes no clause"], $this->thrown(fn() => Author::when(false, $by_ids)->where('author_id', 1)->upsert([['author_id' => 1, 'name' => 'x']], 'author_id')));
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        // a callback that ran and added nothing, and a default that ran, leave no clause (the upsert of a new id 9 first:
+        // MySQL's counter, which the fixtures do not reset, could give that id to the insert)
+        $this->assert_same(1, Author::when(false, $by_ids, fn(Query $q) => $q)->upsert([['author_id' => 9, 'name' => 'Upserted']], 'author_id'));
+        $this->assert_true(Author::when(true, fn(Query $q) => $q)->insert(['name' => 'Ran']));
+        $this->assert_same(['Ran', 'Upserted'], array_map(fn(Author $author): string => $author->name, Author::all(['conditions' => ['name' => ['Ran', 'Upserted']], 'order' => 'name'])));
+    }
+
     // The where of a write names its columns by the rule of every clause (spec §5.1): an alias and an attribute name
     // are the columns they stand for (#92, #144). So do the keys of the values (spec §5.5, see
     // test_the_keys_of_the_values_read_aliases()), and a DateTime is bound in the format of its column: a DATE as a date
@@ -524,6 +553,67 @@ class QueryWriteTest extends DatabaseTest
         $this->assert_same(1, Author::where_raw('author_id > 0 -- c')->order_by_desc('author_id')->limit(1)->update(['name' => 'Last']));
         $this->assert_same(1, Author::order_by_raw('author_id -- c')->limit(1)->update(['name' => 'First']));
         $this->assert_same([2 => 'First', 3 => 'Bill Clinton', 4 => 'Last'], $this->names_by_id());
+    }
+
+    // SQL written by hand that holds a statement terminator, a ; outside its strings and comments, is refused at the call
+    // (QueryCompiler::refuse_statement_terminator()), so no write of it runs: MySQL, MariaDB and SQLite ended the statement
+    // there and wrote every row the WHERE matched, without the ORDER BY and the LIMIT, and Postgres refused it. A ; in a
+    // string, a comment or a bound value is none, and the limited write writes the one row it picks
+    public function test_a_raw_fragment_that_holds_a_statement_terminator_never_writes(): void
+    {
+        Author::table();
+
+        foreach ([
+            'where_raw' => [fn() => Author::where_raw('author_id > 0;')->order_by('author_id')->limit(1)->delete(), 'author_id > 0;'],
+            'or_where_raw' => [fn() => Author::where('author_id', 1)->or_where_raw('author_id > 0;')->limit(1)->update(['name' => 'Z']), 'author_id > 0;'],
+            'order_by_raw' => [fn() => Author::order_by_raw('author_id;')->limit(1)->delete(), 'author_id;'],
+        ] as $method => [$write, $sql]) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "SQL '$sql' in $method() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture($write),
+                $method
+            );
+        }
+
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        $this->assert_same(1, Author::where_raw("name != 'a;b'")->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(1, Author::where_raw('author_id > 0 /* ; */')->order_by('author_id')->limit(1)->update(['name' => 'Commented']));
+        $this->assert_same(1, Author::where_raw('name != ?', ['a;b'])->order_by_raw('author_id DESC -- ;')->limit(1)->update(['name' => 'Bound']));
+        $this->assert_same([2 => 'Commented', 3 => 'Bill Clinton', 4 => 'Bound'], $this->names_by_id());
+    }
+
+    // SQL written by hand that leaves a block comment open, a /* outside its strings and comments with no */ after it, is
+    // refused at the call (QueryCompiler::refuse_statement_terminator()), so no write of it runs: SQLite ran the comment to
+    // the end of the statement, and wrote every row the WHERE matched, without the ORDER BY and the LIMIT (the four
+    // authors here); MySQL, MariaDB and Postgres refused it. A closed comment, or a /* in a string, is none, and the
+    // limited write writes the one row it picks
+    public function test_a_raw_fragment_that_leaves_a_block_comment_open_never_writes(): void
+    {
+        Author::table();
+
+        foreach ([
+            'where_raw' => [fn() => Author::where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->delete(), 'author_id > 0 /* note'],
+            'or_where_raw' => [fn() => Author::where('author_id', 1)->or_where_raw('author_id > 0 /* note')->limit(1)->update(['name' => 'Z']), 'author_id > 0 /* note'],
+            'order_by_raw' => [fn() => Author::where('author_id', '>', 0)->order_by_raw('author_id /* x')->limit(1)->delete(), 'author_id /* x'],
+        ] as $method => [$write, $sql]) {
+            $this->assert_same(
+                [['exception' => ActiveRecordException::class, 'message' => "SQL '$sql' in $method() on Author leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */"]],
+                GoldenStatements::capture($write),
+                $method
+            );
+        }
+
+        $this->assert_same(
+            [['exception' => ActiveRecordException::class, 'message' => "SQL 'author_id > 0 /* note' in where_raw() on Author leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */"]],
+            GoldenStatements::capture(fn() => Author::where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->update(['name' => 'X']))
+        );
+        $this->assert_same([1 => 'Tito', 2 => 'George W. Bush', 3 => 'Bill Clinton', 4 => 'Uncle Bob'], $this->names_by_id());
+
+        $this->assert_same(1, Author::where_raw("name != '/*'")->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(1, Author::where_raw('author_id > 0 /* note */')->order_by('author_id')->limit(1)->update(['name' => 'Commented']));
+        $this->assert_same(1, Author::where_raw('author_id > 0')->order_by_raw('author_id DESC /* x */')->limit(1)->update(['name' => 'Closed']));
+        $this->assert_same([2 => 'Commented', 3 => 'Bill Clinton', 4 => 'Closed'], $this->names_by_id());
     }
 
     // A limited write on an adapter that can apply the limit neither way, with no LIMIT on UPDATE and DELETE and no

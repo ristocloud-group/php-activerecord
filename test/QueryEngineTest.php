@@ -4,6 +4,14 @@ use ActiveRecord\Query;
 use ActiveRecord\Table;
 use ActiveRecord\Timestamps;
 
+// an author whose books are declared with conditions that hold a statement terminator
+class TerminatedConditionsAuthor extends ActiveRecord\Model
+{
+    public static $table_name = 'authors';
+    public static $pk = 'author_id';
+    public static $has_many = [['books', 'class_name' => 'Book', 'foreign_key' => 'author_id', 'conditions' => 'book_id > 0;']];
+}
+
 /**
  * The Query engine behind the legacy entries: Table::options_to_sql() builds its SELECT through
  * Query::from_options(), find(), exists() and count() run it there, and so do the INSERTs, UPDATEs,
@@ -83,19 +91,121 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same([], $builder->get_where_values());
     }
 
-    public function test_legacy_count_is_served_by_the_engine(): void
+    // Maintainer (2026-11-02): one count. Model::count() builds its query from the legacy options and runs the
+    // builder's count() on it; the legacy execution is gone
+    public function test_model_count_runs_the_builders_count(): void
     {
-        $this->assert_same(1, Author::count(['conditions' => ['name' => 'Tito']]));
-        $this->assert_true(method_exists(Query::class, 'legacy_count'));
-    }
+        $this->assert_false(method_exists(Query::class, 'legacy_count'));
 
-    public function test_legacy_count_leaves_last_sql_alone(): void
-    {
         $table = Author::table();
         $table->last_sql = 'untouched';
 
-        $this->assert_same(4, (int) Author::count());
-        $this->assert_same('untouched', $table->last_sql);
+        $this->assert_same(1, Author::count(['conditions' => ['name' => 'Tito']]));
+        // the statement that ran is left in Table::$last_sql, as find() and exists() leave theirs
+        $this->assert_sql_has('SELECT COUNT(*) FROM authors WHERE', $table->last_sql);
+    }
+
+    public function test_model_count_is_an_int(): void
+    {
+        $this->assert_same(4, Author::count());
+        $this->assert_same(3, Author::count(['conditions' => ['author_id > ?', 1]]));
+        $this->assert_same(0, Author::count(['conditions' => ['author_id > ?', 99]]));
+        $this->assert_same(2, Author::count(1, 2));
+        $this->assert_same(1, Author::count(['name' => 'Tito']));
+        $this->assert_same(2, Author::count_by_parent_author_id(2));
+        $this->assert_same(1, Author::count_by_name('Tito'));
+    }
+
+    public function test_model_count_of_groups_counts_the_rows_of_the_result(): void
+    {
+        $this->assert_same(3, Author::count(['group' => 'parent_author_id']));
+        $this->assert_same(Author::group_by('parent_author_id')->count(), Author::count(['group' => 'parent_author_id']));
+        $this->assert_same(4, Author::count(['group' => 'name']));
+        $this->assert_same(1, Author::count(['group' => 'parent_author_id', 'having' => 'COUNT(*) > 1']));
+        $this->assert_same(0, Author::count(['group' => 'parent_author_id', 'having' => 'COUNT(*) > 99']));
+        $this->assert_same(2, Author::count(['group' => 'parent_author_id', 'conditions' => ['author_id > ?', 1]]));
+        $this->assert_same(2, Author::count(['joins' => ['books'], 'group' => 'authors.author_id']));
+    }
+
+    public function test_model_count_of_a_window_counts_its_rows(): void
+    {
+        $this->assert_same(2, Author::count(['limit' => 2]));
+        $this->assert_same(4, Author::count(['limit' => 5]));
+        $this->assert_same(3, Author::count(['offset' => 1]));
+        $this->assert_same(3, Author::count(['limit' => 5, 'offset' => 1]));
+        $this->assert_same(1, Author::count(['limit' => 2, 'offset' => 3]));
+        $this->assert_same(0, Author::count(['offset' => 10]));
+        $this->assert_same(0, Author::count(['limit' => 0]));
+        $this->assert_same(0, Author::count(['limit' => '0']));
+        $this->assert_same(4, Author::count(['limit' => null, 'offset' => 0]));
+        $this->assert_same(2, Author::count(['conditions' => ['author_id > ?', 1], 'order' => 'author_id DESC', 'limit' => 2]));
+        $this->assert_same(Author::limit(2)->offset(1)->count(), Author::count(['limit' => 2, 'offset' => 1]));
+
+        // a count in place leaves the order out, as the builder's does: Postgres refused it beside COUNT(*)
+        $table = Author::table();
+        $this->assert_same(4, Author::count(['order' => 'name']));
+        $this->assert_false(str_contains($table->last_sql, 'ORDER BY'));
+        $this->assert_same(3, Author::count(['conditions' => ['author_id > ?', 1], 'order' => 'name DESC']));
+    }
+
+    // the select of the options is honoured as the builder honours a select of its own: a count in place
+    // (neither grouped nor windowed) selects COUNT(*) instead, as select_raw()->count() does; a grouped or
+    // windowed count keeps it in its subquery
+    public function test_model_count_honours_the_select_as_the_builder_does(): void
+    {
+        $this->assert_same(4, Author::count(['select' => 'author_id']));
+        $this->assert_same(3, Author::count(['select' => 'author_id', 'conditions' => ['author_id > ?', 1]]));
+        $this->assert_same(2, Author::count(['select' => 'author_id', 'limit' => 2]));
+
+        $this->assert_same(Author::select_raw('DISTINCT parent_author_id')->count(), Author::count(['select' => 'DISTINCT parent_author_id']));
+        $this->assert_same(4, Author::count(['select' => 'DISTINCT parent_author_id']));
+        $this->assert_same(3, Author::count(['select' => 'DISTINCT parent_author_id', 'limit' => 10]));
+        $this->assert_same(Author::select_raw('DISTINCT parent_author_id')->limit(10)->count(), Author::count(['select' => 'DISTINCT parent_author_id', 'limit' => 10]));
+
+        // a position in the GROUP BY names a column of the select: of the options' own, it is accepted; with none, count()
+        // makes the select of its subquery itself, and refuses it as the builder does (see refuse_position_in_own_select())
+        $this->assert_same(3, Author::count(['select' => 'parent_author_id', 'group' => '1']));
+        $this->assert_exception_message_contains(
+            "count() on Author cannot send SQL '1' of the 'group' option, which names a column by its position",
+            fn() => Author::count(['group' => '1']),
+            ActiveRecord\ActiveRecordException::class
+        );
+    }
+
+    // Maintainer (2026-11-02): Model::exists() honours the window as count() does, through the builder's exists(): an
+    // offset past the rows, or a limit of 0, finds none; the order picks the rows of a window, and is left out without one
+    public function test_model_exists_follows_the_window(): void
+    {
+        $this->assert_false(Author::exists(['offset' => 100]));
+        $this->assert_false(Author::exists(['offset' => 4]));
+        $this->assert_true(Author::exists(['offset' => 3]));
+        $this->assert_false(Author::exists(['limit' => 0]));
+        $this->assert_false(Author::exists(['limit' => '0']));
+        $this->assert_true(Author::exists(['limit' => 1, 'offset' => 1, 'order' => 'name']));
+        $this->assert_true(Author::exists(['limit' => null, 'offset' => 0]));
+        $this->assert_false(Author::exists(['conditions' => ['author_id > ?', 2], 'order' => 'author_id', 'offset' => 2]));
+        $this->assert_true(Author::exists(['conditions' => ['author_id > ?', 2], 'order' => 'author_id', 'offset' => 1]));
+        $this->assert_false(Author::exists(['group' => 'parent_author_id', 'offset' => 3]));
+        $this->assert_true(Author::exists(['group' => 'parent_author_id', 'offset' => 2]));
+        $this->assert_false(Author::exists(1, ['offset' => 1]));
+        $this->assert_true(Author::exists(1, ['limit' => 1]));
+        $this->assert_false(Author::table()->exists(['limit' => 0]));
+
+        $table = Author::table();
+        $this->assert_true(Author::exists(['order' => 'name']));
+        $this->assert_false(str_contains($table->last_sql, 'ORDER BY'));
+        $this->assert_true(Author::exists(['conditions' => ['name' => 'Tito'], 'order' => 'name']));
+
+        $window = ['conditions' => ['author_id > ?', 1], 'order' => 'author_id DESC', 'limit' => 2, 'offset' => 1];
+        $this->assert_same(Author::count($window) > 0, Author::exists($window));
+        $this->assert_same(count(Author::all($window)) > 0, Author::exists($window));
+    }
+
+    public function test_model_count_of_joins_and_from_is_unchanged(): void
+    {
+        $this->assert_same(2, Author::count(['joins' => ['books']]));
+        $this->assert_same(1, Author::count(['joins' => ['books'], 'conditions' => ['books.name' => 'Another Book']]));
+        $this->assert_same(4, Author::count(['from' => 'authors']));
     }
 
     // Review Focus 1: a subclass overriding a legacy finder keeps its override.
@@ -106,14 +216,21 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_same([1], array_map(fn($a) => $a->author_id, OverridingAuthor::all()));
     }
 
-    // Spec §6.3: Model::connection() is a public static that a subclass can override, and count()
-    // has always run its statement on static::connection().
-    public function test_count_still_calls_the_connection_override(): void
+    // Maintainer (2026-11-02): count() runs the builder's count(), on the Table's connection, as find() and
+    // exists() run theirs: the public static Model::connection() that a subclass can override is not called
+    public function test_count_runs_on_the_tables_connection(): void
     {
+        ConnectionCountingAuthor::table();
         ConnectionCountingAuthor::$connection_calls = 0;
 
-        $this->assert_same(4, (int) ConnectionCountingAuthor::count());
-        $this->assert_greater_than_or_equal(1, ConnectionCountingAuthor::$connection_calls);
+        $this->assert_same(4, ConnectionCountingAuthor::count());
+        $this->assert_same(3, ConnectionCountingAuthor::count(['conditions' => ['author_id > ?', 1], 'limit' => 5]));
+        $this->assert_same(0, ConnectionCountingAuthor::$connection_calls);
+
+        // a dynamic count builds its conditions as find_by_* builds them, through connection(), once; the count
+        // itself does not call it
+        $this->assert_same(2, ConnectionCountingAuthor::count_by_parent_author_id(2));
+        $this->assert_same(1, ConnectionCountingAuthor::$connection_calls);
     }
 
     public function test_get_hydrates_the_models_of_a_legacy_state(): void
@@ -691,6 +808,166 @@ class QueryEngineTest extends DatabaseTest
             $this->assert_sql_doesnt_has('WHERE', Author::table()->last_sql);
             $this->assert_same(4, (int) Author::count(['conditions' => ['parent_author_id' => $parent]]));
         }
+    }
+
+    // Empty conditions are no WHERE, and raise no error at all: the engine reads them with is_hash(), which raised an
+    // "Undefined array key 0" warning under @ for [], which an error handler is called for all the same (strict_call()'s,
+    // or one that logs every error). The finders and delete_all() raised it on master too, and update_all() since it
+    // runs through the engine
+    public function test_empty_conditions_raise_no_error(): void
+    {
+        $this->assert_same(4, count($this->strict_call(fn() => Author::all(['conditions' => []]))));
+        $this->assert_same(4, (int) $this->strict_call(fn() => Author::count(['conditions' => []])));
+        $this->assert_true($this->strict_call(fn() => Author::exists(['conditions' => []])));
+        $this->assert_same(4, $this->strict_call(fn() => Author::update_all(['set' => ['name' => 'Every'], 'conditions' => []])));
+        $this->assert_same(4, $this->strict_call(fn() => Author::delete_all(['conditions' => []])));
+        $this->assert_same(0, (int) Author::count());
+    }
+
+    /**
+     * The refusal of the legacy conditions whose SQL holds a statement terminator (see QueryCompiler::apply_conditions()),
+     * on $model.
+     */
+    private function terminator_refusal(string $sql, string $model = 'Author'): string
+    {
+        return "SQL '$sql' in the 'conditions' option on $model holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker";
+    }
+
+    // BREAKING (the maintainer, 2026-10-30): the SQL of the legacy 'conditions' option, a string or the first element of a
+    // positional list, that holds a statement terminator, a ; outside its strings and comments, is refused before any
+    // statement, by every finder, count(), exists(), update_all() and delete_all(). MySQL, MariaDB and SQLite ended the
+    // statement there: a read lost the ORDER BY and the LIMIT after it and found every row, a limited update_all() or
+    // delete_all() wrote every row it matched, the four authors here (the same SQL as master's), and Postgres refused it.
+    // A ; with nothing after it, which every database ran, is refused too
+    public function test_legacy_conditions_that_hold_a_statement_terminator_are_refused(): void
+    {
+        Author::table();
+
+        foreach ([
+            'all' => [fn() => Author::all(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0;'],
+            'find all, a positional list' => [fn() => Author::find('all', ['conditions' => ['author_id > ?;', 0]]), 'author_id > ?;'],
+            'first' => [fn() => Author::first(['conditions' => 'author_id > 1;', 'order' => 'author_id']), 'author_id > 1;'],
+            'last' => [fn() => Author::last(['conditions' => 'author_id > 1;']), 'author_id > 1;'],
+            'find by pk' => [fn() => Author::find(1, ['conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'count' => [fn() => Author::count(['conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'exists' => [fn() => Author::exists(['conditions' => 'author_id > 10;']), 'author_id > 10;'],
+            'Table::find' => [fn() => Author::table()->find(['conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'update_all' => [fn() => Author::update_all(['set' => ['name' => 'Z'], 'conditions' => ['author_id > ?;', 0], 'order' => 'author_id', 'limit' => 1]), 'author_id > ?;'],
+            'update_all, a string set' => [fn() => Author::update_all(['set' => "name = 'Z'", 'conditions' => 'author_id > 0;']), 'author_id > 0;'],
+            'delete_all' => [fn() => Author::delete_all(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0;'],
+            'delete_all, a conditions string' => [fn() => Author::delete_all('author_id > 0;'), 'author_id > 0;'],
+        ] as $case => [$call, $sql]) {
+            $this->assert_same([['exception' => ActiveRecord\ActiveRecordException::class, 'message' => $this->terminator_refusal($sql)]], GoldenStatements::capture($call), $case);
+        }
+
+        // nothing was written
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
+    }
+
+    // BREAKING (the maintainer, 2026-11-02): so is the SQL of the legacy 'conditions' option that leaves a block comment
+    // open, a /* outside its strings and comments with no */ after it. SQLite ran the comment to the end of the statement:
+    // a read lost the ORDER BY and the LIMIT after it and found every row, a limited update_all() or delete_all() wrote
+    // every row it matched (the four authors here, the same SQL as master's); MySQL, MariaDB and Postgres refused it. A
+    // closed comment, or a /* in a string, is none, and the limited delete deletes the one row it picks
+    public function test_legacy_conditions_that_leave_a_block_comment_open_are_refused(): void
+    {
+        Author::table();
+        $refusal = fn(string $sql): string => "SQL '$sql' in the 'conditions' option on Author leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+
+        foreach ([
+            'all' => [fn() => Author::all(['conditions' => 'author_id > 0 /* note', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0 /* note'],
+            'find all, a positional list' => [fn() => Author::find('all', ['conditions' => ['author_id > ? /* note', 0], 'order' => 'author_id', 'limit' => 1]), 'author_id > ? /* note'],
+            'first' => [fn() => Author::first(['conditions' => 'author_id > 1 /* note', 'order' => 'author_id']), 'author_id > 1 /* note'],
+            'count' => [fn() => Author::count(['conditions' => 'author_id > 0 /* note']), 'author_id > 0 /* note'],
+            'exists' => [fn() => Author::exists(['conditions' => 'author_id > 10 /* note']), 'author_id > 10 /* note'],
+            'update_all' => [fn() => Author::update_all(['set' => ['name' => 'Z'], 'conditions' => ['author_id > ? /* note', 0], 'order' => 'author_id', 'limit' => 1]), 'author_id > ? /* note'],
+            'delete_all' => [fn() => Author::delete_all(['conditions' => 'author_id > 0 /* note', 'order' => 'author_id', 'limit' => 1]), 'author_id > 0 /* note'],
+        ] as $case => [$call, $sql]) {
+            $this->assert_same([['exception' => ActiveRecord\ActiveRecordException::class, 'message' => $refusal($sql)]], GoldenStatements::capture($call), $case);
+        }
+
+        // nothing was written
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
+
+        $this->assert_same([1], array_map(fn(Author $author): int => $author->author_id, Author::all(['conditions' => 'author_id > 0 /* note */', 'order' => 'author_id', 'limit' => 1])));
+        $this->assert_same(1, Author::delete_all(['conditions' => "name != '/*'", 'order' => 'author_id', 'limit' => 1]));
+        $this->assert_same(3, (int) Author::count());
+    }
+
+    // No options array turns the refusal off: the WHERE of Table::update() and Table::delete() is sent as given through an
+    // argument of the engine (Query::execute_update(), execute_delete()), which no caller's options reach. A
+    // 'refuse_terminator' key in the options of the public Table::find(), exists() and options_to_sql(), or of the
+    // engine's own legacy write, is an unknown option, read by nothing: the SQL is refused as without it
+    public function test_no_option_turns_the_refusal_of_a_statement_terminator_off(): void
+    {
+        $table = Author::table();
+        $off = ['refuse_terminator' => false];
+
+        foreach ([
+            'Table::find' => fn() => $table->find(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1] + $off),
+            'Table::exists' => fn() => $table->exists(['conditions' => 'author_id > 0;'] + $off),
+            'Table::options_to_sql' => fn() => $table->options_to_sql(['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1] + $off)->to_s(),
+            'a legacy delete' => fn() => Query::from_options($table, ['conditions' => 'author_id > 0;', 'order' => 'author_id', 'limit' => 1] + $off)->execute_delete(),
+            'a legacy update' => fn() => Query::from_options($table, ['conditions' => 'author_id > 0;', 'limit' => 1] + $off)->execute_update(['name' => 'Z']),
+        ] as $case => $call) {
+            $this->assert_same([['exception' => ActiveRecord\ActiveRecordException::class, 'message' => $this->terminator_refusal('author_id > 0;')]], GoldenStatements::capture($call), $case);
+        }
+
+        $this->assert_same(4, (int) Author::count());
+        $this->assert_same(0, (int) Author::count(['conditions' => ['name' => 'Z']]));
+    }
+
+    // ... and a ; that is no terminator is sent as it always was: in a string literal, in a comment, in a bound value (a
+    // dynamic finder binds its values), or on Postgres in a dollar-quoted string
+    public function test_legacy_conditions_send_a_semicolon_in_a_string_a_comment_or_a_value(): void
+    {
+        // insert() runs no setter (Author's upper-cases the name)
+        Author::new_query()->insert(['name' => 'a;b']);
+
+        $this->assert_same(1, count(Author::all(['conditions' => "name = 'a;b'"])));
+        $this->assert_same(1, (int) Author::count(['conditions' => ['name = ?', 'a;b']]));
+        $this->assert_true(Author::exists(['conditions' => "name = 'a;b' /* ; */"]));
+        $this->assert_same('a;b', Author::find_by_name('a;b')->name);
+        $this->assert_same([1], array_map(fn(Author $author): int => $author->author_id, Author::all(['conditions' => 'author_id > 0 /* a;b */', 'order' => 'author_id', 'limit' => 1])));
+
+        if ($this->conn instanceof ActiveRecord\PgsqlAdapter) {
+            $this->assert_same(1, (int) Author::count(['conditions' => 'name = $$a;b$$']));
+        }
+
+        $this->assert_same(1, Author::update_all(['set' => ['name' => 'c;d'], 'conditions' => "name = 'a;b'"]));
+        $this->assert_same(1, Author::delete_all(['conditions' => ['name = ?', 'c;d'], 'order' => 'author_id', 'limit' => 1]));
+        $this->assert_same(4, (int) Author::count());
+    }
+
+    // A relationship's declared 'conditions' reach the finders' (its loads call them, ANDed with the key), so one that
+    // holds a ; is refused before the books are read, in the lazy load and the eager one. Master sent it in parentheses,
+    // "(book_id > 0;) AND author_id = ?", which every database refused (a DatabaseException)
+    public function test_a_relationship_whose_conditions_hold_a_statement_terminator_is_refused(): void
+    {
+        $author = TerminatedConditionsAuthor::find(1);
+        $refused = "in the 'conditions' option on Book holds a statement terminator (;)";
+
+        $this->assert_exception_message_contains($refused, fn() => $author->books, ActiveRecord\ActiveRecordException::class);
+        $this->assert_exception_message_contains($refused, fn() => TerminatedConditionsAuthor::all(['include' => 'books']), ActiveRecord\ActiveRecordException::class);
+    }
+
+    // The scope of the refusal (the maintainer, 2026-10-30) is the 'conditions' option: the SQL of the other options, the
+    // WHERE that Table::update() and Table::delete() are given (save() and Model::delete() give a pk hash) and
+    // find_by_sql() are sent as they always were
+    public function test_only_the_conditions_option_is_refused_a_statement_terminator(): void
+    {
+        $table = Author::table();
+        $options = ['select' => 'author_id;', 'joins' => 'JOIN books ON(1);', 'order' => 'author_id;', 'group' => 'author_id;', 'having' => 'COUNT(*) > 0;', 'from' => 'authors;'];
+
+        foreach ($options as $option => $sql) {
+            $this->assert_sql_has($sql, $table->options_to_sql([$option => $sql])->to_s());
+        }
+
+        $data = ['name' => 'Ended'];
+        $this->assert_same(1, $table->update($data, 'author_id = 1;')->rowCount());
+        $this->assert_same(['Ended'], array_map(fn(Author $author): string => $author->name, Author::find_by_sql('SELECT * FROM authors WHERE author_id = 1;')));
     }
 
     // Spec §6.2.5: an empty set is refused before any SQL. The updated_at of the rule must not make a

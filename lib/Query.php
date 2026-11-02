@@ -40,7 +40,7 @@ class Query
      *   calls them and they keep their legacy meaning, so they are reached through new_query() or a
      *   chain. PHP refuses a static call of an instance method of Model such as readonly() with its own
      *   Error, before __callStatic() sees it;
-     * - the internals of the legacy entries (from_options, to_sql_builder, state, execute_*, legacy_*).
+     * - the internals of the legacy entries (from_options, to_sql_builder, state, execute_*).
      *
      * @var list<string>
      */
@@ -159,7 +159,10 @@ class Query
      * of a finder (those Table::options_to_sql() receives), or the conditions, order and limit of
      * a legacy write, which execute_update() and execute_delete() read. Model::update_all() and
      * Model::delete_all() give those of their options; Table::update() and Table::delete() give
-     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read.
+     * their pk hash as the conditions, with 'mapped_names' => [] so that no alias is read. The SQL
+     * of the conditions is refused when it holds a statement terminator (see
+     * QueryCompiler::refuse_terminated_conditions()), whatever the options hold: only the
+     * $refuse_terminator argument of execute_update() and execute_delete() sends it as given.
      *
      * Like for_table(), it reads and builds through $table itself.
      *
@@ -263,7 +266,8 @@ class Query
      * Selects an SQL expression besides what the query selects, sent as written, with the values of its
      * bind markers. A select() replaces it, its values included. SQL that holds -- or # is followed by a
      * newline, so that a line comment at its end cannot run on over the rest of the statement (see
-     * QueryCompiler::raw_fragment()).
+     * QueryCompiler::raw_fragment()). It has the warning of where_raw(): never from user input. SQL that holds a
+     * statement terminator (;) outside its strings and comments is refused at the call, as where_raw() refuses it.
      *
      * <code>
      * Author::select('name')->select_raw('LENGTH(name) > ? AS long_name', [10])->get();
@@ -271,9 +275,12 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator or leaves a block comment open,
+     *   and the query is left as it was
      */
     public function select_raw(string $sql, array $bindings = []): static
     {
+        $this->compiler()->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->selects[] = ['raw' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -281,8 +288,8 @@ class Query
 
     /**
      * Selects each row once (SELECT DISTINCT), or with false every row again. With no select of the query's own, a
-     * count() or another aggregate of a column runs over that column's distinct values, as Eloquent's distinct() does
-     * (see min()).
+     * count() or another aggregate of a column runs over that column's distinct values, as Eloquent's distinct() does,
+     * and refuses a window ordered by another column (see min()).
      *
      * @return $this
      */
@@ -323,7 +330,8 @@ class Query
      * Reads the rows from a FROM written in SQL, a subquery for instance, sent as written, with the
      * values of its bind markers. It names its rows itself, so no column of the model gets a table then
      * (see QueryCompiler::column()). It replaces a from(). SQL that holds -- or # is followed by a newline,
-     * as select_raw() says.
+     * as select_raw() says. It has the warning of where_raw(): never from user input. SQL that holds a statement
+     * terminator (;) outside its strings and comments is refused at the call, as where_raw() refuses it.
      *
      * <code>
      * Book::from_raw('(SELECT * FROM books WHERE book_id > ?) books', [10])->get();
@@ -331,9 +339,12 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException at the call, for SQL that holds a statement terminator or leaves a block comment open,
+     *   and the query is left as it was
      */
     public function from_raw(string $sql, array $bindings = []): static
     {
+        $this->compiler()->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->from = null;
         $this->state->from_alias = null;
         $this->state->from_raw = $sql;
@@ -451,13 +462,26 @@ class Query
      * SQLBuilder would leave it out, and an update() or a delete() of the query would write every row. SQL that holds
      * -- or # is followed by a newline, as select_raw() says.
      *
+     * SQL that holds a statement terminator (;) outside its strings, its quoted identifiers and its comments, as the
+     * database of the connection reads them (see QueryCompiler::refuse_statement_terminator()), is refused too: MySQL,
+     * MariaDB and SQLite would end the statement there, which cuts off the clauses that follow it, on a write its ORDER BY
+     * and LIMIT, so a limited write would touch every row it matches; Postgres refuses the statement. A ; in a string
+     * ('a;b'), a comment or a bound value is sent as it is. SQL that leaves a block comment open, a /* outside its
+     * strings and comments that nothing closes, is refused too: SQLite runs the comment to the end of the statement,
+     * with the same effect, and MySQL, MariaDB and Postgres refuse the statement.
+     *
+     * Warning: the SQL is sent as written, so it must never come from user input. A line comment at its end (--, or #
+     * on MySQL and MariaDB) ends at the newline that follows it, where the legacy 'conditions' option sends its SQL as
+     * given and the comment cuts off what follows.
+     *
      * <code>
      * Author::where_raw('LENGTH(name) > ?', [3])->get();
      * </code>
      *
      * @param array<mixed> $bindings
      * @return $this
-     * @throws ActiveRecordException at the call, for SQL that is empty or only whitespace, and the query is left as it was
+     * @throws ActiveRecordException at the call, for SQL that is empty or only whitespace, or that holds a statement
+     *   terminator, and the query is left as it was
      */
     public function where_raw(string $sql, array $bindings = []): static
     {
@@ -465,7 +489,8 @@ class Query
     }
 
     /**
-     * Adds a condition written in SQL as where_raw() does, ORed.
+     * Adds a condition written in SQL as where_raw() does, ORed, with the same warning (the SQL is sent as written) and
+     * the same refusals, of SQL that is blank or holds a statement terminator.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -917,7 +942,9 @@ class Query
      * their relationship's name as alias. See Table::create_joins().
      *
      * Warning: an entry that holds "JOIN " (in any case) is sent to the database as raw SQL, and must never
-     * come from user input. left_joins() takes relationship names only, and refuses a fragment.
+     * come from user input. A fragment that holds a statement terminator (;) outside its strings and comments is
+     * refused at the call, as where_raw() refuses it. left_joins() takes relationship names only, and refuses a
+     * fragment.
      *
      * The join of a relationship is the legacy join SQL, unchanged, so it has the limits of the legacy
      * 'joins' option, and the database refuses the first three:
@@ -937,11 +964,21 @@ class Query
      * @return $this
      * @throws RelationshipException at the call, for a name that is no relationship of the model, and the query
      *   is left as it was
-     * @throws ActiveRecordException at the call, for an entry that is not a string
+     * @throws ActiveRecordException at the call, for an entry that is not a string, or a JOIN fragment that holds a
+     *   statement terminator or leaves a block comment open, and the query is left as it was
      */
     public function joins(string|array $relationships_or_sql): static
     {
-        return $this->add_relationship_joins($this->relationship_names(__FUNCTION__, $relationships_or_sql), 'INNER');
+        $names = $this->relationship_names(__FUNCTION__, $relationships_or_sql);
+
+        // a JOIN fragment is SQL written by hand, as Table::create_joins_of_type() tells it from a relationship name
+        foreach ($names as $name) {
+            if (false !== stripos($name, 'JOIN ')) {
+                $this->compiler()->refuse_statement_terminator($name, __FUNCTION__ . '()');
+            }
+        }
+
+        return $this->add_relationship_joins($names, 'INNER');
     }
 
     /**
@@ -1022,7 +1059,11 @@ class Query
      * list over its marker, as select_raw() and from_raw() do not: write one marker for each value. SQL that is
      * empty or only whitespace is refused, and so is 0, the position of no column, which SQLBuilder would leave out
      * where the database refuses it (see QueryCompiler::refuse_blank_sql()). SQL that holds -- or # is followed by
-     * a newline, as select_raw() says.
+     * a newline, as select_raw() says. SQL that holds a statement terminator (;) outside its strings and comments is
+     * refused, as where_raw() refuses it: the clauses that follow it in the statement would be cut off, its LIMIT and
+     * OFFSET, so a limited write would touch every row it matches.
+     *
+     * Warning: the SQL is sent as written, so it must never come from user input.
      *
      * <code>
      * Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])->get();
@@ -1030,12 +1071,14 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
-     * @throws ActiveRecordException at the call, for SQL that is empty, only whitespace or 0, and the query is left as
-     *   it was
+     * @throws ActiveRecordException at the call, for SQL that is empty, only whitespace or 0, or that holds a statement
+     *   terminator, and the query is left as it was
      */
     public function order_by_raw(string $sql, array $bindings = []): static
     {
-        $this->compiler()->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler = $this->compiler();
+        $compiler->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->orders[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -1138,7 +1181,11 @@ class Query
      * Groups the rows by an SQL expression, sent as written, with the values of its bind markers, after the groups
      * the query already has. A value that is a list is not spread over its marker, as in order_by_raw(): write one
      * marker for each value. SQL that is empty, only whitespace or 0 is refused, as order_by_raw() refuses it. SQL
-     * that holds -- or # is followed by a newline, as select_raw() says.
+     * that holds -- or # is followed by a newline, as select_raw() says. SQL that holds a statement terminator (;)
+     * outside its strings and comments is refused, as where_raw() refuses it: the clauses that follow it in the
+     * statement (its HAVING, ORDER BY, LIMIT and OFFSET) would be cut off.
+     *
+     * Warning: the SQL is sent as written, so it must never come from user input.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -1146,7 +1193,9 @@ class Query
      */
     public function group_by_raw(string $sql, array $bindings = []): static
     {
-        $this->compiler()->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler = $this->compiler();
+        $compiler->refuse_blank_sql($sql, __FUNCTION__, position: true);
+        $compiler->refuse_statement_terminator($sql, __FUNCTION__ . '()');
         $this->state->groups[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -1161,6 +1210,9 @@ class Query
      * the model is its real column, and any other, the alias of a selected expression, is quoted as written (MySQL,
      * MariaDB and SQLite accept such an alias in a HAVING, Postgres does not). An aggregate is written with
      * having_raw().
+     *
+     * A HAVING without a GROUP BY (an aggregate select with a having_raw() condition) needs SQLite 3.39 or later: an
+     * older SQLite refuses it at the database. The other databases accept it.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having('parent_author_id', '>', 1)->get();
@@ -1192,7 +1244,12 @@ class Query
      * is beside it, with the values of its bind markers. As in where_raw(), a value that is a list is spread over
      * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?), and the condition
      * "0" is sent, in parentheses. SQL that is empty or only whitespace is refused, as where_raw() refuses it. SQL
-     * that holds -- or # is followed by a newline, as select_raw() says.
+     * that holds -- or # is followed by a newline, as select_raw() says. SQL that holds a statement terminator (;)
+     * outside its strings and comments is refused, as where_raw() refuses it: the clauses that follow it in the
+     * statement (its ORDER BY, LIMIT and OFFSET) would be cut off.
+     *
+     * Warning: the SQL is sent as written, so it must never come from user input. A HAVING without a GROUP BY needs
+     * SQLite 3.39 or later, as having() says.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();
@@ -1208,7 +1265,8 @@ class Query
     }
 
     /**
-     * Adds a condition written in SQL to the HAVING as having_raw() does, ORed.
+     * Adds a condition written in SQL to the HAVING as having_raw() does, ORed, with the same warning (the SQL is sent as
+     * written) and the same refusals, of SQL that is blank or holds a statement terminator.
      *
      * @param array<mixed> $bindings
      * @return $this
@@ -1461,8 +1519,9 @@ class Query
      * hands back another query on the model, as in Eloquent, which is then the query that goes on, a fork for
      * instance (see clone()). Anything else that the callback returns is of no use to the chain, and is left out.
      *
-     * When neither the callback nor a default runs, the filter came out empty: an update() or a delete() of the query
-     * with no other where condition is refused, as after where([]), where Eloquent writes every row. A read is
+     * When neither the callback nor a default runs, the filter came out empty, and the writes refuse it: an update() or
+     * a delete() of the query with no other where condition, as after where([]), where Eloquent writes every row, and
+     * an insert() or an upsert(), which take no clause, with a message that names the when() or unless(). A read is
      * unchanged, and a write of every row says so with new_query(): Author::new_query()->delete().
      *
      * <code>
@@ -1826,19 +1885,30 @@ class Query
 
     /**
      * Whether the query selects any row, without counting: the adapter's EXISTS() over its SELECT, which
-     * stops at the first row. A query of the builder leaves its order, its limit and its offset out, as the
-     * legacy exists does (spec §5.3), so a limit of 0 does not make it false. Without a GROUP BY and a
-     * HAVING it selects 1 there, as the legacy exists does, so a select of an aggregate, one row even when
-     * no row matches, does not make it true; with one, which may name an alias of the select, the select
-     * stays (see QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
+     * stops at the first row. It is true exactly when count() is not 0 (spec §5.3). A window (limit(), offset())
+     * is honoured: the rows of the window, picked by the query's order, are asked for as count() counts them, in
+     * a subquery (SELECT 1 FROM (…) AS t), so limit(0) and an offset past the rows make it false. Without a
+     * window the order is left out, which cannot change the answer; and without a GROUP BY and a HAVING it selects
+     * 1 there, as the legacy exists does, so a select of an aggregate, one row even when no row matches, does not
+     * make it true; with one, which may name an alias of the select, the select stays (see
+     * QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
      *
-     * Model::exists() is the legacy exists, which Author::exists(...) calls.
+     * With no select of its own, SQL of group_by_raw(), or of a window's order_by_raw(), that names a column by its
+     * position (GROUP BY 1) is refused before any statement, as count() refuses it: it would name the 1 that exists()
+     * selects (see QueryCompiler::refuse_position_in_own_select()).
+     *
+     * Model::exists(), which Author::exists(...) calls, runs this exists() on the query of its legacy options.
+     *
+     * @throws ActiveRecordException for SQL of group_by_raw() or of a window's order_by_raw() that names a column by its
+     *   position, with no select of the query's own, before any statement
      */
     public function exists(): bool
     {
         $table = $this->table();
         $conn = $table->connection();
-        $sql = $this->compiler()->compile_exists($this->state);
+        $compiler = $this->compiler();
+        $compiler->refuse_position_in_own_select($this->state, null, __FUNCTION__);
+        $sql = $compiler->compile_exists($this->state);
         $values = $table->format_date_bind_values($sql->select_bind_values());
         $statement = $conn->exists_sql($sql->to_s());
         $table->last_sql = $statement;
@@ -1867,21 +1937,29 @@ class Query
      * QueryCompiler::compile_count()). The statement that ran is left in Table::$last_sql.
      *
      * On a grouped query, a counted $column must be grouped, or be what the query's own select gives:
-     * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY.
+     * MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any other column beside a GROUP BY. After distinct(),
+     * with no select of the query's own, a $column in a window (limit(), offset()) ordered by another column
+     * is refused, as min() refuses it. So is SQL of group_by_raw(), or of a window's order_by_raw(), that names a column by
+     * its position (GROUP BY 1) where count() makes the select of its subquery itself, with no select of the query's own
+     * (see QueryCompiler::refuse_position_in_own_select()).
      *
      * <code>
      * $parents = Author::group_by('parent_author_id')->count();
      * </code>
      *
-     * Model::count() is the legacy count, which Author::count(...) calls, unchanged: grouped, it counts the
-     * rows of the first group.
+     * Model::count(), which Author::count(...) calls, runs this count() on the query of its legacy options, by the
+     * same rule: their select, group, having, order, limit and offset are read as those of the builder written by hand
+     * (select_raw(), group_by_raw(), ...).
      *
-     * @throws ActiveRecordException for an empty column name, before any statement
+     * @throws ActiveRecordException for an empty column name, a distinct $column in a window ordered by another
+     *   column, or a position in raw SQL where count() makes its select, before any statement
      */
     public function count(string $column = '*'): int
     {
         $compiler = $this->compiler();
         $compiler->refuse_empty_column_name($column, __FUNCTION__);
+        $compiler->refuse_distinct_window_ordered_by_another_column($this->state, $column, __FUNCTION__);
+        $compiler->refuse_position_in_own_select($this->state, $column, __FUNCTION__);
 
         $table = $this->table();
         $sql = $compiler->compile_count($this->state, $column);
@@ -1902,8 +1980,12 @@ class Query
      * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
      * query's select, so a select of its own must hold it. A distinct query with no select of its own selects the
      * column alone, so its aggregate runs over the column's distinct values: Eloquent's SUM(DISTINCT col) and
-     * AVG(DISTINCT col) for sum() and avg(), where min() and max() are the same either way. The statement that ran is
-     * left in Table::$last_sql.
+     * AVG(DISTINCT col) for sum() and avg(), where min() and max() are the same either way. Such a query in a window
+     * (limit(), offset()) ordered by another column is refused at the call, since SELECT DISTINCT of one column cannot be
+     * ordered by another (MySQL and Postgres refuse it, MariaDB and SQLite pick the values arbitrarily): order by the
+     * column, by any of its names, or give the query a select of its own; without a window the order is dropped (see
+     * QueryCompiler::refuse_distinct_window_ordered_by_another_column()). The statement that ran is left in
+     * Table::$last_sql.
      *
      * The column of a grouped query must be one of its groups, unless the groups are the whole primary key of the model
      * (each group is then one row of the table, and any column may be aggregated). min(), max(), sum() and avg() refuse
@@ -1918,8 +2000,8 @@ class Query
      * $per_customer = Order::group_by('customer_id')->max('customer_id');
      * </code>
      *
-     * @throws ActiveRecordException for an empty column name, or *, or a column that the GROUP BY does not group (as
-     *   above), before any statement
+     * @throws ActiveRecordException for an empty column name, or *, or a column that the GROUP BY does not group, or a
+     *   distinct column in a window ordered by another column (as above), before any statement
      */
     public function min(string $column): int|string|float|null
     {
@@ -2018,8 +2100,9 @@ class Query
      * it then, and the caller commits or rolls them back. They run on the connection of the model's Table, not on the
      * one a subclass's connection() returns, and the last one is left in Table::$last_sql.
      *
-     * An insert takes no clause of the query, and refuses any (spec §5.5). It is not forwarded statically: Author::insert()
-     * is no call of the builder, Author::new_query()->insert() is.
+     * An insert takes no clause of the query, and refuses any (spec §5.5), a when() or an unless() that skipped its
+     * callback included, which the refusal names. It is not forwarded statically: Author::insert() is no call of the
+     * builder, Author::new_query()->insert() is.
      *
      * <code>
      * Author::new_query()->insert([['name' => 'Tito'], ['name' => 'Bob']]);
@@ -2133,28 +2216,6 @@ class Query
     }
 
     /**
-     * The execution of Model::count(), moved here: the SELECT of the legacy options is run (count()
-     * has them select COUNT(*)) and the first column of its first row is returned, 0 when it
-     * returns none (#34). A grouped count is that of the first group. Unlike exists(), it leaves
-     * Table::$last_sql alone, as count() always did.
-     *
-     * It runs on $connection when one is given: Model::count() passes static::connection(), a
-     * public static that a subclass can override, so that count() keeps calling that hook as it
-     * always did. Without one it runs on the Table's connection.
-     *
-     * @internal Serves Model::count(); not a supported API.
-     */
-    public function legacy_count(?Connection $connection = null): int|string
-    {
-        $table = $this->table();
-        $sql = $this->to_sql_builder();
-        $values = $table->format_date_bind_values($sql->get_where_values());
-        $row = ($connection ?? $table->connection())->query($sql->to_s(), $values)->fetch(\PDO::FETCH_NUM);
-
-        return false === $row ? 0 : $row[0];
-    }
-
-    /**
      * INSERTs one row into the model's table and returns the statement that ran: the body of
      * Table::run_insert(), moved here. The row's keys are column names or attribute names (#92) and
      * its values are prepared as the finders prepare theirs (Table::process_data(): a DateTime in
@@ -2220,10 +2281,14 @@ class Query
      * passes static::connection(), a public static that a subclass can override, on which it always
      * built and ran its statement. Without one, the Table's.
      *
+     * The SQL of legacy conditions that holds a statement terminator is refused, unless
+     * $refuse_terminator is false: Table::update() turns it off, so that the WHERE it is given is
+     * sent as it always was (see QueryCompiler::refuse_terminated_conditions()).
+     *
      * @internal Serves update(), Model::update_all() and Table::update(); not a supported API.
      * @param array<string, mixed>|string $set
      */
-    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null): \PDOStatement
+    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
     {
         $table = $this->table();
 
@@ -2240,7 +2305,7 @@ class Query
             }
         }
 
-        $sql = (new QueryCompiler($table, $connection))->compile_update($this->state, $set);
+        $sql = (new QueryCompiler($table, $connection, $refuse_terminator))->compile_update($this->state, $set);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }
@@ -2257,13 +2322,15 @@ class Query
      * (Table::process_data()), and its statement always sent it as it is.
      *
      * The statement is rendered for $connection and runs on it when one is given: Model::delete_all()
-     * passes static::connection(), as execute_update() describes. Without one, the Table's.
+     * passes static::connection(), as execute_update() describes. Without one, the Table's. With
+     * $refuse_terminator false, the WHERE that Table::delete() is given is sent as it always was, as in
+     * execute_update().
      *
      * @internal Serves delete(), Model::delete_all() and Table::delete(); not a supported API.
      */
-    public function execute_delete(bool $format_dates = true, ?Connection $connection = null): \PDOStatement
+    public function execute_delete(bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
     {
-        $sql = (new QueryCompiler($this->table(), $connection))->compile_delete($this->state);
+        $sql = (new QueryCompiler($this->table(), $connection, $refuse_terminator))->compile_delete($this->state);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }
@@ -2292,8 +2359,9 @@ class Query
      * It runs on the connection of the Table, as Table::upsert() always did, and never calls
      * Model::connection(), the hook a subclass can override and update_all() and delete_all() take
      * theirs from. The last statement it sent is left in Table::$last_sql. An upsert takes the rows to
-     * write and no clause of the query: a query that holds one (a where, an order, a join...) is refused
-     * (spec §5.5), as Model::upsert() and Table::upsert() never hold one.
+     * write and no clause of the query: a query that holds one (a where, an order, a join, a when() or
+     * an unless() that skipped its callback...) is refused (spec §5.5), as Model::upsert() and
+     * Table::upsert() never hold one.
      *
      * @param list<array<string, mixed>> $values
      * @param string|list<string> $unique_by
@@ -2770,8 +2838,10 @@ class Query
      * type the connection reports for it, and none for any other name.
      *
      * @return 'integer'|'decimal'|'floating'|null
-     * @throws ActiveRecordException for an empty column name, for *, which only count() takes, and for a column that the
-     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column())
+     * @throws ActiveRecordException for an empty column name, for *, which only count() takes, for a column that the
+     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column()), for a distinct column in a
+     *   window ordered by another column (see QueryCompiler::refuse_distinct_window_ordered_by_another_column()), and for a
+     *   position in raw SQL where the aggregate makes its select (see QueryCompiler::refuse_position_in_own_select())
      */
     private function aggregate_kind(string $method, string $column): ?string
     {
@@ -2783,6 +2853,8 @@ class Query
         }
 
         $compiler->refuse_ungrouped_column($this->state, $column, $method);
+        $compiler->refuse_distinct_window_ordered_by_another_column($this->state, $column, $method);
+        $compiler->refuse_position_in_own_select($this->state, $column, $method);
 
         return AggregateCaster::kind($compiler->model_column($column), $this->table()->connection()->exact_decimals());
     }
@@ -3041,8 +3113,9 @@ class Query
     /**
      * What when() and unless() do: the callback runs when the truth of $value is $when (true for when(), false for
      * unless()), else the default does, if there is one. A Closure given as the value is called with the query, and
-     * what it returns is the value. When neither runs, the query remembers it as it remembers a where call that added
-     * no condition (QueryState::$empty_where): the filter came out empty, and a write with no other condition is refused.
+     * what it returns is the value. When neither runs, the query remembers it (QueryState::$skipped_when): the filter
+     * came out empty, and the writes refuse it, an update() or a delete() with no other condition as after a where call
+     * that added none, an insert() or an upsert() as a clause.
      *
      * @param callable(static, mixed): mixed $callback
      * @param (callable(static, mixed): mixed)|null $default
@@ -3054,7 +3127,7 @@ class Query
         $run = $when === (bool) $value ? $callback : $default;
 
         if (null === $run) {
-            $this->state->empty_where = true;
+            $this->state->skipped_when = true;
 
             return $this;
         }
@@ -3151,9 +3224,10 @@ class Query
         $query->table = $this->table;
         $callback($query);
 
-        // a where call that added no condition is a where clause too: the group holds what the others added, and is
-        // left out without any, which the query it goes in remembers (see add_wheres())
-        $held = QueryCompiler::held_fields($query->state, ['wheres', 'empty_where']);
+        // a where call that added no condition, and a when() or an unless() that skipped its callback, are where clauses
+        // too: the group holds what the others added, and is left out without any, which the query it goes in
+        // remembers (see add_wheres())
+        $held = QueryCompiler::held_fields($query->state, ['wheres', 'empty_where', 'skipped_when']);
 
         if ([] !== $held) {
             throw new ActiveRecordException(sprintf('A where() group can only hold where clauses: the one given to %s() on %s also holds %s', $method, $this->model_class, implode(', ', $held)));

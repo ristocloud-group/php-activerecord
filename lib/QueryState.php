@@ -104,12 +104,20 @@ final class QueryState
     public array $wheres = [];
 
     /**
-     * Whether a call of a where method added no condition: where([]), a closure that adds none, where_null([]); or a
-     * when() or an unless() ran neither its callback nor a default. A read takes such a call for no condition (spec
-     * §5.2). A write refuses a query whose where calls all added none, its WHERE empty: the conditions it was meant to
-     * write by turned out empty (see QueryCompiler::compile_update()), where a write of every row calls no where method.
+     * Whether a call of a where method added no condition: where([]), a closure that adds none, where_null([]). A read
+     * takes such a call for no condition (spec §5.2). A write refuses a query whose where calls all added none, its WHERE
+     * empty: the conditions it was meant to write by turned out empty (see QueryCompiler::compile_update()), where a
+     * write of every row calls no where method.
      */
     public bool $empty_where = false;
+
+    /**
+     * Whether a when() or an unless() ran neither its callback nor a default: the optional filter it stands for came
+     * out empty. A read takes it for no condition. An update() and a delete() take it as they take $empty_where: with
+     * no other where condition they are refused. An insert() and an upsert(), which take no clause, refuse it, naming it
+     * (see QueryCompiler::refuse_unwritable_clauses()).
+     */
+    public bool $skipped_when = false;
 
     /**
      * The builder's GROUP BY, in order (Query::group_by() and group_by_raw()): a column as it was named,

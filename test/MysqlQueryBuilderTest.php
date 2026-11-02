@@ -95,6 +95,76 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same([2, 3, 4], $ids(Author::order_by('author_id')->get()));
     }
 
+    // A ; in a # comment, or in an identifier in backticks, is no statement terminator: the SQL is sent, and the comment
+    // and the identifier are read as MySQL and MariaDB read them (a ; outside them is refused at the call, QueryWhereTest)
+    public function test_a_semicolon_in_a_hash_comment_or_a_backtick_identifier_is_sent(): void
+    {
+        $this->assert_same(1, Author::where_raw('author_id > 0 # a;b')->order_by('author_id')->limit(1)->delete());
+        $this->assert_same(['2'], array_map(fn(Author $author): string => (string) $author->{'a;b'}, Author::select_raw('author_id AS `a;b`')->order_by('author_id')->limit(1)->get()));
+    }
+
+    // MySQL and MariaDB read a statement terminator as they read SQL (QueryCompiler::refuse_statement_terminator()), in
+    // the default sql_mode: strings in single and double quotes with backslash escapes, identifiers in backticks, a #
+    // comment, a -- comment only where a space or a control character follows the dashes, and no dollar quote ($ is a
+    // character of identifiers and of variables, @a$$). A block comment does not nest, and the text of an executable one
+    // (/*! */, /*M! */) is SQL they run. Each ; below that they read outside is refused at the call, and its limited delete
+    // sends nothing: 0--1 is 0 - -1, and the delete deleted three of the four authors; @a$$ ... @b$$ deleted all four
+    public function test_a_statement_terminator_is_read_as_mysql_and_mariadb_read_it(): void
+    {
+        foreach (["name = 'a\\';b'", 'name = "a\\";b"', 'name = `a;b`', 'author_id > 0 # ;', 'author_id > 0 -- ;', "author_id > 0 --\t;", 'author_id > 0 /*+ ; */'] as $sql) {
+            $this->assert_sql_has($sql, Author::where_raw($sql)->to_sql());
+        }
+
+        Author::table();
+
+        foreach ([
+            'author_id > 0--1;',
+            'name != $$a;b$$',
+            'author_id > 0 OR @a$$ IS NULL; @b$$',
+            'author_id > 0 /* /* */ ; */',
+            'author_id > 0 /*! ; */',
+            'author_id > 0 /*M! ; */',
+        ] as $sql) {
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+        }
+
+        $this->assert_same(4, (int) Author::count());
+    }
+
+    // A block comment left open is read as MySQL and MariaDB read it (QueryCompiler::refuse_statement_terminator()): it
+    // does not nest, so /* /* */ is closed, and an executable one (/*! */, /*M! */) is open until its */. A # comment, and
+    // a string in which a backslash escapes the quote, hold a /*. The fragments accepted here are sent, and their limited
+    // delete writes one row; an open one is refused at the call, by the builder and by the legacy conditions alike, where
+    // these databases refused the statement
+    public function test_a_block_comment_left_open_is_read_as_mysql_and_mariadb_read_it(): void
+    {
+        foreach (['author_id > 0 /* /* */', 'author_id > 0 /*! AND 1 */', 'author_id > 0 /*M! AND 1 */', "name != 'a\\'/*' # /*"] as $sql) {
+            $this->assert_same(1, Author::where_raw($sql)->order_by('author_id')->limit(1)->delete(), $sql);
+        }
+
+        Author::table();
+
+        foreach (['author_id > 0 /*! AND 1', 'author_id > 0 /*M! AND 1', 'author_id > 0 /*+ hint'] as $sql) {
+            $message = "leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in where_raw() on Author $message"]],
+                GoldenStatements::capture(fn() => Author::where_raw($sql)->order_by('author_id')->limit(1)->delete()),
+                $sql
+            );
+            $this->assert_same(
+                [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => "SQL '$sql' in the 'conditions' option on Author $message"]],
+                GoldenStatements::capture(fn() => Author::delete_all(['conditions' => $sql, 'order' => 'author_id', 'limit' => 1])),
+                "delete_all $sql"
+            );
+        }
+
+        $this->assert_same(0, (int) Author::count());
+    }
+
     // Spec §5.2: in_random_order() is RAND() on MySQL and MariaDB, through the adapter's random_function(); the
     // order is an order like any other, and the database runs it
     public function test_in_random_order_is_rand(): void

@@ -1017,6 +1017,10 @@ class Model
      * not find() or any other legacy finder, so what a subclass overrides in those is not run.
      * It is not query() either, which runs a raw SQL statement.
      *
+     * Inside an instance method, call this one: a call such as static::where(...) made on the class from
+     * an instance method reaches {@link __call()}, not {@link __callStatic()}, and __call() answers "Call
+     * to undefined method: where". static::new_query()->where(...) is the call that works there.
+     *
      * @return Query<static>
      */
     public static function new_query(): Query
@@ -1247,7 +1251,9 @@ class Model
      *
      * <ul>
      * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
-     * $alias_attribute, as find() reads them</li>
+     * $alias_attribute, as find() reads them, and SQL that holds a statement terminator (;) outside its strings and
+     * comments is refused, as find() refuses it: MySQL, MariaDB and SQLite would end the statement there, and a
+     * limited delete would delete every record it matches</li>
      * <li><b>limit:</b> Limit number of records to delete. Postgres has no LIMIT on DELETE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1259,7 +1265,8 @@ class Model
      * @return int Number of rows affected
      * @throws ActiveRecordException before any SQL for an argument that could be misread: a positional
      *   list (pass it as ['conditions' => [...]]), a hash mixing option keys with other keys
-     *   ("Unknown key(s): ..."), or an int, float or bool
+     *   ("Unknown key(s): ..."), or an int, float or bool; and for conditions whose SQL holds a statement
+     *   terminator
      */
     public static function delete_all($options = [])
     {
@@ -1288,15 +1295,18 @@ class Model
      *
      * A 'set' hash also sets updated_at to the current time when the table has that column and the
      * hash gives it no value (a key gives it one by the column's name or attribute name, pre-quoted
-     * or qualified with the model's table too); without_timestamps() suspends that. A 'set' string
-     * is sent as it is written, and sets nothing more.
+     * or qualified with the model's table too); without_timestamps() suspends that, and a model's
+     * override of set_timestamps() does not (it governs save() only). A 'set' string is sent as it is
+     * written, and sets nothing more.
      *
      * An options array takes the following parameters:
      *
      * <ul>
      * <li><b>set:</b> String/hash of field names and their values to be updated with</li>
      * <li><b>conditions:</b> Conditions using a string/hash/array. The names of a hash are read through
-     * $alias_attribute, as find() reads them</li>
+     * $alias_attribute, as find() reads them, and SQL that holds a statement terminator (;) outside its strings and
+     * comments is refused, as find() refuses it: MySQL, MariaDB and SQLite would end the statement there, and a
+     * limited update would update every record it matches</li>
      * <li><b>limit:</b> Limit number of records to update. Postgres has no LIMIT on UPDATE: there the
      * records are picked by primary key in a subquery, "id" IN (SELECT "id" ... ORDER BY ... LIMIT n),
      * and a table without a primary key by its row identity (tableoid, ctid)</li>
@@ -1310,7 +1320,8 @@ class Model
      *   or its 'set' is neither a non-empty hash nor a string ("Updating requires a hash or
      *   string."), is a positional list ("Invalid options for update_all(): pass positional
      *   conditions as ['conditions' => [...]]"), or has a key beside 'set' that is not an option,
-     *   such as a column name ("Unknown key(s): ...")
+     *   such as a column name ("Unknown key(s): ..."); and for conditions whose SQL holds a statement
+     *   terminator
      */
     public static function update_all($options = [])
     {
@@ -1650,6 +1661,10 @@ class Model
     /**
      * Updates a model's timestamps: updated_at on every save, created_at on the first one.
      * Does nothing while the timestamps of the model's class are suspended, see {@link without_timestamps()}.
+     *
+     * A model can override it, for save() alone: update_all() with a hash 'set', a direct Table::insert(),
+     * upsert() and the writes of the query builder fill the timestamps by the library's rule whatever it does,
+     * and only without_timestamps() suspends them.
      *
      * @return void
      */
@@ -2023,6 +2038,11 @@ class Model
      * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
      * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
      *
+     * The forwarding answers a call made where no instance of the class is at hand: from outside, or from
+     * a static method. Inside an instance method, static::where(...) (or self::where(...), or the class's
+     * own name) reaches {@link __call()} instead, which answers "Call to undefined method: where": use
+     * static::new_query()->where(...) there.
+     *
      * @param string $method Name of method
      * @param mixed $args Method args
      * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
@@ -2250,6 +2270,7 @@ class Model
      *
      * @see find
      * @return list<Model> array of records found
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function all(/* ... */)
     {
@@ -2357,19 +2378,32 @@ class Model
      * Get a count of qualifying records.
      *
      * <code>
-     * YourModel::count(array('conditions' => 'amount > 3.14159265'));
+     * YourModel::count(['conditions' => 'amount > 3.14159265']);
+     * YourModel::count(['group' => 'customer_id']); // the number of customers
      * </code>
      *
+     * It takes the arguments find() takes and builds its query from them as find() does, then counts the rows of
+     * that query with the builder's Query::count(), the one count of the library: the rows of the result. So a
+     * 'group' (and 'having') counts the groups, a 'limit' and an 'offset' the rows of their window, and a 'select'
+     * is honoured as the builder honours a select of its own: a count neither grouped nor windowed counts the rows
+     * in place (SELECT COUNT(*) in place of the select, without the order), and any other keeps the select in its
+     * subquery, SELECT COUNT(*) FROM (…) AS t (see Query::count()). The statement runs on the Table's connection, as
+     * find() and exists() run theirs, and is left in Table::$last_sql.
+     *
+     * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
+     * strings and comments is refused.
+     *
      * @see find
-     * @return int|string Number of records that matched the query; 0 when the count query
-     *   returns no row (e.g. 'limit' => 0, or an 'offset' past its single row) (#34)
+     * @return int Number of records that matched the query
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see
+     *   find()), or, with no 'select', a 'group' or a windowed 'order' that names a column by its position (see
+     *   Query::count())
      */
     public static function count(/* ... */)
     {
         $options = self::finder_conditions_from_args(func_get_args());
-        $options['select'] = 'COUNT(*)';
 
-        return Query::from_options(static::table(), $options)->legacy_count(static::connection());
+        return Query::from_options(static::table(), $options)->count();
     }
 
     /**
@@ -2381,18 +2415,25 @@ class Model
      * SomeModel::exists(array('id' => 123, 'name' => 'Tito'));
      * </code>
      *
+     * It takes the arguments find() takes, and answers whether find() would find a record, as count() counts them: the
+     * builder's Query::exists() of the query of those options, which selects 1 in them and asks the database's EXISTS().
+     * A 'limit' and an 'offset' are honoured ('limit' => 0, or an 'offset' past the rows, finds none), with the 'order'
+     * that picks the rows of the window; without a window the 'order' is left out (see Query::exists()).
+     *
+     * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
+     * strings and comments is refused.
+     *
      * @see find
      * @return boolean
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function exists(/* ... */)
     {
         $options = self::finder_conditions_from_args(func_get_args());
 
-        // Existence needs the full filtering shape (conditions, joins, from,
-        // group, having) but not ordering/paging; select a constant so the
-        // database can stop at the first matching row.
+        // whatever the options select, the rows are asked for: a constant, so that the database can stop at the first
+        // matching row, and an aggregate cannot make one row of none
         $options['select'] = '1';
-        unset($options['order'], $options['limit'], $options['offset']);
 
         return static::table()->exists($options);
     }
@@ -2407,7 +2448,8 @@ class Model
      * @see find
      * @return Model|null The first matched record or null if not found
      * @throws RecordNotFound if given pk values and none of them is found
-     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option), and before any
+     *   SQL for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function first(/* ... */)
     {
@@ -2424,7 +2466,8 @@ class Model
      * @see find
      * @return Model|null The last matched record or null if not found
      * @throws RecordNotFound if given pk values and none of them is found
-     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option)
+     * @throws ActiveRecordException if the query cannot be run (e.g. an invalid relationship option), and before any
+     *   SQL for 'conditions' whose SQL holds a statement terminator (see find())
      */
     public static function last(/* ... */)
     {
@@ -2479,7 +2522,11 @@ class Model
      * <li><b>joins:</b> A SQL join fragment such as: 'JOIN roles ON(roles.user_id=user.id)' or a named association on the model</li>
      * <li><b>include:</b> TODO not implemented yet</li>
      * <li><b>conditions:</b> A SQL fragment such as: 'id=1', array('id=1'), array('name=? and id=?','Tito',1), array('name IN(?)', array('Tito','Bob')),
-     * array('name' => 'Tito', 'id' => 1)</li>
+     * array('name' => 'Tito', 'id' => 1). SQL that holds a statement terminator (;) outside its strings and comments
+     * is refused before any SQL, with an ActiveRecordException: MySQL, MariaDB and SQLite would end the statement
+     * there and drop the order and the limit after it, and Postgres refuses it. A ; in a string ('a;b'), a comment
+     * or a bound value is sent as before. SQL that leaves a block comment open (a /* that nothing closes) is refused
+     * too: SQLite would run the comment to the end of the statement, and the other databases refuse it</li>
      * <li><b>limit:</b> Number of records to limit the query to. A first/last find takes one
      * record, none with a limit of 0 (#38)</li>
      * <li><b>offset:</b> The row offset to return results from for the query. A first/last find
@@ -2491,6 +2538,8 @@ class Model
      * </ul>
      *
      * @throws RecordNotFound if no options are passed or finding by pk and no records matched
+     * @throws ActiveRecordException before any SQL, for 'conditions' whose SQL holds a statement terminator or leaves a
+     *   block comment open
      * @return mixed An array of records found if doing a find_all otherwise a
      *   single Model object or null if it wasn't found. NULL is only return when
      *   doing a first/last find. If doing an all find and no records matched this

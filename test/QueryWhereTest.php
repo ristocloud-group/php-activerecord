@@ -601,6 +601,161 @@ class QueryWhereTest extends DatabaseTest
         $this->assert_same($this->sql('SELECT * FROM `authors` WHERE author_id > 0 -- c ORDER BY author_id'), $legacy['sql']);
     }
 
+    /**
+     * The refusal of SQL written by hand that holds a statement terminator, given to $method on $model (see
+     * QueryCompiler::refuse_statement_terminator()).
+     */
+    private function terminator_refusal(string $sql, string $method, string $model = 'Author'): string
+    {
+        return "SQL '$sql' in $method() on $model holds a statement terminator (;) outside its strings and comments: MySQL, MariaDB and SQLite would end the statement there and drop the clauses after it, and Postgres would refuse it. Bind a value with a ? marker";
+    }
+
+    // A ; outside the strings, the quoted identifiers and the comments of SQL written by hand ends the statement on MySQL
+    // and MariaDB, which run what follows it as another statement whose error is never read, and on SQLite, which drops
+    // it, so the ORDER BY and the LIMIT after it were lost (and a limited write wrote every row it matched); Postgres
+    // refuses the statement. The SQL is read at the call, as the database of the connection reads it, and refused there.
+    // What every database reads alike is pinned here: a ; in a string, in a double-quoted string or identifier, in a --
+    // comment followed by a space and in a block comment is none. What they read otherwise (backslash escapes, #, --
+    // with no space after it, backticks, brackets, dollar quotes, nested comments) is pinned by the adapter test classes
+    // (MysqlQueryBuilderTest, PgsqlQueryBuilderTest, SqliteQueryBuilderTest)
+    public function test_a_statement_terminator_is_read_outside_strings_identifiers_and_comments(): void
+    {
+        foreach ([
+            "name = 'a;b'",
+            "name = 'it''s;'",
+            'name = "a;b"',
+            'author_id > 0 -- ;',
+            'author_id > 0 /* ; */',
+        ] as $sql) {
+            $this->assert_sql_has($sql, Author::where_raw($sql)->to_sql());
+        }
+
+        foreach ([
+            'author_id > 0;',
+            '; author_id > 0',
+            "name = 'a'; DELETE FROM authors",
+            "name = 'a' ; 'b'",
+            "author_id > 0 -- c\n;",
+            // an open string, comment or dollar quote, and two different tags, close nothing: the ; is read outside
+            "name = 'a;b",
+            'author_id > 0 /* ;',
+            'name = $$a;b',
+            'name = $a$x;y$b$',
+            // a $ that opens no dollar quote: a parameter of Postgres, or a character of an identifier of MySQL
+            'author_id > $1;',
+        ] as $sql) {
+            $this->assert_exception_message_contains($this->terminator_refusal($sql, 'where_raw'), fn() => Author::where_raw($sql), ActiveRecordException::class);
+        }
+    }
+
+    // Every method that sends SQL as written refuses one at the call, before the query changes, and so a read and a write
+    // of such a query never run
+    public function test_raw_sql_that_holds_a_statement_terminator_is_refused_by_every_method_that_takes_it(): void
+    {
+        $query = Author::where('name', '!=', 'x')->order_by('author_id');
+        $sql = $query->to_sql();
+        $bindings = $query->get_bindings();
+
+        foreach ([
+            'where_raw' => fn(string $sql) => $query->where_raw($sql),
+            'or_where_raw' => fn(string $sql) => $query->or_where_raw($sql, [1]),
+            'having_raw' => fn(string $sql) => $query->having_raw($sql),
+            'or_having_raw' => fn(string $sql) => $query->or_having_raw($sql),
+            'order_by_raw' => fn(string $sql) => $query->order_by_raw($sql),
+            'group_by_raw' => fn(string $sql) => $query->group_by_raw($sql),
+            'select_raw' => fn(string $sql) => $query->select_raw($sql),
+            'from_raw' => fn(string $sql) => $query->from_raw($sql),
+        ] as $method => $call) {
+            $this->assert_exception_message_contains($this->terminator_refusal('author_id;', $method), fn() => $call('author_id;'), ActiveRecordException::class);
+        }
+
+        // in a closure group too
+        $this->assert_exception_message_contains($this->terminator_refusal('1;', 'where_raw'), fn() => $query->where(fn(Query $q) => $q->where_raw('1;')), ActiveRecordException::class);
+
+        $this->assert_same($sql, $query->to_sql());
+        $this->assert_same($bindings, $query->get_bindings());
+
+        // a JOIN fragment of joins(), and not its relationships, which are no SQL
+        $fragment = 'INNER JOIN authors ON authors.author_id = books.author_id;';
+        $this->assert_exception_message_contains($this->terminator_refusal($fragment, 'joins', 'Book'), fn() => Book::joins(['author', $fragment]), ActiveRecordException::class);
+        $this->assert_sql_has('INNER JOIN', Book::joins('author')->to_sql());
+
+        // a read of the query never runs: the SELECT would have found every author, without its order and limit
+        Author::table();
+        $this->assert_same(
+            [['exception' => ActiveRecordException::class, 'message' => $this->terminator_refusal('author_id > 0;', 'where_raw')]],
+            GoldenStatements::capture(fn() => Author::where_raw('author_id > 0;')->order_by('author_id')->limit(1)->get())
+        );
+    }
+
+    // ... and a ; that is no terminator is sent, and read by the database as the string, the comment or the value it is in
+    public function test_a_semicolon_in_a_string_a_comment_or_a_value_is_sent_as_written(): void
+    {
+        // insert() runs no setter (Author's upper-cases the name)
+        Author::new_query()->insert(['name' => 'a;b']);
+
+        $this->assert_same(['a;b'], $this->values(Author::where_raw("name = 'a;b'")->get(), 'name'));
+        $this->assert_same(['a;b'], $this->values(Author::where_raw('name = ?', ['a;b'])->get(), 'name'));
+        $this->assert_same([1], $this->values(Author::where_raw('author_id > 0 /* a;b */')->order_by('author_id')->limit(1)->get()));
+        $this->assert_same([1], $this->values(Author::where_raw('author_id > 0 -- a;b')->order_by('author_id')->limit(1)->get()));
+        $this->assert_same('a;b', Author::select_raw("'a;b' AS name")->where('author_id', 1)->first()->name);
+        $this->assert_same(1, Author::where_raw("name != 'a;b'")->group_by_raw('author_id /* ; */')->having_raw('COUNT(*) = 1 -- ;')->order_by('author_id')->limit(1)->count());
+    }
+
+    /**
+     * The refusal of SQL written by hand that leaves a block comment open, given to $method on $model (see
+     * QueryCompiler::refuse_statement_terminator()).
+     */
+    private function open_comment_refusal(string $sql, string $method, string $model = 'Author'): string
+    {
+        return "SQL '$sql' in $method() on $model leaves a block comment open (/* with no */ after it): SQLite would run the comment to the end of the statement and drop the clauses after it, and MySQL, MariaDB and Postgres would refuse it. Close the comment with */";
+    }
+
+    // A block comment that SQL written by hand leaves open, a /* outside its strings, its quoted identifiers and its
+    // comments with no */ after it, runs on SQLite to the end of the statement: the ORDER BY and the LIMIT after the
+    // fragment were lost, a read read every row (and a limited write wrote every row it matched, QueryWriteTest). MySQL,
+    // MariaDB and Postgres refuse the statement. Every method that sends SQL as written refuses it at the call, before the
+    // query changes, as it is read by the database of the connection; a closed comment, and a /* in a string or in a --
+    // comment, are none. How the databases nest block comments is pinned by the adapter test classes
+    public function test_raw_sql_that_leaves_a_block_comment_open_is_refused_by_every_method_that_takes_it(): void
+    {
+        $query = Author::where('name', '!=', 'x')->order_by('author_id');
+        $sql = $query->to_sql();
+
+        foreach ([
+            'where_raw' => fn(string $sql) => $query->where_raw($sql),
+            'or_where_raw' => fn(string $sql) => $query->or_where_raw($sql, [1]),
+            'having_raw' => fn(string $sql) => $query->having_raw($sql),
+            'or_having_raw' => fn(string $sql) => $query->or_having_raw($sql),
+            'order_by_raw' => fn(string $sql) => $query->order_by_raw($sql),
+            'group_by_raw' => fn(string $sql) => $query->group_by_raw($sql),
+            'select_raw' => fn(string $sql) => $query->select_raw($sql),
+            'from_raw' => fn(string $sql) => $query->from_raw($sql),
+        ] as $method => $call) {
+            $this->assert_exception_message_contains($this->open_comment_refusal('author_id /* note', $method), fn() => $call('author_id /* note'), ActiveRecordException::class);
+        }
+
+        $this->assert_exception_message_contains($this->open_comment_refusal('1=1 /* x', 'where_raw'), fn() => $query->where(fn(Query $q) => $q->where_raw('1=1 /* x')), ActiveRecordException::class);
+        $this->assert_same($sql, $query->to_sql());
+
+        $fragment = 'INNER JOIN authors ON authors.author_id = books.author_id /* the author';
+        $this->assert_exception_message_contains($this->open_comment_refusal($fragment, 'joins', 'Book'), fn() => Book::joins(['author', $fragment]), ActiveRecordException::class);
+
+        // a read of the query never runs: on SQLite the SELECT found every author, without its order and limit
+        Author::table();
+        $this->assert_same(
+            [['exception' => ActiveRecordException::class, 'message' => $this->open_comment_refusal('author_id > 0 /* note', 'where_raw')]],
+            GoldenStatements::capture(fn() => Author::where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->get())
+        );
+
+        // ... and a comment that is closed, or a /* in a string or a -- comment, is sent as written
+        Author::new_query()->insert(['name' => 'a/*b']);
+        $this->assert_same([1], $this->values(Author::where_raw('author_id > 0 /* note */')->order_by('author_id')->limit(1)->get()));
+        $this->assert_same([1], $this->values(Author::where_raw('author_id > 0 -- /* note')->order_by('author_id')->limit(1)->get()));
+        $this->assert_same(['a/*b'], $this->values(Author::where_raw("name = 'a/*b'")->get(), 'name'));
+        $this->assert_same(['a/*b'], $this->values(Author::where_raw('name = ?', ['a/*b'])->get(), 'name'));
+    }
+
     // -- in, null, between
 
     // where_in() and where_not_in() follow the hash rules: an empty list matches nothing (1=0) or everything

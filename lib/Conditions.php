@@ -131,17 +131,21 @@ final class Conditions
      * (SQLBuilder::where()): a value that is a list is spread over its marker by Expressions, IN(?) with
      * [1, 2] being IN(?,?) and with [] IN(NULL). Without one, the SQL and the values are kept as given. SQL
      * that is empty or only whitespace is refused (see QueryCompiler::refuse_blank_sql()): alone it would be
-     * left out, and a write of the query would write every row.
+     * left out, and a write of the query would write every row. So is SQL that holds a statement terminator, or leaves a
+     * block comment open (see QueryCompiler::refuse_statement_terminator()), which would lose what follows it.
      *
      * @param array<mixed> $bindings
      * @param 'AND'|'OR' $boolean
      * @return WhereRaw
-     * @throws ActiveRecordException for SQL that is empty or only whitespace
+     * @throws ActiveRecordException for SQL that is empty or only whitespace, holds a statement terminator, or leaves a
+     *   block comment open
      * @throws ExpressionsException for more bind markers than values, when one is a list
      */
     public function raw(string $method, string $sql, array $bindings, string $boolean): array
     {
-        (new QueryCompiler($this->table))->refuse_blank_sql($sql, $method);
+        $compiler = new QueryCompiler($this->table);
+        $compiler->refuse_blank_sql($sql, $method);
+        $compiler->refuse_statement_terminator($sql, "$method()");
         $bindings = array_values($bindings);
 
         if ([] !== array_filter($bindings, is_array(...))) {
