@@ -127,17 +127,21 @@ final class Conditions
     }
 
     /**
-     * A condition written in SQL (see Query::where_raw()), read as a legacy positional condition is
+     * A condition written in SQL given to $method (see Query::where_raw()), read as a legacy positional condition is
      * (SQLBuilder::where()): a value that is a list is spread over its marker by Expressions, IN(?) with
-     * [1, 2] being IN(?,?) and with [] IN(NULL). Without one, the SQL and the values are kept as given.
+     * [1, 2] being IN(?,?) and with [] IN(NULL). Without one, the SQL and the values are kept as given. SQL
+     * that is empty or only whitespace is refused (see QueryCompiler::refuse_blank_sql()): alone it would be
+     * left out, and a write of the query would write every row.
      *
      * @param array<mixed> $bindings
      * @param 'AND'|'OR' $boolean
      * @return WhereRaw
+     * @throws ActiveRecordException for SQL that is empty or only whitespace
      * @throws ExpressionsException for more bind markers than values, when one is a list
      */
-    public function raw(string $sql, array $bindings, string $boolean): array
+    public function raw(string $method, string $sql, array $bindings, string $boolean): array
     {
+        (new QueryCompiler($this->table))->refuse_blank_sql($sql, $method);
         $bindings = array_values($bindings);
 
         if ([] !== array_filter($bindings, is_array(...))) {

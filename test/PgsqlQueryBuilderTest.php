@@ -1,7 +1,12 @@
 <?php
 
+use ActiveRecord\Column;
+
 /**
  * The query builder on Postgres: what its adapter writes its own way.
+ *
+ * Fixture data: authors 1 Tito, 2 George W. Bush, 3 Bill Clinton, 4 Uncle Bob; measurements 1 (qty 1, big 2^62, amount
+ * 1234567890123.45, ratio 0.1) and 2 (qty 2, big 2^62, amount 0.01, ratio 0.2); big_ids 1 and PHP_INT_MAX.
  */
 class PgsqlQueryBuilderTest extends DatabaseTest
 {
@@ -119,6 +124,228 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         // what the bare literals would have done
         $this->assert_exception_message_contains('operator does not exist', fn() => $this->conn->query('SELECT * FROM venues WHERE is_available = 1'), ActiveRecord\DatabaseException::class);
         $this->assert_exception_message_contains('operator does not exist', fn() => $this->conn->query('SELECT * FROM authors WHERE name = 5'), ActiveRecord\DatabaseException::class);
+    }
+
+    // Spec §5.4, §10: the raw types this adapter reports for the columns of the measurements, which classify their
+    // aggregates. Postgres gives the first word of format_type(): 'numeric' for decimal too, 'double' for double
+    // precision and float8, and 'int' for integer. The real column (single, real or float4) is (STRING, 'real'): the type
+    // mapping has no such key, so the raw type alone makes a column floating.
+    public function test_the_raw_types_of_the_measurements(): void
+    {
+        $this->assert_same(
+            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'numeric'], 'ratio' => [Column::DECIMAL, 'double'], 'single' => [Column::STRING, 'real'], 'label' => [Column::STRING, 'varchar']],
+            array_map(fn(Column $column): array => [$column->type, $column->raw_type], Measurement::table()->columns)
+        );
+    }
+
+    // The aggregates of a numeric column are the exact strings Postgres returns, and a SUM of bigints, which Postgres
+    // sums into a numeric, is its exact digits beyond PHP_INT_MAX. The AVG is exact at the scale of the SUM plus four,
+    // not Postgres's own (a numeric average has 16 or more digits).
+    public function test_exact_decimal_and_big_sums(): void
+    {
+        $this->assert_same('1234567890123.46', Measurement::sum('amount'));
+        $this->assert_same('617283945061.730000', Measurement::avg('amount'));
+        $this->assert_same('9223372036854775808', Measurement::sum('big'));
+        $this->assert_same('0', Measurement::where('label', 'zzz')->sum('amount'));
+    }
+
+    // MIN and MAX of a numeric are the column's own strings, its scale kept; the SUM and the AVG of a decimal keep the
+    // scale of the SUM, trailing zeros included (ExactDecimal::parse() drops them: 2.50 has the fraction 5)
+    public function test_decimal_aggregates_keep_the_scale(): void
+    {
+        $this->assert_same('0.01', Measurement::min('amount'));
+        $this->assert_same('1234567890123.45', Measurement::max('amount'));
+        $this->assert_same('617283945061.730000', Measurement::average('amount'));
+
+        $this->conn->query("INSERT INTO measurements (amount, label) VALUES ('2.50', 'd'), ('-0.01', 'e'), ('0.00', 'f')");
+        $label = fn(string $label): ActiveRecord\Query => Measurement::where('label', $label);
+
+        $this->assert_same('2.50', $label('d')->sum('amount'));
+        $this->assert_same('2.50', $label('d')->min('amount'));
+        $this->assert_same('2.50', $label('d')->max('amount'));
+        $this->assert_same('2.500000', $label('d')->avg('amount'));
+        $this->assert_same('-0.01', $label('e')->sum('amount'));
+        $this->assert_same('-0.010000', $label('e')->avg('amount'));
+        $this->assert_same('0.00', $label('f')->sum('amount'));
+        $this->assert_same('0.000000', $label('f')->avg('amount'));
+
+        // a windowed query reads its decimals the same way: the subquery keeps the column's type
+        $first = fn(): ActiveRecord\Query => Measurement::order_by('id')->limit(1);
+        $this->assert_same('1234567890123.45', $first()->sum('amount'));
+        $this->assert_same('1234567890123.45', $first()->max('amount'));
+        $this->assert_same('1234567890123.450000', $first()->avg('amount'));
+
+        // nothing but NULLs: the SUM is '0' and there is no average
+        Measurement::create(['qty' => 2, 'label' => 'c']);
+        $this->assert_same('0', $label('c')->sum('amount'));
+        $this->assert_null($label('c')->avg('amount'));
+        $this->assert_null($label('c')->max('amount'));
+    }
+
+    // Beyond what a float keeps (15 to 17 digits): numeric(20,2) holds 18 integer digits, and a SUM of them has more
+    public function test_decimals_beyond_the_precision_of_a_float_are_exact(): void
+    {
+        $this->conn->query('DELETE FROM measurements');
+
+        foreach (range(1, 3) as $i) {
+            $this->conn->query("INSERT INTO measurements (amount, label) VALUES ('999999999999999999.99', 'x')");
+        }
+
+        $this->assert_same('999999999999999999.99', Measurement::min('amount'));
+        $this->assert_same('2999999999999999999.97', Measurement::sum('amount'));
+        $this->assert_same('999999999999999999.990000', Measurement::avg('amount'));
+    }
+
+    // A SUM of bigints beyond the int range is the exact digits, on both sides of it, and the AVG of it exact; the MIN and
+    // the MAX stay ints. The expected values are those of exact integer arithmetic (Python).
+    public function test_sums_beyond_the_int_range_are_exact_digits(): void
+    {
+        foreach ([
+            [PHP_INT_MAX, 1, '9223372036854775808', '4611686018427387904.0000'],
+            [PHP_INT_MIN, -1, '-9223372036854775809', '-4611686018427387904.5000'],
+            [PHP_INT_MAX, PHP_INT_MAX, '18446744073709551614', '9223372036854775807.0000'],
+            [PHP_INT_MIN, PHP_INT_MIN, '-18446744073709551616', '-9223372036854775808.0000'],
+        ] as [$first, $second, $sum, $average]) {
+            foreach ([1 => $first, 2 => $second] as $id => $big) {
+                $values = [$big, $id];
+                $this->conn->query('UPDATE measurements SET big = ? WHERE id = ?', $values);
+            }
+
+            $this->assert_same($sum, Measurement::sum('big'), "sum $first + $second");
+            $this->assert_same($average, Measurement::avg('big'), "avg $first + $second");
+            $this->assert_same(max($first, $second), Measurement::max('big'), "max $first + $second");
+            $this->assert_same(min($first, $second), Measurement::min('big'), "min $first + $second");
+        }
+
+        // the signed bigint of big_ids: 1 + PHP_INT_MAX
+        $this->assert_same('9223372036854775808', BigId::sum('id'));
+        $this->assert_same('4611686018427387904.0000', BigId::avg('id'));
+        $this->assert_same(PHP_INT_MAX, BigId::max('id'));
+    }
+
+    // A wrapped query keeps the select of its own, so an expression can carry the name of a numeric column. A bigint that no
+    // float holds (9007199254740993 is the first) stays its exact digits, where reading it as a float would make it
+    // 9007199254740992.0. The SUM of INTs is a bigint, which PDO returns as an int, and the average of it is exact too.
+    public function test_an_int_under_the_name_of_a_numeric_column_stays_exact(): void
+    {
+        $big = fn(): ActiveRecord\Query => Measurement::select_raw('9007199254740993::bigint AS amount')->limit(5);
+
+        $this->assert_same('9007199254740993', $big()->max('amount'));
+        $this->assert_same('9007199254740993', $big()->min('amount'));
+        // the SUM of bigints is a numeric
+        $this->assert_same('18014398509481986', $big()->sum('amount'));
+        $this->assert_same('9007199254740993.0000', $big()->avg('amount'));
+
+        // the SUM of ints is a bigint: an int
+        $seven = fn(): ActiveRecord\Query => Measurement::select_raw('7 AS amount')->limit(5);
+        $this->assert_same('7', $seven()->max('amount'));
+        $this->assert_same('14', $seven()->sum('amount'));
+        $this->assert_same('7.0000', $seven()->avg('amount'));
+    }
+
+    // A column that is not the model's has no type to read by, so its aggregates are the driver's values: Postgres's SUM
+    // of INTs is a bigint, which PDO returns as an int, and its AVG a numeric, a string of 16 decimals
+    public function test_a_column_that_is_not_the_models_is_the_value_postgres_returns(): void
+    {
+        $this->assert_same(3, Book::joins('author')->sum('authors.author_id'));
+        $this->assert_same('1.5000000000000000', Book::joins('author')->avg('authors.author_id'));
+        $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_same(2, Book::joins('author')->max('authors.author_id'));
+    }
+
+    // An expression that the select names has no model column either: Postgres types a SUM of an expression of INTs as a bigint, an
+    // int to PDO, its AVG as a numeric, a string of 16 decimals, and its MIN and MAX as ints. qty is 1 and 2, so doubled is 2 and 4.
+    public function test_an_expression_alias_gives_the_values_postgres_returns(): void
+    {
+        $doubled = fn(): ActiveRecord\Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
+
+        $this->assert_same(6, $doubled()->sum('doubled'));
+        $this->assert_same('3.0000000000000000', $doubled()->avg('doubled'));
+        $this->assert_same('3.0000000000000000', $doubled()->average('doubled'));
+        $this->assert_same(2, $doubled()->min('doubled'));
+        $this->assert_same(4, $doubled()->max('doubled'));
+        // no row: NULL, where a column of the model has a 0 of its type
+        $this->assert_null($doubled()->where('label', 'zzz')->sum('doubled'));
+        $this->assert_null($doubled()->where('label', 'zzz')->avg('doubled'));
+    }
+
+    // A float8 holds NaN and the infinities, which Postgres writes as text ('NaN', 'Infinity', '-Infinity') where PHP 8.3's
+    // driver gives a float8 as a string: (float) 'NaN' would be 0.0. PHP 8.5's driver gives a float: both are read as the
+    // special value.
+    public function test_a_floating_column_reads_nan_and_the_infinities(): void
+    {
+        $this->conn->query("INSERT INTO measurements (ratio, label) VALUES ('NaN', 'nan'), ('Infinity', 'inf'), ('-Infinity', 'ninf')");
+
+        $this->assert_true(is_nan($this->strict_call(fn() => Measurement::where('label', 'nan')->max('ratio'))));
+        $this->assert_true(is_nan($this->strict_call(fn() => Measurement::where('label', 'nan')->sum('ratio'))));
+        $this->assert_true(is_nan($this->strict_call(fn() => Measurement::where('label', 'nan')->avg('ratio'))));
+        $this->assert_same(INF, $this->strict_call(fn() => Measurement::where('label', 'inf')->max('ratio')));
+        $this->assert_same(INF, $this->strict_call(fn() => Measurement::where('label', 'inf')->sum('ratio')));
+        $this->assert_same(-INF, $this->strict_call(fn() => Measurement::where('label', 'ninf')->min('ratio')));
+        $this->assert_same(-INF, $this->strict_call(fn() => Measurement::where('label', 'ninf')->avg('ratio')));
+    }
+
+    // A boolean column aggregates as an integer, which Postgres has no SUM, AVG, MIN or MAX of (it has bool_and() and
+    // bool_or()): its error, undefined function (42883), surfaces as a DatabaseException. The avg() of an integer column is
+    // asked as its SUM, which is the function that is named.
+    public function test_a_boolean_column_has_no_aggregate_on_postgres(): void
+    {
+        foreach (['sum' => 'sum', 'avg' => 'sum', 'average' => 'sum', 'min' => 'min', 'max' => 'max'] as $method => $function) {
+            $this->assert_exception_message_contains("function $function(boolean) does not exist", fn() => Venue::$method('is_available'), ActiveRecord\DatabaseException::class);
+        }
+
+        // a boolean that none of the six venues is, and no row: the statement is the same, and so is the error
+        $this->assert_exception_message_contains('function sum(boolean) does not exist', fn() => Venue::where('name', 'zzz')->sum('is_retired'), ActiveRecord\DatabaseException::class);
+    }
+
+    // A bytea comes from the driver as a stream, read into the string of its bytes as MySQL and SQLite give a blob. Postgres has
+    // MIN and MAX of a bytea from version 18 only: earlier ones refuse it, undefined function (42883), a DatabaseException, and
+    // AggregateCasterTest pins the stream on any version. The payload is the byte of each id: 1 and 2.
+    public function test_the_min_and_max_of_a_bytea_are_its_bytes(): void
+    {
+        $payload = fn(): ActiveRecord\Query => Measurement::select_raw("decode(lpad(to_hex(id), 2, '0'), 'hex') AS payload")->order_by('id')->limit(5);
+
+        if (!(bool) $this->conn->query("SELECT to_regprocedure('max(bytea)') IS NOT NULL")->fetch(PDO::FETCH_NUM)[0]) {
+            $this->assert_exception_message_contains('function max(bytea) does not exist', fn() => $payload()->max('payload'), ActiveRecord\DatabaseException::class);
+            $this->assert_exception_message_contains('function min(bytea) does not exist', fn() => $payload()->min('payload'), ActiveRecord\DatabaseException::class);
+
+            return;
+        }
+
+        $this->assert_same("\x02", $payload()->max('payload'));
+        $this->assert_same("\x01", $payload()->min('payload'));
+        $this->assert_null($payload()->where('label', 'zzz')->max('payload'));
+    }
+
+    // A numeric holds NaN and, from PostgreSQL 14, the infinities (not numeric(20,2), which has no room for them). Their SUM, MIN,
+    // MAX and AVG are the values as text, which is how Postgres returns them, and the average does not try to divide them: the
+    // exact division would refuse them, with a message of its own. An infinity and its opposite make NaN.
+    public function test_a_numeric_nan_and_the_infinities_are_their_own_average(): void
+    {
+        $this->conn->query("INSERT INTO measurements (amount, label) VALUES ('NaN', 'nan')");
+
+        foreach (['sum', 'min', 'max', 'avg', 'average'] as $method) {
+            $this->assert_same('NaN', Measurement::where('label', 'nan')->$method('amount'), "NaN, $method");
+        }
+
+        // an expression that an alias gives the name of the column; two rows of it
+        foreach (['Infinity', '-Infinity'] as $infinity) {
+            $infinite = fn(): ActiveRecord\Query => Measurement::select_raw("'$infinity'::numeric AS amount")->limit(5);
+
+            foreach (['sum', 'min', 'max', 'avg', 'average'] as $method) {
+                $this->assert_same($infinity, $infinite()->$method('amount'), "$infinity, $method");
+            }
+        }
+
+        $both = fn(): ActiveRecord\Query => Measurement::select_raw("CASE id WHEN 1 THEN 'Infinity'::numeric ELSE '-Infinity'::numeric END AS amount")->limit(5);
+        $this->assert_same('Infinity', $both()->max('amount'));
+        $this->assert_same('-Infinity', $both()->min('amount'));
+        $this->assert_same('NaN', $both()->sum('amount'));
+        $this->assert_same('NaN', $both()->avg('amount'));
+
+        // a finite value beside NaN is NaN too, and no row has no average
+        $this->assert_same('NaN', Measurement::where_in('label', ['nan', 'a'])->avg('amount'));
+        $this->assert_null(Measurement::where('label', 'zzz')->avg('amount'));
     }
 
     // Postgres writes its window as LIMIT n OFFSET m, with an offset alone as OFFSET m (#130)

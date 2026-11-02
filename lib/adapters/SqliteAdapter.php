@@ -94,6 +94,17 @@ class SqliteAdapter extends Connection
         return is_int($value) || is_bool($value);
     }
 
+    /**
+     * Never: a column declared DECIMAL or NUMERIC has NUMERIC affinity, which stores a value with a fraction as a REAL (and
+     * a whole one as an integer), so there are no exact decimals to read: the aggregates of such a column are floats.
+     *
+     * @internal Serves the aggregates of Query (AggregateCaster::kind()); not a supported API.
+     */
+    public function exact_decimals(): bool
+    {
+        return false;
+    }
+
     public function limit($sql, $offset, $limit)
     {
         $offset = is_null($offset) ? '' : intval($offset) . ',';

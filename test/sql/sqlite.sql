@@ -202,3 +202,14 @@ CREATE TABLE charset_words (
   utf8mb3_word VARCHAR(20),
   utf8mb4_word VARCHAR(20)
 );
+
+-- aggregates of the query builder (spec 5.4): DECIMAL has NUMERIC affinity here, so a fraction is stored as a REAL, and REAL is a Column::STRING of raw type real (see AggregateCaster)
+CREATE TABLE measurements (
+  id INTEGER NOT NULL PRIMARY KEY,
+  qty INT,
+  big BIGINT,
+  amount DECIMAL(20,2),
+  ratio DOUBLE,
+  single REAL,
+  label VARCHAR(20)
+);

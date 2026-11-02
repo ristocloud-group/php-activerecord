@@ -14,9 +14,10 @@ use Closure;
  * It holds a QueryState, which QueryCompiler renders as a SQLBuilder, and runs that statement
  * through its terminals (get, first, find, value, pluck, exists, count, ...), which read the query
  * as it stands and leave it so. The legacy entries (find, count, exists, ...) hand it
- * their options array through from_options(). The writes of Table (insert, update, delete) and of
- * Model (update_all, delete_all) run through its execute_*() methods, and the upsert of Table through
- * upsert().
+ * their options array through from_options(). Its writes, insert(), update() and delete(), take
+ * the clauses that pick the rows they write and refuse any other. The writes of Table (insert,
+ * update, delete) and of Model (update_all, delete_all) run through its execute_*() methods, and the
+ * upsert of Table through upsert().
  *
  * @template TModel of Model
  * @package ActiveRecord
@@ -30,8 +31,10 @@ class Query
      * the class docblock of Model, and each such tag a name here (QueryForwardingTest pins both).
      *
      * Not on it:
-     * - update() and delete(): called statically they would write every row, so __callStatic()
-     *   refuses them;
+     * - the writes, update(), delete() and insert(): a write of the whole table is never forwarded
+     *   (spec §4.1). Called statically, update() and delete() would write every row: __callStatic()
+     *   refuses update(), and PHP refuses delete() (see below). Author::insert() reaches __callStatic()
+     *   (Model's own insert() is private), which answers it as any name it does not forward;
      * - the names that Model defines itself (find, first, last, all, count, exists, create, upsert,
      *   query, find_by_sql, update_all, delete_all, transaction, table, connection, readonly, ...): PHP
      *   calls them and they keep their legacy meaning, so they are reached through new_query() or a
@@ -132,6 +135,11 @@ class Query
         'sole_value',
         'pluck',
         'doesnt_exist',
+        'min',
+        'max',
+        'sum',
+        'avg',
+        'average',
     ];
 
     private QueryState $state;
@@ -272,7 +280,9 @@ class Query
     }
 
     /**
-     * Selects each row once (SELECT DISTINCT), or with false every row again.
+     * Selects each row once (SELECT DISTINCT), or with false every row again. With no select of the query's own, a
+     * count() or another aggregate of a column runs over that column's distinct values, as Eloquent's distinct() does
+     * (see min()).
      *
      * @return $this
      */
@@ -437,8 +447,9 @@ class Query
      * beside it, with the values of its bind markers. As in a legacy positional condition, a value that
      * is a list is spread over its marker: where_raw('author_id IN(?)', [[1, 2]]) is author_id IN(?,?).
      * The condition "0" is sent too, in parentheses, and no row meets it on MySQL, MariaDB and SQLite (Postgres
-     * takes no integer for a condition, and refuses the statement). SQL that holds -- or # is followed by a
-     * newline, as select_raw() says.
+     * takes no integer for a condition, and refuses the statement). SQL that is empty or only whitespace is refused:
+     * SQLBuilder would leave it out, and an update() or a delete() of the query would write every row. SQL that holds
+     * -- or # is followed by a newline, as select_raw() says.
      *
      * <code>
      * Author::where_raw('LENGTH(name) > ?', [3])->get();
@@ -446,10 +457,11 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException at the call, for SQL that is empty or only whitespace, and the query is left as it was
      */
     public function where_raw(string $sql, array $bindings = []): static
     {
-        return $this->add_wheres([$this->conditions()->raw($sql, $bindings, boolean: 'AND')]);
+        return $this->add_wheres([$this->conditions()->raw(__FUNCTION__, $sql, $bindings, boolean: 'AND')]);
     }
 
     /**
@@ -457,10 +469,11 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException as where_raw() does
      */
     public function or_where_raw(string $sql, array $bindings = []): static
     {
-        return $this->add_wheres([$this->conditions()->raw($sql, $bindings, boolean: 'OR')]);
+        return $this->add_wheres([$this->conditions()->raw(__FUNCTION__, $sql, $bindings, boolean: 'OR')]);
     }
 
     /**
@@ -1006,8 +1019,10 @@ class Query
     /**
      * Orders the rows by an SQL expression, sent as written, with the values of its bind markers, among the other
      * orders in the order of the calls. Unlike where_raw() and having_raw(), it does not spread a value that is a
-     * list over its marker, as select_raw() and from_raw() do not: write one marker for each value. SQL that holds
-     * -- or # is followed by a newline, as select_raw() says.
+     * list over its marker, as select_raw() and from_raw() do not: write one marker for each value. SQL that is
+     * empty or only whitespace is refused, and so is 0, the position of no column, which SQLBuilder would leave out
+     * where the database refuses it (see QueryCompiler::refuse_blank_sql()). SQL that holds -- or # is followed by
+     * a newline, as select_raw() says.
      *
      * <code>
      * Author::order_by_raw('CASE WHEN parent_author_id = ? THEN 0 ELSE 1 END', [2])->get();
@@ -1015,9 +1030,12 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException at the call, for SQL that is empty, only whitespace or 0, and the query is left as
+     *   it was
      */
     public function order_by_raw(string $sql, array $bindings = []): static
     {
+        $this->compiler()->refuse_blank_sql($sql, __FUNCTION__, position: true);
         $this->state->orders[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -1119,13 +1137,16 @@ class Query
     /**
      * Groups the rows by an SQL expression, sent as written, with the values of its bind markers, after the groups
      * the query already has. A value that is a list is not spread over its marker, as in order_by_raw(): write one
-     * marker for each value. SQL that holds -- or # is followed by a newline, as select_raw() says.
+     * marker for each value. SQL that is empty, only whitespace or 0 is refused, as order_by_raw() refuses it. SQL
+     * that holds -- or # is followed by a newline, as select_raw() says.
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException as order_by_raw() does
      */
     public function group_by_raw(string $sql, array $bindings = []): static
     {
+        $this->compiler()->refuse_blank_sql($sql, __FUNCTION__, position: true);
         $this->state->groups[] = ['type' => 'raw', 'sql' => $sql, 'bindings' => array_values($bindings)];
 
         return $this;
@@ -1170,7 +1191,8 @@ class Query
      * Adds a condition written in SQL to the HAVING, ANDed, sent as written, in parentheses when another condition
      * is beside it, with the values of its bind markers. As in where_raw(), a value that is a list is spread over
      * its marker: having_raw('parent_author_id IN(?)', [[1, 2]]) is parent_author_id IN(?,?), and the condition
-     * "0" is sent, in parentheses. SQL that holds -- or # is followed by a newline, as select_raw() says.
+     * "0" is sent, in parentheses. SQL that is empty or only whitespace is refused, as where_raw() refuses it. SQL
+     * that holds -- or # is followed by a newline, as select_raw() says.
      *
      * <code>
      * Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->get();
@@ -1178,10 +1200,11 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException as where_raw() does
      */
     public function having_raw(string $sql, array $bindings = []): static
     {
-        return $this->add_havings([$this->conditions()->raw($sql, $bindings, boolean: 'AND')]);
+        return $this->add_havings([$this->conditions()->raw(__FUNCTION__, $sql, $bindings, boolean: 'AND')]);
     }
 
     /**
@@ -1189,10 +1212,11 @@ class Query
      *
      * @param array<mixed> $bindings
      * @return $this
+     * @throws ActiveRecordException as where_raw() does
      */
     public function or_having_raw(string $sql, array $bindings = []): static
     {
-        return $this->add_havings([$this->conditions()->raw($sql, $bindings, boolean: 'OR')]);
+        return $this->add_havings([$this->conditions()->raw(__FUNCTION__, $sql, $bindings, boolean: 'OR')]);
     }
 
     /**
@@ -1436,6 +1460,10 @@ class Query
      * The query is mutable (spec §3.2), so the callback changes it, and it is what comes back: unless the callback
      * hands back another query on the model, as in Eloquent, which is then the query that goes on, a fork for
      * instance (see clone()). Anything else that the callback returns is of no use to the chain, and is left out.
+     *
+     * When neither the callback nor a default runs, the filter came out empty: an update() or a delete() of the query
+     * with no other where condition is refused, as after where([]), where Eloquent writes every row. A read is
+     * unchanged, and a write of every row says so with new_query(): Author::new_query()->delete().
      *
      * <code>
      * Author::when($name, fn (Query $query) => $query->where('name', $name))->get();
@@ -1864,6 +1892,247 @@ class Query
     }
 
     /**
+     * The smallest value of $column among the rows the query selects, as the column's type reads it (see
+     * AggregateCaster): an int where the exact value of an integer column fits PHP_INT_MIN to PHP_INT_MAX, else its exact
+     * digits as a string (a MySQL BIGINT UNSIGNED above PHP_INT_MAX, #44); a DECIMAL as the string the database returns,
+     * its scale kept; a float column as a float. Null when no row has a value. A column that is no column of the model
+     * (a joined table's, "authors.name"), and a column of any other type (text, a date), gives the driver's value as it is.
+     *
+     * The aggregate is that of the rows of the result, as count() counts them: a query that is grouped, distinct or
+     * windowed is aggregated as a subquery (see QueryCompiler::compile_aggregate()), and then reads the column from the
+     * query's select, so a select of its own must hold it. A distinct query with no select of its own selects the
+     * column alone, so its aggregate runs over the column's distinct values: Eloquent's SUM(DISTINCT col) and
+     * AVG(DISTINCT col) for sum() and avg(), where min() and max() are the same either way. The statement that ran is
+     * left in Table::$last_sql.
+     *
+     * The column of a grouped query must be one of its groups, unless the groups are the whole primary key of the model
+     * (each group is then one row of the table, and any column may be aggregated). min(), max(), sum() and avg() refuse
+     * any other at the call, when they can tell: the query has no select of its own and only columns of the model in its
+     * group_by() (names are compared as the columns they name). MySQL and Postgres refuse such a statement, but MariaDB
+     * and SQLite read the column of an arbitrary row of each group, and give a wrong number silently. A select of its
+     * own, or SQL of group_by_raw(), cannot be read, so the query goes to the database as it is, with that residual;
+     * count() does not check its column either.
+     *
+     * <code>
+     * $first = Order::where('customer_id', 7)->min('placed_at');
+     * $per_customer = Order::group_by('customer_id')->max('customer_id');
+     * </code>
+     *
+     * @throws ActiveRecordException for an empty column name, or *, or a column that the GROUP BY does not group (as
+     *   above), before any statement
+     */
+    public function min(string $column): int|string|float|null
+    {
+        return $this->aggregate(__FUNCTION__, 'MIN', $column);
+    }
+
+    /**
+     * The largest value of $column among the rows the query selects, read as min() reads its value.
+     *
+     * <code>
+     * $highest = Measurement::where('label', 'a')->max('big');
+     * </code>
+     *
+     * @throws ActiveRecordException as min() does
+     */
+    public function max(string $column): int|string|float|null
+    {
+        return $this->aggregate(__FUNCTION__, 'MAX', $column);
+    }
+
+    /**
+     * The sum of $column over the rows the query selects, exact, and of the type the column has (see min()): an int
+     * while the sum fits PHP_INT_MIN to PHP_INT_MAX and else its exact digits, which MySQL, MariaDB and Postgres sum into
+     * a wider number; a DECIMAL as the exact string, its scale kept; a float for a float column. NULLs are not summed, and
+     * the sum of no value is 0 of that type: 0, '0' or 0.0. A column that is no column of the model gives the driver's
+     * value, which is null for no row. After distinct(), with no select of the query's own, it sums the column's distinct
+     * values (see min()).
+     *
+     * SQLite has no exact decimal (it stores a DECIMAL as a REAL), so there the sum of a DECIMAL column is a float, and a
+     * sum of integers beyond PHP_INT_MAX is SQLite's own "integer overflow" error, a DatabaseException. On a grouped query
+     * the column must be one of the groups, as min() says, and is refused at the call when it can be told that it is not.
+     *
+     * <code>
+     * $total = Order::where('customer_id', 7)->sum('total');
+     * </code>
+     *
+     * @return int|string|float|null Null only for a column that is no column of the model, over no row
+     * @throws ActiveRecordException as min() does
+     */
+    public function sum(string $column): int|string|float|null
+    {
+        return $this->aggregate(__FUNCTION__, 'SUM', $column);
+    }
+
+    /**
+     * The average of $column over the rows the query selects, or null when no row has a value (NULLs are not counted).
+     * The average of an integer or a DECIMAL column is exact: its SUM divided by its COUNT, in one statement
+     * (SELECT SUM(col), COUNT(col)), by a long division in PHP rounded half up, at the scale of the SUM plus 4, as a string:
+     * '1.6667' for the INT column of qty 1, 2, 2, and '617283945061.730000' for a DECIMAL(20,2). So it is the same on every
+     * database, and exact beyond what a float keeps, where the databases' own AVG differ in scale and type (see
+     * ExactDecimal). The average of a float column is the database's own, as a float. A column that is no column of
+     * the model gives the driver's AVG as it is. After distinct(), with no select of the query's own, it averages the
+     * column's distinct values: '1.5000' for qty 1, 2, 2 (see min()).
+     *
+     * SQLite has no exact decimal, so there the average of a DECIMAL column is a float.
+     *
+     * <code>
+     * $mean = Measurement::where('label', 'a')->avg('qty');
+     * </code>
+     *
+     * @throws ActiveRecordException as min() does
+     */
+    public function avg(string $column): string|float|null
+    {
+        return $this->average_of(__FUNCTION__, $column);
+    }
+
+    /**
+     * The average of $column, as avg() reads it: Eloquent's other name for it.
+     *
+     * @throws ActiveRecordException as avg() does
+     */
+    public function average(string $column): string|float|null
+    {
+        return $this->average_of(__FUNCTION__, $column);
+    }
+
+    /**
+     * INSERTs rows into the model's table and returns true: one row, a hash of column => value, or a list of them, which
+     * go as one INSERT of several VALUES. They are not models: no validation, no callback and no setter runs, as in
+     * Eloquent's insert(). The rows are checked before any statement:
+     * - there is at least one, and each has at least one column, and the keys of every other row, in any order;
+     * - a key names a column by the rule of the where (spec §5.5): by an alias of the model ($alias_attribute), an
+     *   attribute name (#92) or the column's own name (see QueryCompiler::value_columns());
+     * - a value is a scalar, null, a DateTime, bound in the format of its column (a DATE as a date), or an object with a
+     *   text (Stringable), bound as that text. An array, an enum (not supported: give the scalar it stands for) and any
+     *   other object are refused.
+     *
+     * Every row gets the created_at and updated_at it lacks (spec §5.6), all at the one time of the call, where
+     * Eloquent's insert() sets none. Model::without_timestamps() of the model's class suspends them, for that class
+     * only. A row that gives a timestamp has a key that a row that leaves it to the clock lacks, so they are not
+     * inserted together.
+     *
+     * The rows go in statements of at most Connection::$MAX_BIND_PARAMS values, as upsert() sends its own. Several run in
+     * one transaction, which one that fails rolls back, unless the connection is in a transaction already: they run in
+     * it then, and the caller commits or rolls them back. They run on the connection of the model's Table, not on the
+     * one a subclass's connection() returns, and the last one is left in Table::$last_sql.
+     *
+     * An insert takes no clause of the query, and refuses any (spec §5.5). It is not forwarded statically: Author::insert()
+     * is no call of the builder, Author::new_query()->insert() is.
+     *
+     * <code>
+     * Author::new_query()->insert([['name' => 'Tito'], ['name' => 'Bob']]);
+     * </code>
+     *
+     * @param array<mixed> $values One row (a hash of column => value), or a list of rows
+     * @throws ActiveRecordException before any statement: for a clause of the query, no row, a row that is no hash or has
+     *   no column, rows that do not share their keys, a value that is an array, an enum or another object than a DateTime
+     *   or a Stringable, or a row of more columns than the adapter binds in one statement
+     */
+    public function insert(array $values): bool
+    {
+        $compiler = $this->compiler();
+        $compiler->refuse_unwritable_clauses($this->state, __FUNCTION__);
+        $table = $this->table();
+        // one hash is one row
+        $rows = array_is_list($values) ? $values : [$values];
+
+        if ([] === $rows) {
+            throw new ActiveRecordException(sprintf('%s() needs at least one row, on %s', __FUNCTION__, $this->model_class));
+        }
+
+        $hashes = [];
+
+        foreach ($rows as $row) {
+            // the statement names the columns: of an alias, of an attribute name (#92), or the column's own
+            $hashes[] = $compiler->value_columns($this->insert_row(__FUNCTION__, $row));
+        }
+
+        if (!self::share_keys($hashes)) {
+            throw new ActiveRecordException(sprintf('%s() needs every row to have the same keys, on %s', __FUNCTION__, $this->model_class));
+        }
+
+        // the timestamps the rows lack, all at the one time of the call (see Timestamps), and the values as the
+        // statement binds them: a DateTime in the format of its column (Table::process_data())
+        $class = $table->class->getName();
+        $now = Timestamps::now();
+        $rows = array_map(fn(array $row): array => $table->process_data(Timestamps::apply_to_insert($table, $class, $row, $now)), $hashes);
+        $columns = array_keys($rows[0]);
+
+        $this->write_rows(__FUNCTION__ . '()', $columns, $rows, fn(int $row_count): SQLBuilder => $compiler->compile_insert_rows($columns, $row_count));
+
+        return true;
+    }
+
+    /**
+     * UPDATEs the rows the query selects with $values, a hash of column => value, and returns how many rows the driver
+     * counts (see below). The rows are those of the query's WHERE, every form of where() and its family read by the rules
+     * of every read, in its order and up to its limit (order_by(), limit() and their families). Postgres, which has no
+     * LIMIT on UPDATE, picks them by primary key in a subquery (#92). Without a where it updates every row.
+     *
+     * Any other clause of the query, a join, a group, a having, an offset, distinct, a select, from(), with() or
+     * readonly(), is refused before any statement (spec §5.5): the UPDATE would drop it, and write other rows than the
+     * query reads.
+     *
+     * The keys of $values name the columns by the rule of the where (spec §5.5): by an alias of the model
+     * ($alias_attribute), an attribute name (#92) or the column's own name (see QueryCompiler::value_columns()), where
+     * update_all()'s 'set' hash maps attribute names only. A key that names none of them is sent as written, and the
+     * database refuses it. A value is a scalar, null, a DateTime, bound in the format of its column, or an object with a
+     * text (Stringable), bound as that text, as update_all() binds it; an array, an enum (not supported: give the scalar
+     * it stands for) and any other object are refused. The SET gets updated_at, set to now, when the values give none
+     * (spec §5.6), unless Model::without_timestamps() of the model's class suspends it; created_at never. It runs on the
+     * connection of the model's Table, not on the one a subclass's connection() returns, and the statement is left in
+     * Table::$last_sql.
+     *
+     * The count is PDOStatement::rowCount(): on Postgres and SQLite the rows the WHERE matched; on MySQL and MariaDB the
+     * rows whose values changed, as update_all() returns it. As updated_at moves to now, every row matched changes there,
+     * unless it already holds every value at that second; without timestamps, a row given its own values is not counted.
+     *
+     * A query whose where calls all added no condition (where([]) of a filter that came empty, a closure that adds none),
+     * or whose when() or unless() ran neither its callback nor a default, is refused rather than written as a query
+     * without where: a write of every row calls no where method, Author::new_query()->update(...). Called statically,
+     * Author::update() is refused: it would write every row (see Model::__callStatic()).
+     *
+     * <code>
+     * Author::where('parent_author_id', 2)->update(['name' => 'Bob']);
+     * </code>
+     *
+     * @param array<string, mixed> $values
+     * @throws ActiveRecordException before any statement: for a clause the query cannot use in an UPDATE, where calls that
+     *   all added no condition, values that are empty or no hash ("Updating requires a hash or string.", as update_all()
+     *   has it), or a value that is an array, an enum or another object than a DateTime or a Stringable
+     */
+    public function update(array $values): int
+    {
+        $values = $this->compiler()->value_columns($this->bindable_values(__FUNCTION__, $values));
+
+        return $this->execute_update($values)->rowCount();
+    }
+
+    /**
+     * DELETEs the rows the query selects and returns how many the driver counts (PDOStatement::rowCount()). The rows are
+     * read as update() reads them: the WHERE, the order and the limit of the query, picked by primary key in a subquery
+     * on Postgres (#92), and any other clause refused before any statement. Without a where it deletes every row, which a
+     * query says with new_query(): Author::new_query()->delete(). A query whose where calls all added no condition, such
+     * as where($filters) with no filter, or whose when() or unless() skipped its callback, is refused instead. It runs
+     * on the connection of the model's Table, and the statement is left in Table::$last_sql.
+     *
+     * Author::delete() is PHP's own Error, not this method: Model has an instance delete(), which deletes a model.
+     *
+     * <code>
+     * Author::where('author_id', '>', 10)->order_by('author_id')->limit(5)->delete();
+     * </code>
+     *
+     * @throws ActiveRecordException before any statement, for a clause the query cannot use in a DELETE, or where calls
+     *   that all added no condition
+     */
+    public function delete(): int
+    {
+        return $this->execute_delete()->rowCount();
+    }
+
+    /**
      * The execution of Model::count(), moved here: the SELECT of the legacy options is run (count()
      * has them select COUNT(*)) and the first column of its first row is returned, 0 when it
      * returns none (#34). A grouped count is that of the first group. Unlike exists(), it leaves
@@ -1900,7 +2169,8 @@ class Query
      * without them.
      *
      * Anything but a hash (an empty row, a list) gets no timestamps and goes to SQLBuilder, which
-     * rejects it: they would otherwise make a row of an empty one.
+     * rejects it: they would otherwise make a row of an empty one. An INSERT takes no clause of the
+     * query: one is refused, as insert() refuses it (Table's inserts hold none).
      *
      * @internal Serves Table's inserts; not a supported API.
      * @param array<string, mixed> $row
@@ -1908,6 +2178,8 @@ class Query
     public function execute_insert(array $row, ?string $pk = null, ?string $sequence = null, ?string $returning = null, bool $timestamps = true): \PDOStatement
     {
         $table = $this->table();
+        $compiler = new QueryCompiler($table);
+        $compiler->refuse_unwritable_clauses($this->state, 'insert');
 
         // the statement names the columns (#92) and binds each value as the finders do, a DateTime in
         // the format of its column: what Table::process_data() prepares
@@ -1917,7 +2189,7 @@ class Query
             $row = Timestamps::apply_to_insert($table, $table->class->getName(), $row);
         }
 
-        $sql = (new QueryCompiler($table))->compile_insert($row, $pk, $sequence, $returning);
+        $sql = $compiler->compile_insert($row, $pk, $sequence, $returning);
         $values = array_values($row);
 
         return $table->connection()->query(($table->last_sql = $sql->to_s()), $values);
@@ -1925,9 +2197,10 @@ class Query
 
     /**
      * UPDATEs the rows of the query's conditions, order and limit (the legacy options it holds, see
-     * from_options()) and returns the statement that ran, left in Table::$last_sql. Where the
-     * adapter has no LIMIT on UPDATE (Postgres), a limit picks the rows by primary key in a
-     * subquery (#92).
+     * from_options(), or the where, the order and the limit of the builder) and returns the statement
+     * that ran, left in Table::$last_sql. Where the adapter has no LIMIT on UPDATE (Postgres), a limit
+     * picks the rows by primary key in a subquery (#92). Any other clause of the builder is refused
+     * before the statement (see QueryCompiler::refuse_unwritable_clauses()).
      *
      * $set is a hash or a raw SQL string. The keys of a hash are column names or attribute names
      * (#92), and it gets the updated_at it lacks, the way Timestamps fills it for the class the
@@ -1947,7 +2220,7 @@ class Query
      * passes static::connection(), a public static that a subclass can override, on which it always
      * built and ran its statement. Without one, the Table's.
      *
-     * @internal Serves Model::update_all() and Table::update(); not a supported API.
+     * @internal Serves update(), Model::update_all() and Table::update(); not a supported API.
      * @param array<string, mixed>|string $set
      */
     public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null): \PDOStatement
@@ -1974,9 +2247,10 @@ class Query
 
     /**
      * DELETEs the rows of the query's conditions, order and limit (the legacy options it holds, see
-     * from_options()) and returns the statement that ran, left in Table::$last_sql. A query without
-     * conditions deletes every row. Where the adapter has no LIMIT on DELETE (Postgres), a limit
-     * picks the rows by primary key in a subquery (#92).
+     * from_options(), or the where, the order and the limit of the builder) and returns the statement
+     * that ran, left in Table::$last_sql. A query without conditions deletes every row. Where the
+     * adapter has no LIMIT on DELETE (Postgres), a limit picks the rows by primary key in a subquery
+     * (#92). Any other clause of the builder is refused before the statement, as in execute_update().
      *
      * A DateTime among the bind values is bound as the finders bind a positional value (#138),
      * unless $format_dates is false: Table::delete() formats its pk hash itself, by column
@@ -1985,7 +2259,7 @@ class Query
      * The statement is rendered for $connection and runs on it when one is given: Model::delete_all()
      * passes static::connection(), as execute_update() describes. Without one, the Table's.
      *
-     * @internal Serves Model::delete_all() and Table::delete(); not a supported API.
+     * @internal Serves delete(), Model::delete_all() and Table::delete(); not a supported API.
      */
     public function execute_delete(bool $format_dates = true, ?Connection $connection = null): \PDOStatement
     {
@@ -2017,17 +2291,20 @@ class Query
      *
      * It runs on the connection of the Table, as Table::upsert() always did, and never calls
      * Model::connection(), the hook a subclass can override and update_all() and delete_all() take
-     * theirs from. The last statement it sent is left in Table::$last_sql. The query's own conditions
-     * play no part: an upsert has none.
+     * theirs from. The last statement it sent is left in Table::$last_sql. An upsert takes the rows to
+     * write and no clause of the query: a query that holds one (a where, an order, a join...) is refused
+     * (spec §5.5), as Model::upsert() and Table::upsert() never hold one.
      *
      * @param list<array<string, mixed>> $values
      * @param string|list<string> $unique_by
      * @param list<string>|null $update
-     * @throws ActiveRecordException before any SQL: for an empty $unique_by, rows that do not share their
-     *   keys, no column to insert, or a row with more columns than the adapter has bind parameters
+     * @throws ActiveRecordException before any SQL: for a clause of the query, an empty $unique_by, rows
+     *   that do not share their keys, no column to insert, or a row with more columns than the adapter
+     *   has bind parameters
      */
     public function upsert(array $values, array|string $unique_by, ?array $update = null): int
     {
+        $this->compiler()->refuse_unwritable_clauses($this->state, __FUNCTION__);
         $table = $this->table();
         $unique_by = is_array($unique_by) ? $unique_by : [$unique_by];
 
@@ -2048,15 +2325,8 @@ class Query
         $update = null === $update ? null : array_map($column_name, $update);
 
         // Every row must share the same set of keys.
-        $first_keys = array_keys(reset($values));
-        $sorted = $first_keys;
-        sort($sorted);
-        foreach ($values as $row) {
-            $keys = array_keys($row);
-            sort($keys);
-            if ($keys !== $sorted) {
-                throw new ActiveRecordException('upsert requires every row to have the same set of keys.');
-            }
+        if (!self::share_keys($values)) {
+            throw new ActiveRecordException('upsert requires every row to have the same set of keys.');
         }
 
         // The timestamps the rows lack, all at the one time of the call (see Timestamps)
@@ -2083,35 +2353,73 @@ class Query
         // Convert values (DateTime -> string) per row.
         $values = array_map(fn(array $row): array => $table->process_data($row), $values);
 
+        if (count($columns) === 0) {
+            throw new ActiveRecordException('upsert requires at least one column.');
+        }
+
+        $compiler = new QueryCompiler($table);
+
+        return $this->write_rows(__FUNCTION__, $columns, $values, fn(int $row_count): SQLBuilder => $compiler->compile_upsert($columns, $row_count, $unique_by, $update));
+    }
+
+    /**
+     * Runs an UPDATE or a DELETE on $connection, else on the Table's, and leaves it in
+     * Table::$last_sql. Its bind values are those of its SET, its WHERE and the ORDER BY it writes
+     * (SQLBuilder::write_bind_values()). With $format_dates, a DateTime among them is formatted as a
+     * positional value is (Table::format_date_bind_values()).
+     */
+    private function execute_write(SQLBuilder $sql, bool $format_dates, ?Connection $connection): \PDOStatement
+    {
+        $table = $this->table();
+        $values = $format_dates ? $table->format_date_bind_values($sql->write_bind_values()) : $sql->write_bind_values();
+
+        return ($connection ?? $table->connection())->query(($table->last_sql = $sql->to_s()), $values);
+    }
+
+    private function table(): Table
+    {
+        return $this->table ??= Table::load($this->model_class);
+    }
+
+    /**
+     * Sends the rows of a multi-row write, insert() or upsert(), which its messages name $name: rows prepared for the
+     * statement and keyed by $columns, in statements of at most Connection::$MAX_BIND_PARAMS values, each the statement
+     * $compile returns for its number of rows, its values bound row after row in the order of $columns. Several
+     * statements run in one transaction, which one that fails rolls back before it is thrown, unless the connection is
+     * in a transaction already, in which they run. Returns the rows the statements affected, summed. The last one sent
+     * is left in Table::$last_sql.
+     *
+     * @param list<string> $columns At least one: the callers refuse a row without columns
+     * @param list<array<string, mixed>> $rows
+     * @param Closure(int): SQLBuilder $compile
+     * @throws ActiveRecordException before any statement, for a row of more columns than the adapter binds in one
+     */
+    private function write_rows(string $name, array $columns, array $rows, Closure $compile): int
+    {
+        $table = $this->table();
         $connection = $table->connection();
         $max = $connection::$MAX_BIND_PARAMS;
         $column_count = count($columns);
 
-        if ($column_count === 0) {
-            throw new ActiveRecordException('upsert requires at least one column.');
-        }
-
         if ($column_count > $max) {
             throw new ActiveRecordException(
-                "upsert: a row has more columns ($column_count) than the adapter's bind-parameter limit ($max)."
+                "$name: a row has more columns ($column_count) than the adapter's bind-parameter limit ($max)."
             );
         }
 
-        // $column_count is >= 1 (checked above) and <= $max (checked above), so this is always >= 1.
-        $chunk_size = max(1, intdiv($max, $column_count));
-        $chunks = array_chunk($values, $chunk_size);
+        // $column_count is >= 1 (the callers refuse a row without columns) and <= $max (checked above), so this is always >= 1.
+        $chunks = array_chunk($rows, max(1, intdiv($max, $column_count)));
 
         $use_transaction = count($chunks) > 1 && !$connection->inTransaction();
         if ($use_transaction) {
             $connection->transaction();
         }
 
-        $compiler = new QueryCompiler($table);
         $affected = 0;
 
         try {
             foreach ($chunks as $chunk) {
-                $sql = $compiler->compile_upsert($columns, count($chunk), $unique_by, $update);
+                $sql = $compile(count($chunk));
 
                 $bind = [];
                 foreach ($chunk as $row) {
@@ -2138,21 +2446,91 @@ class Query
     }
 
     /**
-     * Runs an UPDATE or a DELETE on $connection, else on the Table's, and leaves it in
-     * Table::$last_sql. With $format_dates, a DateTime among its bind values is formatted as a
-     * positional value is (Table::format_date_bind_values()).
+     * Whether the rows of a multi-row write share their keys: each has the keys of the first, in any order. insert()
+     * and upsert() ask before the timestamps are added, which would give a row that lacks one the key of a row that
+     * gives it.
+     *
+     * @param array<array<string, mixed>> $rows
      */
-    private function execute_write(SQLBuilder $sql, bool $format_dates, ?Connection $connection): \PDOStatement
+    private static function share_keys(array $rows): bool
     {
-        $table = $this->table();
-        $values = $format_dates ? $table->format_date_bind_values($sql->bind_values()) : $sql->bind_values();
+        $shared = null;
 
-        return ($connection ?? $table->connection())->query(($table->last_sql = $sql->to_s()), $values);
+        foreach ($rows as $row) {
+            $keys = array_keys($row);
+            sort($keys);
+
+            if (null !== $shared && $keys !== $shared) {
+                return false;
+            }
+
+            $shared = $keys;
+        }
+
+        return true;
     }
 
-    private function table(): Table
+    /**
+     * A row given to $method, insert(), as the hash of column => value it must be, with at least one column, and its
+     * values as the statement binds them (see bindable_values()).
+     *
+     * @return array<string, mixed>
+     * @throws ActiveRecordException for a row that is no hash, a key that is no column name, a row without columns, or a
+     *   value that no column takes
+     */
+    private function insert_row(string $method, mixed $row): array
     {
-        return $this->table ??= Table::load($this->model_class);
+        if (!is_array($row)) {
+            throw new ActiveRecordException(sprintf('%s() takes each row as a hash of column => value, not %s, on %s', $method, get_debug_type($row), $this->model_class));
+        }
+
+        if ([] === $row) {
+            throw new ActiveRecordException(sprintf('%s() needs at least one column in each row, on %s', $method, $this->model_class));
+        }
+
+        $hash = [];
+
+        foreach ($row as $column => $value) {
+            if (is_int($column)) {
+                throw new ActiveRecordException(sprintf('%s() takes each row as a hash of column => value, not an array with the integer key %d, on %s', $method, $column, $this->model_class));
+            }
+
+            $hash[$column] = $value;
+        }
+
+        return $this->bindable_values($method, $hash);
+    }
+
+    /**
+     * $values, given to $method (update() or insert()), as the statement binds them: a scalar, null and a DateTime as they
+     * are (a DateTime is formatted for its column later, see Table::process_data()), and an object with a text
+     * (Stringable) as that text, as the legacy writes bind it. Any other value is refused before any statement (spec
+     * §5.7): an array, which would stand for as many bind values as it holds; an enum, which is not supported (the scalar
+     * it stands for is to be given); any other object.
+     *
+     * @param array<string, mixed> $values
+     * @return array<string, mixed>
+     * @throws ActiveRecordException
+     */
+    private function bindable_values(string $method, array $values): array
+    {
+        foreach ($values as $column => $value) {
+            if (null === $value || is_scalar($value) || $value instanceof \DateTimeInterface) {
+                continue;
+            }
+
+            if ($value instanceof \UnitEnum) {
+                throw new ActiveRecordException(sprintf("%s() does not support an enum as a value: %s::%s for '%s', on %s; give the scalar it stands for", $method, $value::class, $value->name, $column, $this->model_class));
+            }
+
+            if (!$value instanceof \Stringable) {
+                throw new ActiveRecordException(sprintf("%s() takes a scalar, null, a DateTime or a Stringable as a value, not %s for '%s', on %s", $method, get_debug_type($value), $column, $this->model_class));
+            }
+
+            $values[$column] = (string) $value;
+        }
+
+        return $values;
     }
 
     /**
@@ -2351,6 +2729,82 @@ class Query
     }
 
     /**
+     * $function (MIN, MAX or SUM) of $column over the rows of the query, read by the kind of the column (see
+     * AggregateCaster::cast()), for a call of $method.
+     *
+     * @param 'MIN'|'MAX'|'SUM' $function
+     * @throws ActiveRecordException for an empty column name, or *
+     */
+    private function aggregate(string $method, string $function, string $column): mixed
+    {
+        $kind = $this->aggregate_kind($method, $column);
+
+        return AggregateCaster::cast($kind, $function, $this->aggregate_row($column, [$function])[0]);
+    }
+
+    /**
+     * The average of $column over the rows of the query, for a call of $method: that of an exact column from its SUM and
+     * its COUNT, which come in one statement, and the database's AVG of any other (see AggregateCaster::average()).
+     *
+     * @throws ActiveRecordException for an empty column name, or *
+     */
+    private function average_of(string $method, string $column): string|float|null
+    {
+        $kind = $this->aggregate_kind($method, $column);
+
+        if (AggregateCaster::INTEGER === $kind || AggregateCaster::DECIMAL === $kind) {
+            [$sum, $count] = $this->aggregate_row($column, ['SUM', 'COUNT']);
+
+            return AggregateCaster::average($sum, $count);
+        }
+
+        /** @var string|float|null $average */
+        $average = AggregateCaster::cast($kind, 'AVG', $this->aggregate_row($column, ['AVG'])[0]);
+
+        return $average;
+    }
+
+    /**
+     * Checks the column given to an aggregate, before any statement, and says which kind it is of (see
+     * AggregateCaster::kind()): a column of the model by the one rule of the builder (see QueryCompiler::column()), of the
+     * type the connection reports for it, and none for any other name.
+     *
+     * @return 'integer'|'decimal'|'floating'|null
+     * @throws ActiveRecordException for an empty column name, for *, which only count() takes, and for a column that the
+     *   GROUP BY of the query does not group (see QueryCompiler::refuse_ungrouped_column())
+     */
+    private function aggregate_kind(string $method, string $column): ?string
+    {
+        $compiler = $this->compiler();
+        $compiler->refuse_empty_column_name($column, $method);
+
+        if ('*' === $column) {
+            throw new ActiveRecordException(sprintf("%s() takes a column name, not '*', on %s", $method, $this->model_class));
+        }
+
+        $compiler->refuse_ungrouped_column($this->state, $column, $method);
+
+        return AggregateCaster::kind($compiler->model_column($column), $this->table()->connection()->exact_decimals());
+    }
+
+    /**
+     * The one row that $functions give over $column, as the driver returns it, in the order of $functions: a row of NULLs
+     * if the statement gives none. The statement is left in Table::$last_sql.
+     *
+     * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
+     * @return list<mixed>
+     */
+    private function aggregate_row(string $column, array $functions): array
+    {
+        $table = $this->table();
+        $sql = $this->compiler()->compile_aggregate($this->state, $column, $functions);
+        $values = $table->format_date_bind_values($sql->select_bind_values());
+        $row = $table->connection()->query(($table->last_sql = $sql->to_s()), $values)->fetch(\PDO::FETCH_NUM);
+
+        return is_array($row) ? array_values($row) : array_fill(0, count($functions), null);
+    }
+
+    /**
      * How a value of $column is read: cast as a model casts its attribute when $column names a column of
      * the model (see QueryCompiler::model_column()), else as the driver returns it.
      *
@@ -2424,13 +2878,18 @@ class Query
     }
 
     /**
-     * Adds conditions to the WHERE, after those it holds.
+     * Adds conditions to the WHERE, after those it holds. A where method that adds none (where([]), a closure that adds
+     * none) is remembered: a write refuses a WHERE that its where calls all left empty (see QueryState::$empty_where).
      *
      * @param list<Where> $wheres
      * @return $this
      */
     private function add_wheres(array $wheres): static
     {
+        if ([] === $wheres) {
+            $this->state->empty_where = true;
+        }
+
         $this->state->wheres = [...$this->state->wheres, ...$wheres];
 
         return $this;
@@ -2582,7 +3041,8 @@ class Query
     /**
      * What when() and unless() do: the callback runs when the truth of $value is $when (true for when(), false for
      * unless()), else the default does, if there is one. A Closure given as the value is called with the query, and
-     * what it returns is the value.
+     * what it returns is the value. When neither runs, the query remembers it as it remembers a where call that added
+     * no condition (QueryState::$empty_where): the filter came out empty, and a write with no other condition is refused.
      *
      * @param callable(static, mixed): mixed $callback
      * @param (callable(static, mixed): mixed)|null $default
@@ -2594,6 +3054,8 @@ class Query
         $run = $when === (bool) $value ? $callback : $default;
 
         if (null === $run) {
+            $this->state->empty_where = true;
+
             return $this;
         }
 
@@ -2689,14 +3151,9 @@ class Query
         $query->table = $this->table;
         $callback($query);
 
-        $new = get_object_vars(new QueryState());
-        $held = [];
-
-        foreach (get_object_vars($query->state) as $field => $value) {
-            if ('wheres' !== $field && $value !== $new[$field]) {
-                $held[] = $field;
-            }
-        }
+        // a where call that added no condition is a where clause too: the group holds what the others added, and is
+        // left out without any, which the query it goes in remembers (see add_wheres())
+        $held = QueryCompiler::held_fields($query->state, ['wheres', 'empty_where']);
 
         if ([] !== $held) {
             throw new ActiveRecordException(sprintf('A where() group can only hold where clauses: the one given to %s() on %s also holds %s', $method, $this->model_class, implode(', ', $held)));

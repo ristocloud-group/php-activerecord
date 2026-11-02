@@ -20,6 +20,35 @@ use Closure;
 final class QueryCompiler
 {
     /**
+     * The fields of a state that an UPDATE and a DELETE compile (see apply_write_clauses()): the legacy options of the
+     * legacy writes, or the where, the order and the limit of the builder, which pick the rows they write (a where call
+     * that added no condition among them, see refuse_empty_where()). Every other field is refused (see
+     * refuse_unwritable_clauses()).
+     *
+     * @var list<string>
+     */
+    private const array UPDATE_DELETE_FIELDS = ['legacy', 'wheres', 'empty_where', 'orders', 'limit'];
+
+    /**
+     * The name a refusal gives a field of a state, where it is not the field's own: the builder method, or the family
+     * of methods, that sets it.
+     *
+     * @var array<string, string>
+     */
+    private const array CLAUSE_NAMES = [
+        'legacy' => 'legacy options',
+        'selects' => 'select',
+        'from_alias' => 'from',
+        'from_bindings' => 'from_raw',
+        'wheres' => 'where',
+        'empty_where' => 'where',
+        'groups' => 'group_by',
+        'havings' => 'having',
+        'orders' => 'order_by',
+        'includes' => 'with',
+    ];
+
+    /**
      * The keys (see Connection::column_name_key()) of the names of the model's columns (see
      * model_column_names()), read once.
      *
@@ -151,16 +180,32 @@ final class QueryCompiler
 
     /**
      * The SELECT that counts the rows of a state, for Query::count(); or with a $column other than *, the
-     * rows in which that column is not null, as COUNT(column) counts.
+     * rows in which that column is not null, as COUNT(column) counts. It is the aggregate COUNT of
+     * compile_aggregate(), whose rules (counted in place, or as a subquery) it follows.
      *
-     * A state neither grouped (GROUP BY, HAVING), nor distinct, nor windowed (LIMIT, OFFSET) is counted in
+     * @internal Serves Query::count(); not a supported API.
+     * @throws ActiveRecordException for a state of legacy options (see compile_select())
+     */
+    public function compile_count(QueryState $state, string $column): SQLBuilder
+    {
+        return $this->compile_aggregate($state, $column, ['COUNT']);
+    }
+
+    /**
+     * The SELECT that applies aggregate functions to a column of the rows of a state, for Query::count() and the
+     * aggregates of the builder (min(), max(), sum(), avg()): each function of $functions (COUNT, MIN, MAX, SUM or AVG)
+     * to $column, in one row, in the order given. With COUNT alone, $column may be *, which counts the rows; with a
+     * column, it counts those in which the column is not null, as COUNT(column) counts.
+     *
+     * A state neither grouped (GROUP BY, HAVING), nor distinct, nor windowed (LIMIT, OFFSET) is aggregated in
      * place: SELECT COUNT(*) with its FROM, joins and WHERE, without its order, which changes no number
-     * (Postgres refuses an order by a column beside COUNT, besides). Any other is counted as a subquery,
+     * (Postgres refuses an order by a column beside an aggregate, besides). Any other is aggregated as a subquery,
      * SELECT COUNT(*) FROM (…) AS t, which keeps its order only when windowed, since there the order picks
-     * the rows.
+     * the rows. So the aggregate is that of the rows of the result, as count() counts them: a grouped query counts
+     * its groups, and a window's rows are the ones it picks.
      *
      * What the subquery selects:
-     * - 1, only where the state's select provably cannot matter: no column is counted, no DISTINCT tells
+     * - 1, only where the state's select provably cannot matter: no column is aggregated, no DISTINCT tells
      *   the rows apart by the select, no HAVING may name an alias of it, no SQL written by hand in the GROUP
      *   BY, nor in the ORDER BY the subquery keeps (a window's), may name it by position or expression
      *   (GROUP BY 1 would group by the constant; see has_raw()), and it holds plain columns without an
@@ -172,31 +217,36 @@ final class QueryCompiler
      * - Otherwise the state's own select, since a clause or the rows may depend on it: a GROUP BY and an
      *   ORDER BY can name an alias of it, on every database, a HAVING too on MySQL, MariaDB and SQLite, SQL
      *   of a GROUP BY or a kept ORDER BY can name a column of it by position, and an aggregate
-     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects the counted column,
-     *   under DISTINCT too, so that a distinct count of a column counts its distinct values that are not null
-     *   (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
+     *   (COUNT(*) AS n) makes one row of the rows. With nothing of its own, it selects the aggregated column,
+     *   under DISTINCT too, so that a distinct aggregate of a column runs over its distinct values that are not
+     *   null (Eloquent's COUNT(DISTINCT column)); and every column under DISTINCT for a count of the rows, or 1
      *   beside a HAVING.
      *
-     * A counted column is read as t's column of its name (see result_name()), which the subquery must
-     * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives): MySQL's
-     * ONLY_FULL_GROUP_BY and Postgres refuse any other. With the state's select kept, two result columns of
-     * one name still meet MySQL's and MariaDB's 1060.
+     * An aggregated column is read as t's column of its name (see result_name()), which the subquery must
+     * select. Beside a GROUP BY, the column must be grouped (or be what the state's select gives, or the groups be the
+     * model's whole primary key, on which every column depends): MySQL's ONLY_FULL_GROUP_BY and Postgres refuse any
+     * other, and MariaDB and SQLite read it from an arbitrary row of each group, silently. min(), max(), sum() and avg()
+     * refuse it at the call when they can tell (see refuse_ungrouped_column(); a select of the query's own, or SQL in
+     * group_by_raw(), they cannot read); count($column) does not, and keeps that residual. With the state's select kept,
+     * two result columns of one name still meet MySQL's and MariaDB's 1060.
      *
-     * @internal Serves Query::count(); not a supported API.
+     * @internal Serves Query; not a supported API.
+     * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
      * @throws ActiveRecordException for a state of legacy options (see compile_select())
      */
-    public function compile_count(QueryState $state, string $column): SQLBuilder
+    public function compile_aggregate(QueryState $state, string $column, array $functions): SQLBuilder
     {
         $all = '*' === $column;
         $windowed = null !== $state->limit || null !== $state->offset;
         $rows = clone $state;
+        $apply = fn(string $expression): string => implode(', ', array_map(fn(string $function): string => "$function($expression)", $functions));
 
         if (!$windowed) {
             $rows->orders = [];
         }
 
         if (!$windowed && !$state->distinct && [] === $state->groups && [] === $state->havings) {
-            $rows->selects = [['raw' => 'COUNT(' . ($all ? '*' : $this->column($column, $state)) . ')', 'bindings' => []]];
+            $rows->selects = [['raw' => $apply($all ? '*' : $this->column($column, $state)), 'bindings' => []]];
 
             return $this->compile_select($rows);
         }
@@ -205,16 +255,16 @@ final class QueryCompiler
             // the state's select provably cannot matter
             $rows->selects = [['raw' => '1', 'bindings' => []]];
         } elseif ([] === $state->selects && !($all && $state->distinct)) {
-            // under DISTINCT, the distinct values of the counted column: SELECT DISTINCT * would keep every row apart
+            // under DISTINCT, the distinct values of the aggregated column: SELECT DISTINCT * would keep every row apart
             $rows->selects = [$all ? ['raw' => '1', 'bindings' => []] : ['column' => $column, 'alias' => null]];
         }
 
         $subquery = $this->compile_select($rows);
-        $count = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
-        $count->from_values($subquery->select_bind_values());
-        $count->select('COUNT(' . ($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))) . ')');
+        $aggregate = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
+        $aggregate->from_values($subquery->select_bind_values());
+        $aggregate->select($apply($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
 
-        return $count;
+        return $aggregate;
     }
 
     /**
@@ -321,6 +371,125 @@ final class QueryCompiler
     }
 
     /**
+     * Refuses SQL written by hand that its clause would lose (spec §5.7), given to $method: where_raw(), having_raw() and
+     * their or_ forms, order_by_raw() or group_by_raw(). SQLBuilder writes a WHERE, a HAVING, an ORDER BY and a GROUP BY
+     * only when its text is truthy in PHP, so text that is empty or only whitespace is refused: alone it would be left
+     * out, a WHERE that matches every row and a write that writes every row, and beside another it fails at the database.
+     *
+     * With $position, the text 0 too: an ORDER BY and a GROUP BY read it as the position of a column, which no statement
+     * has (positions start at 1), and the databases refuse it, but SQLBuilder leaves out a lone "0", which would turn
+     * the error into another result. A WHERE and a HAVING keep a "0" (see ConditionCompiler::compile()).
+     *
+     * @internal Serves Conditions and Query; not a supported API.
+     * @param string $method The builder method the SQL was given to, for the message of the exception
+     * @throws ActiveRecordException
+     */
+    public function refuse_blank_sql(string $sql, string $method, bool $position = false): void
+    {
+        $this->refuse_empty('SQL', $sql, $sql, $method);
+
+        if ($position && '0' === trim($sql)) {
+            throw new ActiveRecordException(sprintf("SQL '%s' in %s() on %s names the column at position 0, which no statement has: positions start at 1", $sql, $method, $this->table->class->name));
+        }
+    }
+
+    /**
+     * Refuses, at the call of the write $method (update(), delete(), insert() or upsert()), a state that holds a clause
+     * its statement cannot use, as spec §5.5 has it: the write would drop the clause, and write other rows than the query
+     * reads, or every row. A clause is a field of the state, other than those of $writable, that is not as in a new state,
+     * so a clause undone (readonly(false), distinct(false)) is none, and a field that QueryState gains later is refused
+     * until a write compiles it. An UPDATE and a DELETE take the where, the order and the limit (see compile_update() and
+     * compile_delete()); an INSERT and an UPSERT, which write the rows they are given, take none.
+     *
+     * @internal Serves Query; not a supported API.
+     * @param list<string> $writable The fields of the state that the statement of $method compiles
+     * @throws ActiveRecordException naming every clause the state holds, in the order of its fields, and what the write takes
+     */
+    public function refuse_unwritable_clauses(QueryState $state, string $method, array $writable = []): void
+    {
+        $held = [];
+
+        foreach (self::held_fields($state, $writable) as $field) {
+            $held[self::CLAUSE_NAMES[$field] ?? $field] = true;
+        }
+
+        if ([] === $held) {
+            return;
+        }
+
+        $takes = [];
+
+        foreach (array_diff($writable, ['legacy']) as $field) {
+            $takes[self::CLAUSE_NAMES[$field] ?? $field] = true;
+        }
+
+        throw new ActiveRecordException(sprintf(
+            '%s() cannot use %s, on %s: %s',
+            $method,
+            self::listing(array_keys($held), 'or'),
+            $this->table->class->name,
+            [] === $takes ? 'it takes no clause' : 'it takes only ' . self::listing(array_keys($takes), 'and'),
+        ));
+    }
+
+    /**
+     * Refuses, at the call, a column that a grouped query does not group, given to min(), max(), sum() or avg() (spec 5.4).
+     * Their statement (see compile_aggregate()) selects the column in a subquery beside the GROUP BY. MySQL
+     * (ONLY_FULL_GROUP_BY, 1055) and Postgres (42803) refuse that statement, but MariaDB in its default mode and SQLite run
+     * it, and read the column of an arbitrary row of each group: a number that is wrong, with no error.
+     *
+     * It is refused only when it can be told that the column is not grouped: the state has a GROUP BY and no select of its
+     * own (a select can aggregate the column, or name it by an alias), every group is a structured column of the model
+     * (SQL of group_by_raw() may group by anything, and so may a qualified name, which this does not read), and so is the
+     * aggregated column, and it is none of them. Names are compared as the columns they name, so an alias, an attribute
+     * name and the column's own name are one (see model_column()). In any other case the query goes to the database as it
+     * is, which may refuse it. count($column) is not checked: its residual is documented (see compile_aggregate()).
+     *
+     * Nor is a column refused when the groups cover the primary key of the model (Table::$pk), every column of a composite
+     * one: each group is then one row of the table, and every column of it depends on the groups. MySQL and Postgres accept
+     * that, and no database reads a row of its own choice (see covers_primary_key()).
+     *
+     * @internal Serves Query; not a supported API.
+     * @param string $method The aggregate the column was given to, for the message of the exception
+     * @throws ActiveRecordException for a column that is not grouped
+     */
+    public function refuse_ungrouped_column(QueryState $state, string $column, string $method): void
+    {
+        if ([] === $state->groups || [] !== $state->selects) {
+            return;
+        }
+
+        $aggregated = $this->model_column($column);
+
+        if (null === $aggregated) {
+            return;
+        }
+
+        $grouped_names = [];
+
+        foreach ($state->groups as $group) {
+            $grouped = 'column' === $group['type'] ? $this->model_column($group['column']) : null;
+
+            if (null === $grouped || $grouped->name === $aggregated->name) {
+                return;
+            }
+
+            $grouped_names[$grouped->name] = true;
+        }
+
+        if ($this->covers_primary_key($grouped_names)) {
+            return;
+        }
+
+        throw new ActiveRecordException(sprintf(
+            "%s() on %s aggregates '%s', which the GROUP BY of the query does not group: MariaDB (default mode) and SQLite pick an arbitrary row per group; MySQL and Postgres refuse it unless the groups cover the primary key. Group by it, or give the query a select of its own",
+            $method,
+            $this->table->class->name,
+            $column,
+        ));
+    }
+
+    /**
      * The WHERE of the builder's conditions (Query::where() and its family), without the keyword,
      * and the values of its bind markers in order; null when it has none. With $conditions, the
      * engine's own conditions (the primary key of a find, ...), each one condition with its values,
@@ -411,35 +580,40 @@ final class QueryCompiler
     }
 
     /**
-     * The UPDATE of a state. $set is a hash whose keys are the columns' real names and whose values
-     * are prepared (see Query::execute_update()), or a raw SQL string; SQLBuilder rejects anything
-     * else. The WHERE, ORDER BY and LIMIT are the state's (see apply_write_clauses()).
+     * The UPDATE of a state, for update() and the legacy writes. $set is a hash whose keys are the columns' real names
+     * and whose values are prepared (see Query::execute_update()), or a raw SQL string; SQLBuilder rejects anything
+     * else. The WHERE, ORDER BY and LIMIT are the state's: those of its legacy options, or of the builder (see
+     * apply_write_clauses()).
      *
      * @param array<string, mixed>|string $set
-     * @throws ActiveRecordException for a state that holds builder clauses (see refuse_builder_clauses())
+     * @throws ActiveRecordException for a state that holds a clause an UPDATE cannot use (see refuse_unwritable_clauses()),
+     *   or legacy options and builder clauses both, where calls that all added no condition (see refuse_empty_where()),
+     *   or a WHERE or an ORDER BY that compiles to nothing
      */
     public function compile_update(QueryState $state, array|string $set): SQLBuilder
     {
-        $this->refuse_builder_clauses($state, 'UPDATE');
+        $this->refuse_unwritable_clauses($state, 'update', self::UPDATE_DELETE_FIELDS);
+        $this->refuse_empty_where($state, 'update');
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
-        $this->apply_write_clauses($sql, $state->legacy ?? []);
+        $this->apply_write_clauses($sql, $state, 'update');
 
         return $sql;
     }
 
     /**
-     * The DELETE of a state, whose WHERE, ORDER BY and LIMIT are the state's (see
+     * The DELETE of a state, for delete() and the legacy writes, whose WHERE, ORDER BY and LIMIT are the state's (see
      * apply_write_clauses()). A state without conditions deletes every row.
      *
-     * @throws ActiveRecordException for a state that holds builder clauses (see refuse_builder_clauses())
+     * @throws ActiveRecordException as compile_update() does
      */
     public function compile_delete(QueryState $state): SQLBuilder
     {
-        $this->refuse_builder_clauses($state, 'DELETE');
+        $this->refuse_unwritable_clauses($state, 'delete', self::UPDATE_DELETE_FIELDS);
+        $this->refuse_empty_where($state, 'delete');
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
-        $this->apply_write_clauses($sql, $state->legacy ?? []);
+        $this->apply_write_clauses($sql, $state, 'delete');
 
         return $sql;
     }
@@ -463,6 +637,51 @@ final class QueryCompiler
         }
 
         return $sql;
+    }
+
+    /**
+     * The INSERT of $row_count rows of $columns, one statement of several VALUES (see SQLBuilder::insert_rows()), for
+     * Query::insert(). The names are the columns' real names, unquoted. The statement holds no values: the caller binds
+     * them row after row, each in the order of $columns, and has checked that there are rows and columns.
+     *
+     * @internal Serves Query::insert(); not a supported API.
+     * @param list<string> $columns
+     */
+    public function compile_insert_rows(array $columns, int $row_count): SQLBuilder
+    {
+        $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
+        $sql->insert_rows($columns, $row_count);
+
+        return $sql;
+    }
+
+    /**
+     * The values of a write of the builder (Query::update(), Query::insert()) keyed by the columns their keys name, by
+     * the rule of column() (spec §5.5): an alias of the model's $alias_attribute names the column of its attribute, an
+     * attribute name its column (#92), and any other key is kept as written, a column's own name among them. A key of a
+     * column of the model is its real name, matched as the database matches names (see model_column()): 'some_date' is
+     * the column some_Date on MySQL too, where Table maps no attribute name to a column that differs from it by case only,
+     * so that Table::process_data() prepares the value by that column (a DateTime of a DATE as the date). An alias never
+     * shadows a column (spec §6.2.6), so the mapping is never ambiguous. Two keys that name one column leave one entry,
+     * the later value, as Table::real_column_keys() leaves them. The legacy writes map attribute names only
+     * (update_all()'s 'set', upsert(), Table::insert() and update()).
+     *
+     * @internal Serves Query; not a supported API.
+     * @param array<string, mixed> $values
+     * @return array<string, mixed>
+     */
+    public function value_columns(array $values): array
+    {
+        $aliases = $this->alias_attributes();
+        $columns = [];
+
+        foreach ($values as $key => $value) {
+            // (string): an integer key ("0") names no column and comes back unchanged
+            $key = (string) $key;
+            $columns[$this->model_column($key)->name ?? $this->table->real_column_name($aliases[$key] ?? $key)] = $value;
+        }
+
+        return $columns;
     }
 
     /**
@@ -759,28 +978,48 @@ final class QueryCompiler
     }
 
     /**
-     * Refuses to compile an $operation (UPDATE, DELETE) of a state that holds builder clauses: an UPDATE and
-     * a DELETE are compiled from the legacy options only, so the clauses would be dropped, a WHERE among
-     * them, and the statement would write every row.
-     *
-     * @throws ActiveRecordException
-     */
-    private function refuse_builder_clauses(QueryState $state, string $operation): void
-    {
-        if (self::holds_clauses($state)) {
-            throw new ActiveRecordException(sprintf('The %s of a query on %s does not take builder clauses: it would drop them', $operation, $this->table->class->name));
-        }
-    }
-
-    /**
      * Whether a state holds a clause of the builder: a field, other than the legacy options, that is
      * not as in a new state.
      */
     private static function holds_clauses(QueryState $state): bool
     {
-        $legacy = ['legacy' => true];
+        return [] !== self::held_fields($state, ['legacy']);
+    }
 
-        return array_diff_key(get_object_vars($state), $legacy) !== array_diff_key(get_object_vars(new QueryState()), $legacy);
+    /**
+     * The fields of a state, other than those of $except, that are not as in a new state: the clauses it holds, in the
+     * order of the fields. Legacy options that are an empty array hold no option, and are none. The fields of a new
+     * state are read once: they are scalars, arrays and null, which no state shares by reference.
+     *
+     * @internal Serves QueryCompiler and Query (the clauses a closure group holds); not a supported API.
+     * @param list<string> $except
+     * @return list<string>
+     */
+    public static function held_fields(QueryState $state, array $except): array
+    {
+        static $new = null;
+        $new ??= get_object_vars(new QueryState());
+        $held = [];
+
+        foreach (get_object_vars($state) as $field => $value) {
+            if ($value !== $new[$field] && !in_array($field, $except, true) && !('legacy' === $field && [] === $value)) {
+                $held[] = $field;
+            }
+        }
+
+        return $held;
+    }
+
+    /**
+     * $names as a sentence lists them, $conjunction before the last: "a", "a or b", "a, b or c".
+     *
+     * @param non-empty-list<string> $names
+     */
+    private static function listing(array $names, string $conjunction): string
+    {
+        $last = array_pop($names);
+
+        return [] === $names ? $last : implode(', ', $names) . " $conjunction $last";
     }
 
     /**
@@ -884,26 +1123,97 @@ final class QueryCompiler
     }
 
     /**
-     * The clauses of a legacy UPDATE or DELETE: its conditions, read as a SELECT reads them (see
-     * apply_conditions()), its limit and its order, the only options a write reads. Where the
-     * adapter has no LIMIT on UPDATE and DELETE (Postgres), a limit picks the rows by the columns of
-     * the primary key in a subquery (#92), or by the adapter's row identity without one.
+     * The clauses of an UPDATE or a DELETE, of the write $method: of a legacy write, its conditions, read as a SELECT
+     * reads them (see apply_conditions()), its limit and its order, the only options a write reads; of the builder,
+     * its WHERE, its ORDER BY (and their values) and its LIMIT, rendered as those of a SELECT are, by the same rules
+     * (see where_clause() and order_clause()). Where the adapter has no LIMIT on UPDATE and DELETE (Postgres), a limit
+     * picks the rows by the columns of the primary key in a subquery (#92), or by the adapter's row identity without one.
      *
-     * @param array<string, mixed> $options
+     * SQLBuilder writes a WHERE and an ORDER BY only when its text is truthy in PHP: one of the builder that compiled to
+     * no condition or no order would be left out, and the write would touch every row, or other rows. The builder
+     * records none (raw SQL that is blank is refused at the call, see refuse_blank_sql(), and ConditionCompiler writes a
+     * lone "0" as "(0)"); this is the last guard, before any statement.
+     *
+     * @throws ActiveRecordException for a state that holds legacy options and builder clauses both, or a WHERE or an
+     *   ORDER BY of the builder that compiles to nothing (see refuse_lost_clause())
      */
-    private function apply_write_clauses(SQLBuilder $sql, array $options): void
+    private function apply_write_clauses(SQLBuilder $sql, QueryState $state, string $method): void
     {
-        $this->apply_conditions($sql, $options);
+        if (null !== $state->legacy) {
+            if (self::holds_clauses($state)) {
+                throw new ActiveRecordException(sprintf('A query on %s holds both legacy options and builder clauses: it compiles the one or the other', $this->table->class->name));
+            }
 
-        if (isset($options['limit'])) {
-            $sql->limit($options['limit']);
-        }
+            $options = $state->legacy;
+            $this->apply_conditions($sql, $options);
 
-        if (isset($options['order'])) {
-            $sql->order($options['order']);
+            if (isset($options['limit'])) {
+                $sql->limit($options['limit']);
+            }
+
+            if (isset($options['order'])) {
+                $sql->order($options['order']);
+            }
+        } else {
+            $where = $this->where_clause($state);
+
+            if (null !== $where) {
+                $this->refuse_lost_clause('WHERE', $where['sql'], $method);
+                $sql->where_condition($where['sql'], $where['values']);
+            }
+
+            $order = $this->order_clause($state);
+
+            if (null !== $order) {
+                $this->refuse_lost_clause('ORDER BY', $order['sql'], $method);
+                $sql->order($order['sql']);
+                $sql->order_values($order['values']);
+            }
+
+            if (null !== $state->limit) {
+                $sql->limit($state->limit);
+            }
         }
 
         $sql->key_columns(array_map($this->table->real_column_name(...), $this->table->pk));
+    }
+
+    /**
+     * Refuses the write $method of a state whose where calls all added no condition (see QueryState::$empty_where):
+     * where([]), a closure that adds none, where_null([]), or a when() or an unless() that ran neither its callback nor a
+     * default. Its WHERE is empty, so it would write every row, where the calls meant it to write by conditions, those of
+     * a filter that came empty for instance: where($filters) with no filter, when($ids, ...) with no id. A write of every
+     * row calls no where method, Author::new_query()->delete(), and a read of such a query is that of every row, as spec
+     * §5.2 has it.
+     *
+     * @throws ActiveRecordException
+     */
+    private function refuse_empty_where(QueryState $state, string $method): void
+    {
+        if ($state->empty_where && [] === $state->wheres) {
+            $model = $this->table->class->name;
+
+            throw new ActiveRecordException(sprintf(
+                '%s() on %s has where() calls whose conditions all turned out empty (an empty array or list, a closure that adds none), or a when() or unless() that skipped its callback, so it would write every row: it is refused. A write of every row calls no where(): %s::new_query()->%s',
+                $method,
+                $model,
+                $model,
+                'update' === $method ? 'update(...)' : "$method()",
+            ));
+        }
+    }
+
+    /**
+     * Refuses the WHERE or the ORDER BY ($clause) of the write $method, compiled to $sql, when it is no condition or no
+     * order that SQLBuilder writes: empty or only whitespace, or "0" (see apply_write_clauses()).
+     *
+     * @throws ActiveRecordException
+     */
+    private function refuse_lost_clause(string $clause, string $sql, string $method): void
+    {
+        if ('' === trim($sql) || '0' === $sql) {
+            throw new ActiveRecordException(sprintf("The %s of %s() on %s compiles to '%s', which is no %s: the statement is not sent", $clause, $method, $this->table->class->name, $sql, 'WHERE' === $clause ? 'condition' : 'order'));
+        }
     }
 
     /**
@@ -937,6 +1247,33 @@ final class QueryCompiler
         $this->model_column_keys ??= array_fill_keys(array_map($connection->column_name_key(...), $this->model_column_names()), true);
 
         return isset($this->model_column_keys[$connection->column_reference_key($reference)]);
+    }
+
+    /**
+     * Whether the columns that a query groups by, $grouped (their real names as the keys), hold every column of the model's
+     * primary key (Table::$pk). Each column of the key is read by the one rule of model_column(), as the groups are, so that an
+     * attribute name or an alias of it counts as the column. A table without a primary key has none to cover, and neither does
+     * one whose key names no column of the model: they are never covered. The key is the model's, which is the table's own
+     * unless the model declares another: one that the database does not know for a key leaves the statement to it, which may
+     * refuse it.
+     *
+     * @param array<string, true> $grouped
+     */
+    private function covers_primary_key(array $grouped): bool
+    {
+        if ([] === $this->table->pk) {
+            return false;
+        }
+
+        foreach ($this->table->pk as $name) {
+            $column = $this->model_column($name);
+
+            if (null === $column || !isset($grouped[$column->name])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

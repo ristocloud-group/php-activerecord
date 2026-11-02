@@ -150,10 +150,18 @@ on MySQL and SQLite. Only `find()` passes `mapped_names`. Twenty-two monolith mo
 - **`lib/IncludeTree.php`, `lib/RawSqlWriter.php` (new, `@internal`).** Pure helpers of `Query`: the include-tree
   rules of `with` / `without` / `with_only`, and the literal writer of `to_raw_sql()`.
 - **`lib/JoinClause.php` (new).** The closure form of joins (`on`, `or_on`, `where`…), with bound values.
-- **`lib/ExactDecimal.php` (new, `@internal`).** It takes the three private helpers of
-  `Validations` (#175) — `to_exact_decimal()`, `compare_exact_decimals()`, `exact_integer_digits()` — and adds an
-  exact long division with half-up rounding at a given scale. It is pure PHP, as decided in #175 (no bcmath/gmp,
-  no extension requirement). `Validations` calls it with unchanged behavior; #175's tests guard that.
+- **`lib/ExactDecimal.php` (new, `@internal`).** The exact-decimal helper, pure PHP, as decided in #175 (no
+  bcmath/gmp, no extension requirement).
+  - `parse()`, `integer_digits()` and `compare()` are #175's former `Validations` helpers, moved unchanged.
+    `Validations` calls them with unchanged behavior; #175's tests guard that.
+  - `to_int_or_string()` returns an `int` when the exact value fits `[PHP_INT_MIN, PHP_INT_MAX]`, decided by digit
+    comparison, else the normalized digits.
+  - `divide()` is an exact long division rounded half-up (away from zero) at a scale, with no negative zero.
+  - Callers classify floats first: a float argument is coerced by PHP before the method runs.
+  - `MAX_SCALE` is 16387 (Postgres's maximum numeric scale 16383, plus avg's 4); a larger scale throws.
+- **`lib/AggregateCaster.php` (new, `@internal`).** It classifies the aggregated column (exact integer, exact
+  decimal, floating, expression) and casts the driver's value by §5.4. `Connection::exact_decimals()` (`@internal`,
+  default true, `SqliteAdapter` false) says whether the adapter stores DECIMAL exactly.
 - **The timestamp policy (internal).** The single source of "now", the per-class suspension stack behind
   `Model::without_timestamps()`, and the rule of §5.6. `Model::set_timestamps()`, `upsert` and the engine all use it.
 - **`lib/Exceptions.php`.** Gains `MultipleRecordsFound extends ActiveRecordException`.
@@ -377,12 +385,40 @@ The engine knows the aggregated column when the argument is a model column (§5.
 | `min` / `max` / `sum` | `int` when the exact value fits `[PHP_INT_MIN, PHP_INT_MAX]` (decided with `ExactDecimal`), else the exact digits as a string | the exact string as the database returns it (scale kept) | `float` | the driver's value, unchanged |
 | `sum` of no rows | `0` | `'0'` | `0.0` | the driver's value |
 | `min` / `max` of no rows | `null` | `null` | `null` | the driver's value |
-| `avg` | `SELECT SUM(col), COUNT(col)`, then the **exact long division** of `ExactDecimal` at scale **SUM's scale + 4, half-up**, which is MySQL's AVG rule (`'1.5000'`, `'1.6667'`); no rows → `null` | the same division (SUM keeps the column's scale on MySQL and Postgres) | the database's `AVG`, as `float` | the driver's value |
+| `avg` | `SELECT SUM(col), COUNT(col)`, then the **exact long division** of `ExactDecimal` at scale **SUM's scale + 4, half-up**. The scale is MySQL's AVG scale rule (`'1.5000'`, `'1.6667'`). The rounding is half-up on every adapter. MySQL/MariaDB's own AVG truncates instead when its result scale is 9, 18 or 27, measured on MySQL 9.7 and MariaDB 11.4 (Task 17); the engine rounds consistently, so on those scales it can differ from MySQL's AVG in the last digit; no rows → `null` | the same division (SUM keeps the column's scale on MySQL and Postgres) | the database's `AVG`, as `float` | the driver's value |
 
 The results are therefore identical on MySQL, MariaDB and Postgres, and on SQLite for integer columns. The
 documented SQLite exceptions are: DECIMAL columns are REAL storage, so the floating path applies; and a SUM
 beyond 2^63 fails with SQLite's `integer overflow` (`DatabaseException`). The computation is pure PHP and
 deterministic, with no extension (#175's decision).
+
+Details settled while building the aggregates (Task 18):
+
+- **The aggregates share `count()`'s shape rules (§5.3).** A plain query is aggregated in place, with its order
+  dropped. A grouped, distinct or windowed query (limit/offset) aggregates the rows of its result:
+  `SELECT SUM(t.col) FROM (…) AS t`. Eloquent ignores the LIMIT and aggregates every row; this is a deviation, listed
+  in the README.
+- **A non-model column over no row** returns the driver's `NULL` from `sum()`, so `sum()`'s type is
+  `int|string|float|null`.
+- **SQLite** stores DECIMAL as REAL (NUMERIC affinity), so its DECIMAL columns classify as floating: `sum`/`avg` are
+  floats, and an empty `sum` is `0.0`. A BIGINT sum beyond `PHP_INT_MAX` raises SQLite's integer overflow
+  (`DatabaseException`).
+- **The raw type decides the class.** Postgres `real` and SQLite `REAL` are `Column::STRING` with raw type `real`.
+  Postgres `float8` arrives as a string on PHP 8.3 and as a float on PHP 8.5; both read as floats. Postgres's `NaN` and
+  `Infinity` read as PHP's `NAN` and `INF` on floating columns. A Postgres `numeric` NaN or ±Infinity stays the
+  string `'NaN'` / `'Infinity'` / `'-Infinity'` in `sum`, `min`, `max` and `avg`.
+- **A `BOOLEAN` column aggregates as an integer.** On MySQL/MariaDB (`tinyint(1)`) and SQLite, `sum` counts the
+  trues, `avg` is exact, and `min`/`max` are `0`/`1`. Postgres refuses `SUM`/`AVG`/`MIN`/`MAX` of boolean, which
+  surfaces as `DatabaseException`.
+- **An ungrouped column under GROUP BY is refused.** `sum`/`min`/`max`/`avg` on a grouped query with no select of
+  its own and only structured group columns refuse an aggregated column that is not grouped. MariaDB's default
+  mode and SQLite would pick an arbitrary row per group. With a select of its own or a raw group it is allowed and
+  documented. Groups that cover the model's whole primary key (every column of a composite one) are not refused: each
+  group is one row, every column depends on the groups, and MySQL and Postgres accept the statement.
+- **Postgres `bytea`.** A `min`/`max` over it arrives as a stream, which is read into a string. `MIN`/`MAX` of bytea
+  exist from PostgreSQL 18; earlier versions refuse them with a `DatabaseException`.
+- **An expression aliased with a model column's name** is classified by that column's kind. On SQLite, where
+  DECIMAL is floating, an exact integer under such a name reads as a float.
 
 ### 5.5 Writes
 
@@ -415,6 +451,28 @@ deterministic, with no extension (#175's decision).
 The argument forms of `update_all` / `delete_all` (bare hash, lists, scalars) are fixed by #145 **before** this
 work (§9). The engine preserves whatever #145 ships.
 
+Details settled while building the write terminals (Task 19):
+
+- **Which clauses a write takes.** `update()` / `delete()` take the builder's where (every form), `order_by` and
+  `limit`. Joins, groups, havings, offset, distinct, select, `from` / `from_raw`, includes and `readonly` are refused at
+  the call with `ActiveRecordException("<method>() cannot use <clause>")`. `insert()` and `upsert()` refuse every
+  clause.
+- **An empty where is refused.** A write whose where calls all rendered no condition (`where([])`, an empty closure
+  group) is refused: a dynamic filter that came out empty must not write every row. A write with no where call at all
+  is an explicit whole-table write (`new_query()->delete()`), and reads are unchanged.
+- **Values.**
+  - Their keys map aliases and #92 attribute names to real columns. The legacy `update_all` set and `upsert` keep
+    today's #92-only mapping.
+  - Values are scalars, `null`, DateTimes or `Stringable` (bound as text). Arrays, enums and other objects are
+    refused.
+  - `insert()` validates its rows (at least one, identical keys, at least one column) and stamps them with one
+    `now()` per call.
+- **The returned count.** `update()`'s count on MySQL/MariaDB is the rows changed, and with `updated_at` set to now
+  that is every matched row.
+- **Limited writes.** Postgres limits a write through the pk subquery (#92). MySQL, MariaDB and SQLite (3.46, compiled
+  with `UPDATE/DELETE … LIMIT`) limit natively. SQLite refuses an order without a limit on a write, as the legacy path
+  does.
+
 ### 5.6 Timestamps: one rule, in the engine
 
 | Statement | `created_at` | `updated_at` |
@@ -445,6 +503,7 @@ the model and the offending input.
 | static `Order::update(...)` / `Order::delete()`, an unsupported clause on a write, empty update values | `ActiveRecordException` |
 | `find` / `find_or_fail` / `where_key` / `where_key_not` on a composite pk | `ActiveRecordException` |
 | an empty column list in `where_all` / `where_any` / `where_none`, a nested array in `where_in` / `where_between` / `where_key`, an empty column name or alias | `ActiveRecordException` |
+| blank raw SQL in `where_raw` / `having_raw` (and `or_` forms), blank or `'0'` in `order_by_raw` / `group_by_raw`, a clause a write cannot take, a write whose where came out empty | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
 | an unknown method through `__callStatic` | `ActiveRecordException("Call to undefined method: …")`, today's message |
@@ -579,7 +638,14 @@ scopes (sub-project 3). The maintainer confirmed that the monolith base model wi
   - aggregates are exact;
   - timestamps on every INSERT;
   - static `update` / `delete` are refused;
-  - the builder's `find()` returns `null` where the legacy one throws.
+  - the builder's `find()` returns `null` where the legacy one throws;
+  - `sum` / `min` / `max` / `avg` over a grouped, distinct or windowed query aggregate its result rows (Eloquent
+    ignores the LIMIT); a grouped aggregate of an ungrouped column is refused at the call;
+  - `or_where(hash)` ANDs its entries; `where_all` / `where_any` / `where_none` refuse an empty column list;
+  - `exists()` selects `1`, so an aggregate select cannot make it true;
+  - `find_or($ids)` calls the callback when any id is missing; `when()` / `unless()` hand back only a same-model
+    query; `readonly()` is not forwardable;
+  - and the rest of the "Details settled" notes (§4.2, §5.2, §5.3, §5.4).
 - A "legacy vs builder" table for the names that exist in both.
 - A docblock on every public method, and a runnable example under `examples/`.
 

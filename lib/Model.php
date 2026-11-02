@@ -167,6 +167,11 @@ use Closure;
  * @method static mixed sole_value(string $column) The value of this column in the only row of this class, as sole() reads it
  * @method static array<mixed> pluck(string $column, ?string $key = null) The values of this column in the rows of this class, or keyed by the values of another
  * @method static bool doesnt_exist() Whether this class has no row
+ * @method static int|string|float|null min(string $column) The smallest value of this column in the rows of this class, as the column's type reads it, or null when there is none
+ * @method static int|string|float|null max(string $column) The largest value of this column in the rows of this class, as the column's type reads it, or null when there is none
+ * @method static int|string|float|null sum(string $column) The exact sum of this column over the rows of this class, as the column's type reads it: 0 of that type when there is none
+ * @method static string|float|null avg(string $column) The average of this column over the rows of this class: exact for an integer or decimal column, null when there is none
+ * @method static string|float|null average(string $column) The average of this column over the rows of this class, as avg() reads it
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */

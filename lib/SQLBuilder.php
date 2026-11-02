@@ -165,6 +165,25 @@ class SQLBuilder
     }
 
     /**
+     * The bind values of an UPDATE or a DELETE, in the order of their markers: those of the SET (see update()), of
+     * the WHERE, then of the ORDER BY when the statement writes it (see order_values()). An adapter without ORDER BY
+     * on UPDATE and DELETE writes the order only beside a limit, in the condition that picks the rows (see
+     * limited_rows_condition()), so an order it leaves out binds nothing. A value that is an array gives its elements
+     * in its place. The legacy writes give their ORDER BY no values: theirs are those of bind_values().
+     *
+     * @internal Serves the UPDATE and the DELETE of the Query engine; not a supported API.
+     * @return list<mixed>
+     */
+    public function write_bind_values(): array
+    {
+        if ([] === $this->order_values || !$this->writes_order()) {
+            return $this->bind_values();
+        }
+
+        return array_flatten([...$this->bind_values(), ...$this->order_values]);
+    }
+
+    /**
      * @return list<mixed>
      */
     public function get_where_values()
@@ -1010,6 +1029,19 @@ class SQLBuilder
         }
 
         return $sql;
+    }
+
+    /**
+     * Whether an UPDATE or a DELETE writes its ORDER BY (see build_update() and build_delete()): where the adapter
+     * takes ORDER BY on them, or else inside the condition that picks the rows of a limited one.
+     */
+    private function writes_order(): bool
+    {
+        if (!$this->order) {
+            return false;
+        }
+
+        return $this->connection->accepts_limit_and_order_for_update_and_delete() || null !== $this->limited_rows_condition();
     }
 
     /**

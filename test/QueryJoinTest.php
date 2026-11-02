@@ -436,11 +436,11 @@ class QueryJoinTest extends DatabaseTest
         $joined_by_hand = Author::join('books', 'books.author_id', '=', 'authors.author_id');
 
         foreach ([
-            'UPDATE' => fn() => $joined->execute_update(['name' => 'x']),
-            'DELETE' => fn() => $joined_by_hand->execute_delete(),
-        ] as $operation => $write) {
+            'update' => fn() => $joined->execute_update(['name' => 'x']),
+            'delete' => fn() => $joined_by_hand->execute_delete(),
+        ] as $method => $write) {
             $this->assert_same(
-                [['exception' => ActiveRecordException::class, 'message' => "The $operation of a query on Author does not take builder clauses: it would drop them"]],
+                [['exception' => ActiveRecordException::class, 'message' => "$method() cannot use joins, on Author: it takes only where, order_by and limit"]],
                 GoldenStatements::capture($write)
             );
         }

@@ -1,7 +1,13 @@
 <?php
 
+use ActiveRecord\Column;
+
 /**
  * The query builder on SQLite: what its adapter writes its own way, and the DATE binds it fixes there.
+ *
+ * Fixture data: authors 1 Tito, 2 George W. Bush, 3 Bill Clinton, 4 Uncle Bob; measurements 1 (qty 1, big 2^62, amount
+ * 1234567890123.45, ratio 0.1) and 2 (qty 2, big 2^62, amount 0.01, ratio 0.2); books 1 and 2, whose NUMERIC special is 0;
+ * dated_counts.
  */
 class SqliteQueryBuilderTest extends DatabaseTest
 {
@@ -145,6 +151,154 @@ class SqliteQueryBuilderTest extends DatabaseTest
             $this->assert_same($expected, $this->conn->query($query->to_raw_sql())->fetch(PDO::FETCH_NUM)[0], "raw, value $i: " . $query->to_raw_sql());
             $this->assert_same('integer' === $expected, $this->conn->binds_as_integer($value), "binds_as_integer(), value $i");
         }
+    }
+
+    // Spec §5.4, §10: the raw types this adapter reports for the columns of the measurements, which classify their
+    // aggregates. SQLite gives the first word of the declared type, lower-cased: 'decimal' for DECIMAL(20,2), 'double'
+    // for DOUBLE (and DOUBLE PRECISION), 'int' for INT and INTEGER. A column declared REAL (single) is (STRING, 'real'): the
+    // type mapping has no such key, so the raw type alone makes it floating.
+    public function test_the_raw_types_of_the_measurements(): void
+    {
+        $this->assert_same(
+            ['id' => [Column::INTEGER, 'int'], 'qty' => [Column::INTEGER, 'int'], 'big' => [Column::INTEGER, 'bigint'], 'amount' => [Column::DECIMAL, 'decimal'], 'ratio' => [Column::DECIMAL, 'double'], 'single' => [Column::STRING, 'real'], 'label' => [Column::STRING, 'varchar']],
+            array_map(fn(Column $column): array => [$column->type, $column->raw_type], Measurement::table()->columns)
+        );
+    }
+
+    // Spec §5.4: SQLite stores DECIMAL as a REAL (NUMERIC affinity), so the aggregates of the decimal column are floats, the
+    // floating path; and a SUM of integers beyond 2^63 is SQLite's own "integer overflow" error, which a query surfaces as a
+    // DatabaseException: SQLite has no wider integer to sum into. Both are documented limits of this adapter.
+    public function test_sqlite_decimal_is_floating_and_big_sum_overflows(): void
+    {
+        $this->assert_true(is_float(Measurement::sum('amount')));
+        $this->assert_exception_message_contains('overflow', fn() => Measurement::sum('big'), ActiveRecord\DatabaseException::class);
+    }
+
+    // The documented limit, on each statement that sums the column: the SUM, and the AVG, which is a SUM and a COUNT
+    public function test_a_bigint_sum_beyond_the_int_range_overflows_in_sum_and_avg(): void
+    {
+        $this->assert_exception_message_contains('integer overflow', fn() => Measurement::sum('big'), ActiveRecord\DatabaseException::class);
+        $this->assert_exception_message_contains('integer overflow', fn() => Measurement::avg('big'), ActiveRecord\DatabaseException::class);
+        $this->assert_exception_message_contains('integer overflow', fn() => BigId::sum('id'), ActiveRecord\DatabaseException::class);
+
+        // the MIN and the MAX do not sum, and a sum that fits is exact: one BIGINT of 2^62
+        $this->assert_same(4611686018427387904, Measurement::max('big'));
+        $this->assert_same(4611686018427387904, Measurement::min('big'));
+        $this->assert_same(PHP_INT_MAX, BigId::max('id'));
+        $this->assert_same(4611686018427387904, Measurement::where('label', 'a')->sum('big'));
+    }
+
+    // DECIMAL is REAL storage here: the aggregates of the column are floats, which the driver gives, never the exact
+    // strings of the other databases. The expected values are the doubles of the decimal digits.
+    public function test_decimal_aggregates_are_floats(): void
+    {
+        $this->assert_true(abs(Measurement::sum('amount') - 1234567890123.46) < 1e-6);
+        $this->assert_true(abs(Measurement::avg('amount') - 617283945061.73) < 1e-6);
+        $this->assert_same(0.01, Measurement::min('amount'));
+        $this->assert_same(1234567890123.45, Measurement::max('amount'));
+        $this->assert_true(is_float(Measurement::average('amount')));
+        $this->assert_same(0.0, Measurement::where('label', 'zzz')->sum('amount'));
+        $this->assert_null(Measurement::where('label', 'zzz')->avg('amount'));
+        $this->assert_null(Measurement::where('label', 'zzz')->max('amount'));
+        $this->assert_true(is_float($this->strict_call(fn() => Measurement::sum('amount'))));
+        // a windowed query too
+        $this->assert_same(1234567890123.45, Measurement::order_by('id')->limit(1)->sum('amount'));
+        $this->assert_same(1234567890123.45, Measurement::order_by('id')->limit(1)->avg('amount'));
+    }
+
+    // A whole decimal is stored as an INTEGER (NUMERIC affinity), and SQLite sums integers into an integer: the type of the
+    // aggregate does not depend on the values, it is a float for the column, as the floating path says
+    public function test_a_whole_decimal_is_a_float_too(): void
+    {
+        $this->assert_same('integer', $this->conn->query('SELECT typeof(special) FROM books WHERE book_id = 1')->fetch(PDO::FETCH_NUM)[0]);
+        $this->assert_same('real', $this->conn->query('SELECT typeof(amount) FROM measurements WHERE id = 1')->fetch(PDO::FETCH_NUM)[0]);
+
+        $this->assert_same(0.0, $this->strict_call(fn() => Book::sum('special')));
+        $this->assert_same(0.0, $this->strict_call(fn() => Book::min('special')));
+        $this->assert_same(0.0, $this->strict_call(fn() => Book::max('special')));
+        $this->assert_same(0.0, $this->strict_call(fn() => Book::avg('special')));
+        $this->assert_same(0.0, $this->strict_call(fn() => Book::where('book_id', 99)->sum('special')));
+    }
+
+    // SQLite types the value, not the column: an INTEGER column holds a REAL when the value has a fraction, and its SUM, its
+    // MIN and its AVG are then floats. The result is that float, unchanged: it never goes to ExactDecimal, whose int|string
+    // parameters PHP would hand the int 1 for 1.5, with a deprecation. A MAX that is a whole number is an integer.
+    public function test_a_real_in_an_integer_column_is_returned_as_the_float_it_is(): void
+    {
+        $this->conn->query('UPDATE measurements SET qty = 1.5 WHERE id = 1');
+        $this->assert_same('real', $this->conn->query('SELECT typeof(qty) FROM measurements WHERE id = 1')->fetch(PDO::FETCH_NUM)[0]);
+
+        $this->assert_same(3.5, $this->strict_call(fn() => Measurement::sum('qty')));
+        $this->assert_same(1.5, $this->strict_call(fn() => Measurement::min('qty')));
+        $this->assert_same(2, $this->strict_call(fn() => Measurement::max('qty')));
+        $this->assert_same(1.75, $this->strict_call(fn() => Measurement::avg('qty')));
+        $this->assert_same(1.75, $this->strict_call(fn() => Measurement::average('qty')));
+        $this->assert_same(1.5, $this->strict_call(fn() => Measurement::where('label', 'a')->sum('qty')));
+        $this->assert_same(1.5, $this->strict_call(fn() => Measurement::where('label', 'a')->avg('qty')));
+    }
+
+    // A column that is not the model's has no type to read by, so its aggregates are the driver's values, with SQLite's types: a
+    // SUM of integers is an int, an AVG is a float, a MIN and a MAX are ints
+    public function test_a_column_that_is_not_the_models_is_the_value_sqlite_returns(): void
+    {
+        $this->assert_same(3, Book::joins('author')->sum('authors.author_id'));
+        $this->assert_same(3, Book::joins('author')->sum('author_id'));
+        $this->assert_same(1.5, Book::joins('author')->avg('authors.author_id'));
+        $this->assert_same(1, Book::joins('author')->min('authors.author_id'));
+        $this->assert_same(2, Book::joins('author')->max('authors.author_id'));
+    }
+
+    // An expression that the select names has no model column either: SQLite's SUM of integers is an int, its AVG a float, its MIN
+    // and MAX ints. qty is 1 and 2, so doubled is 2 and 4.
+    public function test_an_expression_alias_gives_the_values_sqlite_returns(): void
+    {
+        $doubled = fn(): ActiveRecord\Query => Measurement::select_raw('qty * 2 AS doubled')->order_by('id')->limit(10);
+
+        $this->assert_same(6, $doubled()->sum('doubled'));
+        $this->assert_same(3.0, $doubled()->avg('doubled'));
+        $this->assert_same(3.0, $doubled()->average('doubled'));
+        $this->assert_same(2, $doubled()->min('doubled'));
+        $this->assert_same(4, $doubled()->max('doubled'));
+        // no row: NULL, where a column of the model has a 0 of its type
+        $this->assert_null($doubled()->where('label', 'zzz')->sum('doubled'));
+        $this->assert_null($doubled()->where('label', 'zzz')->avg('doubled'));
+    }
+
+    // SQLite's SUM of integers is an int, and so the AVG of an integer column is exact here too, as everywhere
+    public function test_the_average_of_an_integer_column_is_exact_here_too(): void
+    {
+        Measurement::create(['qty' => 2, 'label' => 'c']);
+
+        $this->assert_same('1.6667', Measurement::avg('qty'));
+        $this->assert_same(5, Measurement::sum('qty'));
+        $this->assert_same('4611686018427387904.0000', Measurement::where('label', 'a')->avg('big'));
+    }
+
+    // A boolean column aggregates as an integer: sum() counts the trues, avg() is exact (SQLite sums integers into an integer,
+    // so its own AVG is not asked), min() and max() are the ints 0 and 1. The six venues are all available, none is retired.
+    public function test_a_boolean_column_aggregates_as_an_integer(): void
+    {
+        $this->assert_same(6, Venue::sum('is_available'));
+        $this->assert_same('1.0000', Venue::avg('is_available'));
+        $this->assert_same('1.0000', Venue::average('is_available'));
+        $this->assert_same(1, Venue::min('is_available'));
+        $this->assert_same(1, Venue::max('is_available'));
+        $this->assert_same(0, Venue::sum('is_retired'));
+        $this->assert_same('0.0000', Venue::avg('is_retired'));
+        $this->assert_same(0, Venue::min('is_retired'));
+        $this->assert_same(0, Venue::max('is_retired'));
+
+        // two of the six not available
+        $this->conn->query("UPDATE venues SET is_available = 0 WHERE state = 'DC'");
+        $this->assert_same(4, Venue::sum('is_available'));
+        $this->assert_same('0.6667', Venue::avg('is_available'));
+        $this->assert_same(0, Venue::min('is_available'));
+        $this->assert_same(1, Venue::max('is_available'));
+
+        // no row
+        $this->assert_same(0, Venue::where('name', 'zzz')->sum('is_available'));
+        $this->assert_null(Venue::where('name', 'zzz')->avg('is_available'));
+        $this->assert_null(Venue::where('name', 'zzz')->max('is_available'));
     }
 
     // SQLite needs a LIMIT before an OFFSET: an offset alone goes with an unbounded one, LIMIT -1 (#130)

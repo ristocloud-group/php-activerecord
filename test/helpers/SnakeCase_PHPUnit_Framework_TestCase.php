@@ -68,4 +68,24 @@ class SnakeCase_PHPUnit_Framework_TestCase extends TestCase
     {
         $this->assert_equals($expected->format(DateTime::ISO8601), $actual->format(DateTime::ISO8601));
     }
+
+    /**
+     * Runs $closure and returns what it returns, and fails on any PHP notice, warning or deprecation it raises while
+     * it runs: PHPUnit reports those only when the run is told to fail on them, and a float given to a parameter that
+     * is declared int|string is one of them ("Implicit conversion from float 1.5 to int loses precision").
+     *
+     * @param callable(): mixed $closure
+     */
+    public function strict_call(callable $closure): mixed
+    {
+        set_error_handler(function (int $level, string $message): never {
+            throw new ErrorException($message, 0, $level);
+        });
+
+        try {
+            return $closure();
+        } finally {
+            restore_error_handler();
+        }
+    }
 }
