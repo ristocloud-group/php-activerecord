@@ -303,7 +303,10 @@ string literals and comments: `find` / `all` / `first` / `last`, `count`, `exist
 (every database refused its statement before). MySQL, MariaDB and SQLite end the statement there and drop what follows
 it, the `order` and the `limit` among it, so a limited `update_all()` or `delete_all()` wrote every row it matched and a
 find read every row; Postgres refuses the statement. A `;` with nothing after it is refused as well. A `;` in a string
-literal (`"name = 'a;b'"`), in a comment or in a bound value (`['name = ?', 'a;b']`) is sent as before. The other options
+literal (`"name = 'a;b'"`), in a comment or in a bound value (`['name = ?', 'a;b']`) is sent as before. **A block comment
+left open throws too**: a `/*` outside the string literals and comments with no `*/` after it (`'author_id > 0 /* note'`).
+SQLite runs it to the end of the statement, so a limited `delete_all()` deleted every row it matched; MySQL, MariaDB and
+Postgres refuse the statement. A closed comment, or a `/*` in a string literal, is sent as before. The other options
 (`select`, `joins`, `from`, `group`, `having`, `order`), the `$where` of a direct `Table::update()` / `Table::delete()`
 and `find_by_sql()` send their SQL as written, unread. The rule is the builder's (see [Conditions](#conditions)).
 
@@ -351,9 +354,9 @@ $all_open = $open->get();                       // the limit was set on the clon
 ```
 
 A query refuses what it cannot read at the call that gives it, not when it runs: an unknown operator, a negative `limit`,
-an empty column name, SQL written by hand that holds a statement terminator, a relationship the model does not
-declare, ... Those are `ActiveRecordException`s (or a subclass, such as `RelationshipException`), and a database error is
-still a `DatabaseException`.
+an empty column name, SQL written by hand that holds a statement terminator or leaves a block comment open, a
+relationship the model does not declare, ... Those are `ActiveRecordException`s (or a subclass, such as
+`RelationshipException`), and a database error is still a `DatabaseException`.
 
 What a static call such as `Invoice::something()` reaches:
 
@@ -481,7 +484,12 @@ verbatim, with the values of its `?` markers bound, so it must never come from u
 there and cannot cut off the clauses that follow it, which on a write include its `ORDER BY` and `LIMIT`. The legacy
 `conditions` option sends its SQL as given, so a comment at its end still cuts them off there. **A fragment that holds a
 statement terminator is refused at the call**: a `;` outside its strings, its quoted identifiers and its comments, as
-the database of the connection reads them, throws `ActiveRecordException`, which names the method.
+the database of the connection reads them, throws `ActiveRecordException`, which names the method. **So does a fragment
+that leaves a block comment open**, a `/*` there with no `*/` after it: SQLite runs the comment to the end of the
+statement, so `where_raw('id > 0 /* note')->order_by('id')->limit(1)->delete()` deleted every row the `WHERE` matched,
+and MySQL, MariaDB and Postgres refuse the statement. Block comments do not nest on MySQL, MariaDB and SQLite (`/* /* */`
+is closed) and nest on Postgres (it is open there); MySQL's executable comments (`/*!`, `/*M!`) are open until their
+`*/`.
 
 - MySQL and MariaDB read strings in single and double quotes with `\` escapes, backtick identifiers, `#` comments, and
   `--` comments only where a space or a control character follows the dashes (`0--1;` is `0 - -1` and a `;` there).
@@ -496,7 +504,9 @@ limited write would touch every row it matches; Postgres refuses the statement. 
 (`where_raw("note = 'a;b'")`), an identifier, a comment or a bound value (`where_raw('note = ?', ['a;b'])`) is sent as
 written. The legacy `conditions` option refuses one too (see [Hash conditions](#hash-conditions)). The MySQL and MariaDB
 reading is that of their default sql_mode: a session with `NO_BACKSLASH_ESCAPES` reads `'C:\'` as a whole string, so
-`name != 'C:\' ; '` passes the check and the statement ends at its `;` (the library sets no sql_mode).
+`name != 'C:\' ; '` passes the check and the statement ends at its `;` (the library sets no sql_mode). It also assumes a
+connection character set in which a `\` byte is always a backslash (utf8mb4, utf8, latin1, ...): in GBK, Big5 or SJIS a
+`\` byte can be the second byte of a character, so a fragment built for it can hide a `;` from the check.
 
 `where_raw`, `or_where_raw`, `having_raw` and `or_having_raw` refuse SQL that is empty or only whitespace at the call, and
 `order_by_raw` and `group_by_raw` refuse `0` too, which would name a column position that no statement has: the statement
@@ -649,7 +659,11 @@ Invoice::where('status', 'open')->count();                  // 3
   one the rows of its window (the legacy `Invoice::count([...])` counts the rows of the first group). `count($column)`
   counts the column's non-null values, and after `distinct()` with no select of the query's own its distinct non-null
   values (Eloquent's `COUNT(DISTINCT column)`), with the refusal of a window ordered by another column that the
-  [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. On a grouped query
+  [aggregates](#aggregates) have; `count()` after `distinct()` counts distinct rows. SQL of `group_by_raw()`, or of an
+  `order_by_raw()` of a window, can name the select by position (`GROUP BY 1`), so with no select of the query's own the
+  subquery selects what `get()` selects: `group_by_raw('1')->count()` counts the groups of `get()`, and with a
+  `group_by_raw()` that names a column that is not the primary key MySQL and Postgres refuse it as they refuse `get()`
+  (give the query a select of its own). On a grouped query
   the counted column must be a grouped or selected one, as MySQL's `ONLY_FULL_GROUP_BY` and Postgres require.
 
 ### Aggregates ###
@@ -686,6 +700,8 @@ databases' own AVG differ in type and scale.
   aggregates every row. After `distinct()` with no select of the query's own, the subquery selects `DISTINCT col`, so
   `sum()` and `avg()` run over the column's distinct values, Eloquent's `SUM(DISTINCT col)` and `AVG(DISTINCT col)`
   (`min()` and `max()` are the same either way); with a select of its own they run over the distinct rows it selects.
+  Without `distinct()` and a select, SQL of `group_by_raw()` or of a window's `order_by_raw()`, which can name the select
+  by position, makes the subquery select what `get()` selects, as `count()` does.
 - **A distinct aggregate refuses a window ordered by another column.** With a `limit` or an `offset`, the order of the
   query picks the distinct values in that subquery, and `SELECT DISTINCT col` cannot be ordered by another column: MySQL
   and Postgres refuse it, and MariaDB and SQLite pick the values arbitrarily. So
@@ -831,8 +847,9 @@ Code ported from the Laravel documentation works by changing the method case, ex
 - **A static `update` or `delete` is refused**, a write takes only a where, `order_by()` and `limit()`, and a write whose
   where calls all came out empty, or whose `when()` or `unless()` skipped its callback, is refused, where Eloquent writes
   every row (see [Writing](#writing)).
-- **SQL written by hand that holds a statement terminator is refused** at the call (a `;` outside its strings and
-  comments, see [Conditions](#conditions)), where Eloquent sends it.
+- **SQL written by hand that holds a statement terminator or leaves a block comment open is refused** at the call (a `;`
+  outside its strings and comments, or a `/*` with no `*/` after it, see [Conditions](#conditions)), where Eloquent sends
+  it.
 - The exceptions are this library's: `RecordNotFound` for `first_or_fail()`, `find_or_fail()` and `sole()` (Eloquent's
   `ModelNotFoundException`) and `MultipleRecordsFound` for `sole()`. The terminals return arrays, where Eloquent returns
   Collections.

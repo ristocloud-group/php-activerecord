@@ -391,8 +391,29 @@ Details settled by the final review (2026-10-30):
   - Residual, measured: the MySQL and MariaDB reading is that of the default sql_mode. A session with
     `NO_BACKSLASH_ESCAPES` reads `'C:\'` as a whole string, and `name != 'C:\' ; '`, accepted, deleted the four
     authors there; with `ANSI_QUOTES` a double-quoted identifier ending in a backslash is an unknown column. The library
-    sets no sql_mode. Conservative, the other way (measured on SQLite 3.46): a `;` in a block comment left open, which
-    SQLite runs to the end of the SQL, is refused.
+    sets no sql_mode. Residual, by reading (second final review, 2026-11-02): the reading also assumes a connection
+    character set in which a `\` byte is always a backslash (utf8mb4, utf8, latin1, ...). In GBK, Big5 or SJIS a `0x5C`
+    byte can be the second byte of a character, so `'\xbf\x5c' ; '` reads as one string to the check and as a string, a
+    terminator and an open quote to the server: a fragment built for it can hide a `;`. Conservative, the other way
+    (measured on SQLite 3.46): a `;` in a block comment left open, which SQLite runs to the end of the SQL, is refused
+    as a terminator.
+- **A block comment left open in SQL written by hand is refused** (the maintainer, 2026-11-02, after the second final
+  review). A `/*` outside the strings, the quoted identifiers and the comments of a fragment that nothing closes runs,
+  on SQLite, to the end of the statement: `where_raw('author_id > 0 /* note')->order_by('author_id')->limit(1)->delete()`
+  deleted the four authors, an update updated them, a read read them, and so did the legacy
+  `delete_all(['conditions' => 'author_id > 0 /* note', 'order' => 'author_id', 'limit' => 1])`. MySQL, MariaDB (1064)
+  and Postgres (42601, "unterminated /* comment") refuse the statement.
+  - One rule with the `;`: `RawSqlWriter::leaves_block_comment_open()` reads the SQL in the pass of
+    `holds_statement_terminator()`, with the same readings (each gains the opener of a comment that no closed comment
+    of its own matches), only when the SQL holds `/*`, and `QueryCompiler::refuse_statement_terminator()` throws an
+    `ActiveRecordException` that names the open comment, after the `;` check (a `;` in an open comment is refused as a
+    terminator, as before).
+  - The comment rules are each database's: MySQL, MariaDB and SQLite do not nest block comments (`/* /* */` is
+    closed), Postgres nests them (`/* /* */` is open, `/* /* */ */` closed), and MySQL's executable comments (`/*!`,
+    `/*M!`), whose text is SQL, are open until their `*/`. A `/*` in a string, a quoted identifier, a line comment, a
+    dollar quote (Postgres), the Tcl-style suffix of a parameter (SQLite: `$a(/*)`) or a bound value is none.
+  - The scope is the `;`'s: the builder's raw methods and `JOIN` fragments at the call, and the legacy `conditions`
+    option before any statement, a breaking change (§8.3), in the same entries; nothing else of the legacy API.
 
 ### 5.3 Read terminals
 
@@ -426,6 +447,24 @@ Details settled while building the terminals (Task 15):
   a GROUP BY is refused by Postgres and MySQL's ONLY_FULL_GROUP_BY. Otherwise
   it keeps the caller's select, because aliases named by GROUP BY or ORDER BY, and aggregates that collapse the rows,
   need it.
+  - An empty select is kept too where a `group_by_raw()` entry or a kept `order_by_raw()` entry may name it by
+    position (second final review, 2026-11-02): the code honoured the exclusion only for a select of the caller's own,
+    so `group_by_raw('1')->count()` sent `SELECT 1 ... GROUP BY 1`, grouped by the constant and counted 1 where `get()`
+    reads 4 rows, and `order_by_raw('2')->limit(2)->count()` was refused (no column 2 in `SELECT 1`), on the four
+    databases. The subquery now selects what `get()` selects. The cost: a `group_by_raw()` that names a column other
+    than the primary key, with no select of the query's own, is refused by MySQL and Postgres there (`*` beside such a
+    GROUP BY), as its `get()` is, where `SELECT 1` counted its groups; MariaDB and SQLite count them. A select of the
+    query's own (`select('col')->group_by_raw('col')`) counts them on every database.
+  - The aggregates of a column (§5.4) make the same choice: without DISTINCT, an empty select beside such raw SQL is
+    kept, where the aggregated column alone made `GROUP BY 1` group by that column (`group_by_raw('1')->
+    sum('parent_author_id')` summed the distinct values, 6 where `get()`'s rows sum to 8) and `ORDER BY 1` of a window
+    pick the rows of its smallest values. Under DISTINCT the subquery still selects `DISTINCT col`.
+  - Not changed, by reading: `exists()` with a `group_by_raw()` entry, a HAVING and no select selects `1`, so
+    `group_by_raw('1')->having_raw('COUNT(*) > 1')->exists()` is true where `get()` finds no row. Keeping the empty
+    select fixes it on MySQL, Postgres and SQLite but not on MariaDB 11.4, which reads `SELECT *` inside `EXISTS()` as
+    `SELECT 1` before it resolves `GROUP BY 1` (measured: `SELECT EXISTS(SELECT * FROM authors GROUP BY 1 HAVING
+    COUNT(*) > 1)` is 1 there, 0 on the others), and it would make MySQL and Postgres refuse a named raw group with a
+    HAVING, which runs today. Left for the maintainer.
   - The replacement avoids MySQL/MariaDB's derived-table error 1060 for two same-named columns, e.g. `books.*` with
     `authors.name`.
   - Residual: when the select is kept, same-named columns can still hit 1060 on MySQL/MariaDB.
@@ -621,9 +660,9 @@ the model and the offending input.
 | `find` / `find_or_fail` / `where_key` / `where_key_not` on a composite pk | `ActiveRecordException` |
 | an empty column list in `where_all` / `where_any` / `where_none`, a nested array in `where_in` / `where_between` / `where_key`, an empty column name or alias | `ActiveRecordException` |
 | blank raw SQL in `where_raw` / `having_raw` (and `or_` forms), blank or `'0'` in `order_by_raw` / `group_by_raw`, a clause a write cannot take (a `when()` / `unless()` that skipped its callback, on `insert` / `upsert`), a write whose where came out empty | `ActiveRecordException` |
-| a statement terminator (`;` outside strings, quoted identifiers and comments) in the SQL of a `*_raw` method or a `JOIN` fragment of `joins` (§5.2) | `ActiveRecordException` |
+| a statement terminator (`;` outside strings, quoted identifiers and comments), or a block comment left open, in the SQL of a `*_raw` method or a `JOIN` fragment of `joins` (§5.2) | `ActiveRecordException` |
 | a distinct aggregate of a column in a window ordered by another column (§5.4) | `ActiveRecordException` |
-| legacy: a statement terminator in the SQL of the `conditions` option, before any statement (§5.2, breaking §8.3) | `ActiveRecordException` |
+| legacy: a statement terminator, or a block comment left open, in the SQL of the `conditions` option, before any statement (§5.2, breaking §8.3) | `ActiveRecordException` |
 | a closure group that sets something other than wheres | `ActiveRecordException` |
 | a relationship not declared, in `joins` / `left_joins` / `with` | `RelationshipException`, as today |
 | an unknown method through `__callStatic` | `ActiveRecordException("Call to undefined method: …")`, today's message |
@@ -796,9 +835,10 @@ Add them to the GitHub draft release when the code merges, never before (the cha
   the timestamps even for a model whose `set_timestamps()` override opts out; only `without_timestamps()` suspends
   them, and `save()` still follows the override (the maintainer, 2026-10-30).
 - **Breaking:** the SQL of the legacy `conditions` option (a string, or the first element of a positional list) that
-  holds a statement terminator outside its strings and comments throws an `ActiveRecordException` before any
-  statement, in the finders, `count`, `exists`, `update_all` and `delete_all` (the maintainer, 2026-10-30, §5.2);
-  the other legacy options, `Table::update()` / `Table::delete()` and `find_by_sql()` are not read.
+  holds a statement terminator outside its strings and comments, or leaves a block comment open, throws an
+  `ActiveRecordException` before any statement, in the finders, `count`, `exists`, `update_all` and `delete_all` (the
+  maintainer, 2026-10-30 and 2026-11-02, §5.2); the other legacy options, `Table::update()` / `Table::delete()` and
+  `find_by_sql()` are not read.
 - **Dates** (the maintainer asked for this item explicitly): the builder binds a DateTime in the format of its
   column's type, which fixes DATE comparisons on SQLite. Legacy positional and legacy hash binds are unchanged
   (they keep the datetime format).
