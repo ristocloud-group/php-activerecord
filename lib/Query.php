@@ -1885,20 +1885,22 @@ class Query
 
     /**
      * Whether the query selects any row, without counting: the adapter's EXISTS() over its SELECT, which
-     * stops at the first row. A query of the builder leaves its order, its limit and its offset out, as the
-     * legacy exists does (spec §5.3), so a limit of 0 does not make it false. Without a GROUP BY and a
-     * HAVING it selects 1 there, as the legacy exists does, so a select of an aggregate, one row even when
-     * no row matches, does not make it true; with one, which may name an alias of the select, the select
-     * stays (see QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
+     * stops at the first row. It is true exactly when count() is not 0 (spec §5.3). A window (limit(), offset())
+     * is honoured: the rows of the window, picked by the query's order, are asked for as count() counts them, in
+     * a subquery (SELECT 1 FROM (…) AS t), so limit(0) and an offset past the rows make it false. Without a
+     * window the order is left out, which cannot change the answer; and without a GROUP BY and a HAVING it selects
+     * 1 there, as the legacy exists does, so a select of an aggregate, one row even when no row matches, does not
+     * make it true; with one, which may name an alias of the select, the select stays (see
+     * QueryCompiler::compile_exists()). The statement that ran is left in Table::$last_sql.
      *
-     * With no select of its own, SQL of group_by_raw() that names a column by its position (GROUP BY 1) is refused
-     * before any statement: it would name the 1 that exists() selects (see
-     * QueryCompiler::refuse_position_in_own_select()).
+     * With no select of its own, SQL of group_by_raw(), or of a window's order_by_raw(), that names a column by its
+     * position (GROUP BY 1) is refused before any statement, as count() refuses it: it would name the 1 that exists()
+     * selects (see QueryCompiler::refuse_position_in_own_select()).
      *
-     * Model::exists() is the legacy exists, which Author::exists(...) calls.
+     * Model::exists(), which Author::exists(...) calls, runs this exists() on the query of its legacy options.
      *
-     * @throws ActiveRecordException for SQL of group_by_raw() that names a column by its position, with no select of
-     *   the query's own, before any statement
+     * @throws ActiveRecordException for SQL of group_by_raw() or of a window's order_by_raw() that names a column by its
+     *   position, with no select of the query's own, before any statement
      */
     public function exists(): bool
     {

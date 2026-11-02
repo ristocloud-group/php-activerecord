@@ -599,30 +599,81 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(3, Author::group_by_raw("parent_author_id -- , 1")->count());
     }
 
-    // Spec §5.3: exists() and doesnt_exist() leave out the order, the limit and the offset, and their values with
-    // them, and without a GROUP BY and a HAVING select 1, as the legacy exists does: the caller's select could be an
-    // aggregate, whose one row exists for no row. A GROUP BY or a HAVING, which may name an alias of it, keeps the
-    // caller's select (grouped, an aggregate selects no row for no row); with none, it selects 1, since a select of
-    // every column is refused beside a GROUP BY (Postgres, MySQL's ONLY_FULL_GROUP_BY).
-    public function test_exists_leaves_out_the_order_and_the_window(): void
+    // Spec §5.3 (the maintainer, 2026-11-02): exists() answers whether get() would return a row, as count() counts them. A
+    // window (limit, offset) is honoured, in a subquery of the rows that count() would count, with the order that picks
+    // its rows; without one, exists() leaves the order out and, without a GROUP BY and a HAVING, selects 1, as the legacy
+    // exists does: the caller's select could be an aggregate, whose one row exists for no row. A GROUP BY or a HAVING,
+    // which may name an alias of it, keeps the caller's select (grouped, an aggregate selects no row for no row); with
+    // none, it selects 1, since a select of every column is refused beside a GROUP BY (Postgres, MySQL's
+    // ONLY_FULL_GROUP_BY).
+    public function test_exists_follows_the_window_and_leaves_out_an_order_alone(): void
     {
-        $this->assert_true(Author::order_by('name')->limit(0)->exists());
-        $this->assert_true(Author::offset(4)->exists());
+        $this->assert_false(Author::limit(0)->exists());
+        $this->assert_false(Author::order_by('name')->limit(0)->exists());
+        $this->assert_false(Author::offset(100)->exists());
+        $this->assert_false(Author::offset(4)->exists());
+        $this->assert_true(Author::offset(4)->doesnt_exist());
+        $this->assert_true(Author::offset(3)->exists());
+        $this->assert_true(Author::limit(2)->offset(1)->exists());
+        $this->assert_false(Author::limit(2)->offset(1)->doesnt_exist());
         $this->assert_true(Author::where('name', 'Nobody')->order_by('name')->limit(1)->doesnt_exist());
         $this->assert_false(Author::where('name', 'Tito')->doesnt_exist());
         $this->assert_true(Author::group_by('parent_author_id')->exists());
 
+        // the order picks the rows of the window: exists() is true exactly when get() returns a row, and count() counts one
+        $queries = [
+            Author::where('author_id', '>', 2)->order_by('author_id')->offset(2),
+            Author::where('author_id', '>', 2)->order_by('author_id')->offset(1),
+            Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->order_by('parent_author_id')->offset(1),
+            Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [1])->order_by('parent_author_id')->limit(1),
+            Author::select('parent_author_id')->group_by('parent_author_id')->offset(2),
+            Author::select('parent_author_id')->group_by('parent_author_id')->offset(3),
+            Author::distinct()->select('parent_author_id')->order_by('parent_author_id')->offset(2),
+            Author::distinct()->select('parent_author_id')->order_by('parent_author_id')->offset(3),
+            Author::select('name AS n')->order_by('n')->limit(1)->offset(3),
+            Author::select('name AS n')->order_by('n')->limit(1)->offset(4),
+        ];
+        // grouped with no select of its own, the subquery selects 1 (get() would select every column, refused there)
+        $this->assert_true(Author::group_by('parent_author_id')->offset(2)->exists());
+        $this->assert_false(Author::group_by('parent_author_id')->offset(3)->exists());
+
+        foreach ($queries as $i => $query) {
+            $rows = count($query->get());
+            $this->assert_same($rows > 0, $query->exists(), "query $i");
+            $this->assert_same(0 === $rows, $query->doesnt_exist(), "query $i");
+            $this->assert_same($rows, $query->count(), "query $i");
+        }
+
+        // windowed, the rows of the window are those count() counts: SELECT 1 of them, the order and the values kept
         $statements = GoldenStatements::capture(fn() => Author::where('author_id', '>', 1)->order_by_raw('CASE WHEN author_id = ? THEN 0 ELSE 1 END', [2])->limit(2)->offset(1)->exists());
+        $rows = $this->conn->limit($this->sql('SELECT 1 FROM `authors` WHERE `author_id` > ? ORDER BY CASE WHEN author_id = ? THEN 0 ELSE 1 END'), 1, 2);
+        $this->assert_same([['sql' => $this->conn->exists_sql("SELECT 1 FROM ($rows) AS t"), 'values' => [1, 2]]], $statements);
+
+        // without a window the order is left out, with its values
+        $statements = GoldenStatements::capture(fn() => Author::where('author_id', '>', 1)->order_by_raw('CASE WHEN author_id = ? THEN 0 ELSE 1 END', [2])->exists());
         $this->assert_same([['sql' => $this->conn->exists_sql($this->sql('SELECT 1 FROM `authors` WHERE `author_id` > ?')), 'values' => [1]]], $statements);
         $this->assert_same(
             [$this->conn->exists_sql($this->sql('SELECT 1 FROM `authors`'))],
             array_column(GoldenStatements::capture(fn() => Author::select('name')->exists()), 'sql')
         );
 
+        // a position in a window's order names a column of the select: with none of the query's own, exists() makes it
+        // and refuses the position, as count() does
+        $this->assert_exception_message_contains(
+            "exists() on Author cannot send SQL '2' of order_by_raw(), which names a column by its position",
+            fn() => Author::order_by_raw('2')->limit(1)->exists(),
+            ActiveRecord\ActiveRecordException::class
+        );
+        $this->assert_true(Author::select('author_id', 'name')->order_by_raw('2')->limit(1)->exists());
+        $this->assert_true(Author::order_by_raw('2')->exists());
+
         // an aggregate selects one row for no row: the rows are asked for, not it
         $this->assert_false(Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->exists());
         $this->assert_true(Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->doesnt_exist());
         $this->assert_true(Author::select_raw('COUNT(*) AS n')->where('name', 'Tito')->exists());
+        // in a window, the rows are those of the select, as count() counts them: the aggregate's one row
+        $this->assert_same(1, Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->limit(1)->count());
+        $this->assert_true(Author::select_raw('COUNT(*) AS n')->where('name', 'Nobody')->limit(1)->exists());
 
         // a HAVING keeps the caller's select (an alias of it in the HAVING: the adapter files)
         $having = fn(int $authors): Query => Author::select('parent_author_id')->group_by('parent_author_id')->having_raw('COUNT(*) > ?', [$authors]);

@@ -416,14 +416,15 @@ cursors, query scopes, and the date, JSON and full-text wheres.
 
 Some names exist in both worlds. Called on the class, the legacy static runs; called on a query (`new_query()`, or after
 another builder call), the builder's runs. The legacy ones are unchanged, so existing code is not affected, except
-`count`: there is one count, and the legacy `count` runs the builder's on the query of its options:
+`count` and `exists`: there is one count and one exists, and the legacy ones run the builder's on the query of their
+options:
 
 | Name | Legacy: `Invoice::...` | Builder: `Invoice::new_query()->...` |
 |---|---|---|
 | `find` | `find(1)`, `find(1, 2)`, `find([1, 2])`: a missing primary key throws `RecordNotFound`; the option forms `find('first', ...)` and `find($options)` return `null`, and `find('all', ...)` returns `[]` | `find(1)` is the model, or `null`. `find([1, 2])` is an array of the models found, a missing id left out. `find_or_fail($id)` throws `RecordNotFound` (with the legacy message) when an id is missing, `find_many($ids)` is the list form, and `find_or($id, $callback)` calls the callback instead of throwing. A one-column primary key only |
 | `first` | `first($options)`; `last($options)` reverses the order (by the primary key when there is none) | `first()` is `LIMIT 1` in the query's own order, none implied, and returns a model or `null`. `first_or_fail()`, `first_or($callback)` and `sole()` are the strict forms. There is no `last()`: reverse the order |
 | `count` | `count($options)` or primary key values: the builder's `count()` of the query of those options, so it counts the rows of the result too (a `group` its groups, a `limit` or an `offset` the rows of the window), always an `int` | `count($column = '*')` counts the rows of the result, so a grouped query counts its groups. `count('note')` is `COUNT(note)`, where `Invoice::count('note')` looks up the primary key `'note'` |
-| `exists` | `exists($options)` or a primary key value | `exists()` and `doesnt_exist()` |
+| `exists` | `exists($options)` or a primary key value: the builder's `exists()` of the query of those options, selecting `1`; a `limit` and an `offset` are honoured (`'limit' => 0`, or an `offset` past the rows, is `false`) | `exists()` and `doesnt_exist()` |
 | `all` | `all($options)`, that is `find('all', $options)` | `get()` |
 | `update_all`, `update` | `update_all(['set' => [...], 'conditions' => ...])`; a hash `set` also sets `updated_at` | `update([...])` on the query's where, `order_by()` and `limit()`; it sets `updated_at` too |
 | `delete_all`, `delete` | `delete_all($options)` | `delete()` on the query's where, `order_by()` and `limit()` |
@@ -652,9 +653,15 @@ Invoice::where('status', 'open')->count();                  // 3
   attribute: a date is an `ActiveRecord\DateTime`, an integer beyond `PHP_INT_MAX` keeps its exact digits, a DECIMAL is a
   float. A qualified name (`'customers.name'`) gives the driver's value as it is. The keys of a `pluck` map are the
   driver's values, and a `null` key is `''`.
-- `exists()` asks the adapter's `EXISTS()`. It leaves out the order, the limit and the offset, and selects `1` (unless there
-  is a GROUP BY or a HAVING, which may name an alias of the select), so an aggregate in the select, such as `COUNT(*)`,
-  cannot make it true when no row matches. `doesnt_exist()` is its opposite.
+- `exists()` asks the adapter's `EXISTS()`, and is true exactly when `count()` is not 0. A `limit` or an `offset` is
+  honoured: the rows of the window, picked by the query's order, are asked for as `count()` counts them, in a subquery
+  (`SELECT EXISTS(SELECT 1 FROM (...) AS t)`), so `limit(0)->exists()` and an offset past the rows are `false`. Without a
+  window it leaves out the order, which cannot change the answer, and selects `1` (unless there is a GROUP BY or a
+  HAVING, which may name an alias of the select), so an aggregate in the select, such as `COUNT(*)`, cannot make it true
+  when no row matches; in a window the aggregate's one row is a row of the window, as `count()` counts it.
+  `doesnt_exist()` is its opposite. The legacy `Invoice::exists($options)` runs it on the query of its options,
+  selecting `1`: `exists(['offset' => 100])` is `false` when there are fewer rows. Up to 2.1.0 it left out the `limit`
+  and the `offset`.
 - `count()` returns the number of rows of the result. A query with a `group_by`, a `having`, `distinct()`, a `limit` or an
   `offset` is counted as a subquery, `SELECT COUNT(*) FROM (...) AS t`, so a grouped query counts its groups and a limited
   one the rows of its window. `count($column)` counts the column's non-null values, and after `distinct()` with no select
@@ -847,9 +854,8 @@ Code ported from the Laravel documentation works by changing the method case, ex
   a distinct one in a window ordered by another column. After
   `distinct()` with a select of the query's own they aggregate the distinct rows it selects, where Eloquent aggregates the
   column's distinct values (with no select of its own, both do).
-- **`exists()` selects `1`**, so an aggregate select cannot make it true when no row matches. Eloquent keeps the select,
-  which can. **`exists()` also leaves out the limit and the offset**, so `limit(0)->exists()` is true when a row matches,
-  where Eloquent keeps the window.
+- **`exists()` selects `1`** without a window, so an aggregate select cannot make it true when no row matches. Eloquent
+  keeps the select, which can. With a window, both keep it (here in a subquery of the window's rows).
 - **`find()` returns `null` for a missing record**, as Eloquent's does, where the legacy static `Invoice::find()` still
   throws `RecordNotFound`. **`find_or($ids, $callback)` calls the callback when any id is missing**, where Eloquent's
   `findOr` never calls it for a list.

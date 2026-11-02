@@ -268,6 +268,25 @@ final class QueryCompiler
             return $this->compile_select($rows);
         }
 
+        $aggregate = $this->over_rows($rows, $clauses, $column);
+        $aggregate->select($apply($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
+
+        return $aggregate;
+    }
+
+    /**
+     * A SELECT, its select left to the caller, FROM the rows of a state as a subquery, (…) AS t: the rows that
+     * compile_aggregate() aggregates when it wraps a state, and those that compile_exists() asks for in a window. $rows
+     * is the state, its order already left out where no window keeps it, and $clauses what aggregated_clauses() reads of
+     * it; $column is the aggregated column, * for the rows. The subquery selects what compile_aggregate() says: 1 where
+     * the state's select provably cannot matter, else the state's own, else the column, or 1 for the rows (every column
+     * under DISTINCT).
+     */
+    private function over_rows(QueryState $rows, QueryState $clauses, string $column): SQLBuilder
+    {
+        $all = '*' === $column;
+        $windowed = null !== $clauses->limit || null !== $clauses->offset;
+
         if ($all && !$clauses->distinct && [] === $clauses->havings && self::plain_columns($clauses->selects) && !self::has_raw($clauses->groups) && !($windowed && self::has_raw($clauses->orders))) {
             // the state's select provably cannot matter
             $this->select_rows($rows, ['raw' => '1', 'bindings' => []]);
@@ -277,17 +296,16 @@ final class QueryCompiler
         }
 
         $subquery = $this->compile_select($rows);
-        $aggregate = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
-        $aggregate->from_values($subquery->select_bind_values());
-        $aggregate->select($apply($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
+        $sql = new SQLBuilder($this->connection(), "({$subquery->to_s()}) AS t");
+        $sql->from_values($subquery->select_bind_values());
 
-        return $aggregate;
+        return $sql;
     }
 
     /**
-     * The clauses of $state that compile_aggregate() reads to aggregate its rows, and refuse_position_in_own_select()
-     * to refuse a position, in the builder's fields: the state itself, when it holds no legacy options. Of legacy
-     * options (Model::count()), a state that holds their SQL as the builder holds SQL written by hand: the 'select' as
+     * The clauses of $state that compile_aggregate() reads to aggregate its rows, compile_exists() to read its window,
+     * and refuse_position_in_own_select() to refuse a position, in the builder's fields: the state itself, when it holds no legacy options. Of legacy
+     * options (Model::count(), Model::exists()), a state that holds their SQL as the builder holds SQL written by hand: the 'select' as
      * select_raw()'s, the 'group' as group_by_raw()'s, the 'having' as having_raw()'s and the 'order' as
      * order_by_raw()'s, each where the legacy SELECT writes it (see compile_legacy(): SQLBuilder leaves out a GROUP BY,
      * a HAVING and an ORDER BY whose SQL is falsy, and a select that is null or empty selects nothing the count could
@@ -358,35 +376,41 @@ final class QueryCompiler
     }
 
     /**
-     * The SELECT whose rows Query::exists() asks for. That of a state of legacy options is its own:
-     * Model::exists() takes out of them what the legacy exists leaves out. The builder's leaves out its
-     * order, its limit and its offset, and their values, as the legacy exists does (spec §5.3).
+     * The SELECT whose rows Query::exists() asks for: whether get() of the state would return a row, as count()
+     * counts them (the maintainer, 2026-11-02).
      *
-     * Without a GROUP BY and a HAVING it selects 1, as the legacy exists does, whatever the state selects:
-     * an aggregate (COUNT(*) AS n) selects one row when no row matches, which would exist. No other clause
-     * names an alias of the select there: the order is left out, and a WHERE cannot name one, except on
-     * SQLite, which reads one there; such a query, which runs on SQLite alone, fails in exists(). Eloquent's
-     * exists() keeps the select.
+     * A window (limit, offset, of the builder or of legacy options, see aggregated_clauses()) is honoured: the rows of
+     * the window are a subquery, SELECT 1 FROM (…) AS t, the one count() counts (see over_rows()), with the order that
+     * picks them and the select that compile_aggregate() chooses for them. So exists() is true exactly when count() is
+     * not 0: limit(0) and an offset past the rows find none.
      *
-     * With a GROUP BY or a HAVING, which may name an alias of the select (a GROUP BY on every database, a
-     * HAVING on MySQL, MariaDB and SQLite), it keeps the state's select: grouped, an aggregate selects no row
-     * when no row matches. With nothing of its own it selects 1, since a select of every column is refused
-     * beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY.
+     * Without a window, the order is left out, which cannot change the answer, with its values. A state of legacy
+     * options is then its own SELECT: Model::exists() selects 1 in them. The builder's, without a GROUP BY and a HAVING,
+     * selects 1, as the legacy exists does, whatever the state selects: an aggregate (COUNT(*) AS n) selects one row
+     * when no row matches, which would exist. No other clause names an alias of the select there: the order is left
+     * out, and a WHERE cannot name one, except on SQLite, which reads one there; such a query, which runs on SQLite
+     * alone, fails in exists(). Eloquent's exists() keeps the select. With a GROUP BY or a HAVING, which may name an
+     * alias of the select (a GROUP BY on every database, a HAVING on MySQL, MariaDB and SQLite), it keeps the state's
+     * select: grouped, an aggregate selects no row when no row matches. With nothing of its own it selects 1, since a
+     * select of every column is refused beside a GROUP BY by Postgres and by MySQL's ONLY_FULL_GROUP_BY.
      *
      * @internal Serves Query::exists(); not a supported API.
      */
     public function compile_exists(QueryState $state): SQLBuilder
     {
-        if (null !== $state->legacy) {
-            return $this->compile_select($state);
+        $clauses = $this->aggregated_clauses($state);
+        $rows = clone $state;
+
+        if (null !== $clauses->limit || null !== $clauses->offset) {
+            $exists = $this->over_rows($rows, $clauses, '*');
+            $exists->select('1');
+
+            return $exists;
         }
 
-        $rows = clone $state;
-        $rows->orders = [];
-        $rows->limit = null;
-        $rows->offset = null;
+        self::leave_out_order($rows);
 
-        if (([] === $rows->groups && [] === $rows->havings) || [] === $rows->selects) {
+        if (null === $rows->legacy && (([] === $rows->groups && [] === $rows->havings) || [] === $rows->selects)) {
             $rows->selects = [['raw' => '1', 'bindings' => []]];
         }
 
@@ -670,7 +694,8 @@ final class QueryCompiler
      * group_by_raw('1')->count() counted one group (the constant's) where get() reads a row per key,
      * group_by_raw('1')->sum('col') summed the distinct values of the column, and order_by_raw('2')->limit(2)->count() was
      * refused by the database. The SQL read is that of group_by_raw(), and of order_by_raw() where the statement keeps the
-     * order (a window's, in a wrapped aggregate; exists() leaves every order out). A select of the query's own is kept, and
+     * order (a window's, in a wrapped aggregate and in exists(), which reads a window as count() does and leaves the order
+     * out without one). A select of the query's own is kept, and
      * with it its positions; so is SELECT DISTINCT * of a count of distinct rows, whose columns are get()'s; and an aggregate
      * in place (neither grouped, distinct nor windowed) has no GROUP BY and leaves its order out.
      *
@@ -682,19 +707,23 @@ final class QueryCompiler
      * read.
      *
      * @internal Serves Query; not a supported API.
-     * @param string|null $column The aggregated column, * for a count of the rows, null for exists()
+     * @param string|null $column The aggregated column, * for a count of the rows, null for exists() (read as * in a
+     *   window)
      * @param string $method The terminal, for the message of the exception
      * @throws ActiveRecordException for SQL that names a column by its position there
      */
     public function refuse_position_in_own_select(QueryState $state, ?string $column, string $method): void
     {
-        // exists() sends legacy options as they are, their select included (see compile_exists())
-        if (null !== $state->legacy && null === $column) {
-            return;
-        }
-
         $legacy = null !== $state->legacy;
         $state = $this->aggregated_clauses($state);
+
+        if (null === $column && (null !== $state->limit || null !== $state->offset)) {
+            // a windowed exists() asks for the rows that count() counts (see compile_exists())
+            $column = '*';
+        } elseif ($legacy && null === $column) {
+            // without a window, exists() sends legacy options as they are, their select included
+            return;
+        }
 
         if ([] !== $state->selects) {
             return;

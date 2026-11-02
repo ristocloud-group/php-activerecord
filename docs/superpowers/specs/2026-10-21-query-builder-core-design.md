@@ -53,8 +53,8 @@ The decisions already taken for sub-project 1 are recorded in Appendix A.
 
 - Changing the semantics of the existing static methods (`find`, `first`, `last`, `all`, `count`, `exists`,
   `create`, `query`, `upsert`, `update_all`, `delete_all`…). They stay legacy, and a future major could align
-  them (out of scope). One exception, decided by the maintainer on 2026-11-02: `count` runs the builder's `count()`
-  (§5.3).
+  them (out of scope). Two exceptions, decided by the maintainer on 2026-11-02: `count` runs the builder's `count()`,
+  and `exists` honours a `limit` and an `offset` as the builder's `exists()` does (§5.3).
 - Collections: terminals return arrays, as `find('all')` does. The library takes no dependency on Laravel.
 - Soft delete in the builder: it comes from scopes (sub-project 3). Until then the builder bypasses the
   finder overrides of consumer subclasses (see §8.3).
@@ -428,7 +428,7 @@ Details settled by the final review (2026-10-30):
 | `find_or_fail($id)` / `find_many($ids)` / `find_or($id, $cb)` | `RecordNotFound` with the legacy message if any is missing / a list / the callback | — |
 | `value($col)` / `sole_value($col)` | the column of the first record, **cast like a model attribute** (`Column::cast`, exact BIGINT as in #44, and today's DECIMAL → float of #146) | same |
 | `pluck($col, $key = null)` | the values, or a key ⇒ value map, cast as `value()` does, without hydrating models | same |
-| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; order, limit and offset are dropped, as the legacy `exists` does; the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
+| `exists()` / `doesnt_exist()` | the adapter's `exists_sql()`; true exactly when `count()` is not 0: a window (limit, offset) is honoured, the rows of the window in a subquery as `count()` reads them; without one the order is dropped and the select becomes `1` without GROUP BY/HAVING (see the note below) | Eloquent keeps an aggregate select, which can make `exists()` true with no row |
 | `count($col = '*')` | **the number of rows of the result**. With `group_by`, `having`, `distinct`, `limit` or `offset`, the query is wrapped: `SELECT COUNT(*) FROM (…) AS t`. Returns `int` (COUNT never exceeds `PHP_INT_MAX`) | Laravel counts the first group, and returns 0 with an offset. Legacy `Model::count()` runs this count (see "One count" below) |
 | `min` / `max` / `sum` / `avg` | see §5.4 | Laravel returns the driver's value (`sum()` of none is 0), with no cast |
 
@@ -436,7 +436,25 @@ Details settled while building the terminals (Task 15):
 
 - **Smaller limits are kept.** `first()`, `sole()`, `value()` and a one-id `find()` keep a smaller limit the query already has: `limit(0)->first()` is `null`. A one-id `find()` sends `LIMIT 1`.
 - **Missing ids.** `find_or_fail()` and `find_or()` compare the distinct ids with the distinct rows found. `find_or($ids, $cb)` with a list calls the callback when any id is missing, as `find_or_fail()` throws. Eloquent's `findOr` never calls it for a list.
-- **`exists()`** drops order, limit and offset. It selects `1` unless the query has a GROUP BY or a HAVING, which
+- **`exists()` follows the window** (the maintainer, 2026-11-02: "Vorrei sistemare il discorso di order, limit e offset
+  come fatto per count"; it dropped order, limit and offset, as the legacy `exists` did). With a limit or an offset, of
+  the builder or of legacy options, `QueryCompiler::compile_exists()` asks for the rows that `count()` counts: the same
+  subquery (`over_rows()`, shared with `compile_aggregate()`), with the order that picks the window and the select
+  chosen by the wrapped `count()`'s rules below (the positional refusal included), as `SELECT EXISTS(SELECT 1 FROM (…)
+  AS t)`. So `exists()` is true exactly when `count()` is not 0: `limit(0)` and an offset past the rows are false, as in
+  Eloquent. A derived table, not the window inline in `EXISTS(…)`: the four databases measured honour an inline
+  `LIMIT`/`OFFSET` there too, but a derived table's rows are defined by the window on every version. `Model::exists()`
+  runs the same path (an approved BREAKING change): it keeps its `limit`, `offset` and `order` and selects `1` in its
+  options. Without a window the SQL is as before: the order is dropped (also for a direct `Table::exists()`, which
+  sent it), and so are its values.
+  - Golden: `table_exists_direct`'s third statement (a direct `Table::exists()` with `order` + `limit`) was
+    re-recorded on the four adapters, `SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM authors WHERE name=? ORDER BY name
+    LIMIT 1) AS t)` for `SELECT EXISTS(SELECT * FROM authors WHERE name=? ORDER BY name LIMIT 1)`; no other entry
+    changed.
+  - Residual, by the rule: in a window, a select of the query's own that is an aggregate (`select_raw('COUNT(*) AS
+    n')->where(…)->limit(1)`) is kept, as `count()` keeps it, so its one row exists for no matching row; without a
+    window it is replaced by `1`, as below. `exists()` and `count()` agree in both cases.
+- **Without a window, `exists()`** drops the order. It selects `1` unless the query has a GROUP BY or a HAVING, which
   may name select aliases; an empty select gets `1` in every case.
   - Without that, an aggregate select such as `COUNT(*)` would make it true with no matching row. Eloquent has that
     trap, so this is a deliberate deviation.
@@ -776,7 +794,7 @@ Approved by the maintainer on 2026-10-23 (issue #144):
 - The semantics of every existing static method, and their overridability, except `Model::count()`, which runs the
   builder's `count()` (§5.3, the maintainer, 2026-11-02): it no longer calls `static::connection()`, a public static that
   a subclass can override, and runs on the Table's connection; the finders by pk, `update_all()` and `delete_all()`
-  still call it.
+  still call it. And `Model::exists()` honours a `limit` and an `offset` (§5.3, the maintainer, 2026-11-02).
 - The public signatures and return values of `Table`.
 - The legacy positional date format (§5.2).
 
@@ -847,8 +865,7 @@ scopes (sub-project 3). The maintainer confirmed that the monolith base model wi
   - `sum` / `min` / `max` / `avg` over a grouped, distinct or windowed query aggregate its result rows (Eloquent
     ignores the LIMIT); a grouped aggregate of an ungrouped column is refused at the call;
   - `or_where(hash)` ANDs its entries; `where_all` / `where_any` / `where_none` refuse an empty column list;
-  - `exists()` selects `1`, so an aggregate select cannot make it true, and it leaves out the limit and the offset
-    (Eloquent keeps the window);
+  - `exists()` selects `1` without a window, so an aggregate select cannot make it true;
   - `sum` and `avg` after `distinct()` with a select of the query's own run over the distinct rows it gives
     (Eloquent's run over the column's distinct values);
   - a write whose `when()` / `unless()` skipped its callback, with no other where condition, is refused (Eloquent
@@ -890,6 +907,8 @@ Add them to the GitHub draft release when the code merges, never before (the cha
 - Aggregates: exact and normalized by column type, and `count()` counts the result rows.
 - **Breaking:** `Model::count()` runs the builder's `count()` (§5.3, the maintainer, 2026-11-02): an `int`, the groups
   of a `group`, the rows of a window, the `select` honoured as the builder's, the Table's connection.
+- **Breaking:** `Model::exists()` honours a `limit` and an `offset` (§5.3, the maintainer, 2026-11-02): `'limit' => 0`
+  and an `offset` past the rows are `false`.
 
 ### 8.4 Notes for the monolith team
 

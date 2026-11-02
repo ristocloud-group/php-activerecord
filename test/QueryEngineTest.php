@@ -172,6 +172,35 @@ class QueryEngineTest extends DatabaseTest
         );
     }
 
+    // Maintainer (2026-11-02): Model::exists() honours the window as count() does, through the builder's exists(): an
+    // offset past the rows, or a limit of 0, finds none; the order picks the rows of a window, and is left out without one
+    public function test_model_exists_follows_the_window(): void
+    {
+        $this->assert_false(Author::exists(['offset' => 100]));
+        $this->assert_false(Author::exists(['offset' => 4]));
+        $this->assert_true(Author::exists(['offset' => 3]));
+        $this->assert_false(Author::exists(['limit' => 0]));
+        $this->assert_false(Author::exists(['limit' => '0']));
+        $this->assert_true(Author::exists(['limit' => 1, 'offset' => 1, 'order' => 'name']));
+        $this->assert_true(Author::exists(['limit' => null, 'offset' => 0]));
+        $this->assert_false(Author::exists(['conditions' => ['author_id > ?', 2], 'order' => 'author_id', 'offset' => 2]));
+        $this->assert_true(Author::exists(['conditions' => ['author_id > ?', 2], 'order' => 'author_id', 'offset' => 1]));
+        $this->assert_false(Author::exists(['group' => 'parent_author_id', 'offset' => 3]));
+        $this->assert_true(Author::exists(['group' => 'parent_author_id', 'offset' => 2]));
+        $this->assert_false(Author::exists(1, ['offset' => 1]));
+        $this->assert_true(Author::exists(1, ['limit' => 1]));
+        $this->assert_false(Author::table()->exists(['limit' => 0]));
+
+        $table = Author::table();
+        $this->assert_true(Author::exists(['order' => 'name']));
+        $this->assert_false(str_contains($table->last_sql, 'ORDER BY'));
+        $this->assert_true(Author::exists(['conditions' => ['name' => 'Tito'], 'order' => 'name']));
+
+        $window = ['conditions' => ['author_id > ?', 1], 'order' => 'author_id DESC', 'limit' => 2, 'offset' => 1];
+        $this->assert_same(Author::count($window) > 0, Author::exists($window));
+        $this->assert_same(count(Author::all($window)) > 0, Author::exists($window));
+    }
+
     public function test_model_count_of_joins_and_from_is_unchanged(): void
     {
         $this->assert_same(2, Author::count(['joins' => ['books']]));

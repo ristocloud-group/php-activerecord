@@ -615,7 +615,7 @@
             ]
         },
         {
-            "sql": "SELECT EXISTS(SELECT * FROM `authors` WHERE `name`=? ORDER BY name LIMIT 1)",
+            "sql": "SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM `authors` WHERE `name`=? ORDER BY name LIMIT 1) AS t)",
             "values": [
                 "Tito"
             ]

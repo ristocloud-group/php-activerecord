@@ -609,7 +609,7 @@
             ]
         },
         {
-            "sql": "SELECT EXISTS(SELECT * FROM \"authors\" WHERE \"name\"=? ORDER BY name LIMIT 1 OFFSET 0)::int",
+            "sql": "SELECT EXISTS(SELECT 1 FROM (SELECT 1 FROM \"authors\" WHERE \"name\"=? ORDER BY name LIMIT 1 OFFSET 0) AS t)::int",
             "values": [
                 "Tito"
             ]

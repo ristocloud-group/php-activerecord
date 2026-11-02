@@ -2415,6 +2415,11 @@ class Model
      * SomeModel::exists(array('id' => 123, 'name' => 'Tito'));
      * </code>
      *
+     * It takes the arguments find() takes, and answers whether find() would find a record, as count() counts them: the
+     * builder's Query::exists() of the query of those options, which selects 1 in them and asks the database's EXISTS().
+     * A 'limit' and an 'offset' are honoured ('limit' => 0, or an 'offset' past the rows, finds none), with the 'order'
+     * that picks the rows of the window; without a window the 'order' is left out (see Query::exists()).
+     *
      * The SQL of the conditions is read as find() reads it: one that holds a statement terminator (;) outside its
      * strings and comments is refused.
      *
@@ -2426,11 +2431,9 @@ class Model
     {
         $options = self::finder_conditions_from_args(func_get_args());
 
-        // Existence needs the full filtering shape (conditions, joins, from,
-        // group, having) but not ordering/paging; select a constant so the
-        // database can stop at the first matching row.
+        // whatever the options select, the rows are asked for: a constant, so that the database can stop at the first
+        // matching row, and an aggregate cannot make one row of none
         $options['select'] = '1';
-        unset($options['order'], $options['limit'], $options['offset']);
 
         return static::table()->exists($options);
     }
