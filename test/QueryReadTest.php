@@ -572,6 +572,34 @@ class QueryReadTest extends DatabaseTest
         $this->assert_same(4, Author::order_by_raw('1')->count());
     }
 
+    // A position is read in SQL as the database of the connection reads its strings and its comments (the readings of
+    // the statement terminator): a backslash escapes a quote on MySQL and MariaDB only, so on SQLite 'C:\' ends where
+    // its quote does, and the 1 after it is a position (the count gave 1 where get() reads 4 rows), as it is on
+    // Postgres; on MySQL and MariaDB the string runs on and the database refuses the open quote. -- opens a comment on
+    // MySQL and MariaDB only before a space, so 2--1 is 2 - -1 there, an expression (one group), and 2 elsewhere; # opens
+    // one on MySQL and MariaDB only, and hides what follows it there
+    public function test_a_position_is_read_as_the_database_reads_strings_and_comments(): void
+    {
+        Author::table();
+        $mysql = $this->conn instanceof ActiveRecord\MysqlAdapter;
+        $quoted = "'C:\\', 1, 'x'";
+
+        if ($mysql) {
+            $this->assert_same(ActiveRecord\DatabaseException::class, $this->thrown(fn() => Author::group_by_raw($quoted)->count())[0] ?? null);
+            $this->assert_same(1, Author::group_by_raw('2--1')->count());
+            $this->assert_same(3, Author::group_by_raw('parent_author_id # , 1')->count());
+        } else {
+            foreach ([$quoted, '2--1', 'parent_author_id # , 1'] as $sql) {
+                $this->assert_same($this->position_refusal('count', $sql, 'group_by_raw'), GoldenStatements::capture(fn() => Author::group_by_raw($sql)->count()), $sql);
+            }
+        }
+
+        // what every database reads alike: a position in a string or a comment is none
+        $this->assert_same(3, Author::group_by_raw("parent_author_id, name != 'a, 1'")->count());
+        $this->assert_same(3, Author::group_by_raw("parent_author_id /* , 1 */")->count());
+        $this->assert_same(3, Author::group_by_raw("parent_author_id -- , 1")->count());
+    }
+
     // Spec §5.3: exists() and doesnt_exist() leave out the order, the limit and the offset, and their values with
     // them, and without a GROUP BY and a HAVING select 1, as the legacy exists does: the caller's select could be an
     // aggregate, whose one row exists for no row. A GROUP BY or a HAVING, which may name an alias of it, keeps the

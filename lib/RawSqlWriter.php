@@ -139,14 +139,7 @@ final class RawSqlWriter
      */
     private static function reads(string $token, string $sql, Connection $connection, string $what): bool
     {
-        $readings = match (true) {
-            $connection instanceof MysqlAdapter => [self::MYSQL_TERMINATOR],
-            $connection instanceof PgsqlAdapter => [self::PGSQL_TERMINATOR],
-            $connection instanceof SqliteAdapter => [self::SQLITE_TERMINATOR],
-            default => [self::MYSQL_TERMINATOR, self::PGSQL_TERMINATOR, self::SQLITE_TERMINATOR],
-        };
-
-        foreach ($readings as $reading) {
+        foreach (self::readings($connection) as $reading) {
             if (false === preg_match_all($reading, $sql, $matches)) {
                 throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for %s: %s", $sql, $what, preg_last_error_msg()));
             }
@@ -157,6 +150,66 @@ final class RawSqlWriter
         }
 
         return false;
+    }
+
+    /**
+     * $sql as each reading of $connection reads it (see holds_statement_terminator(); the three readings for a connection
+     * of no adapter of the library), with its strings, its quoted identifiers, its dollar quotes and its parameters
+     * written as the word "literal", and its comments as a space: what is left is the SQL outside them, as the database
+     * reads it. The opener of an executable comment of MySQL and MariaDB (/*!, /*M!) is a space, its text the SQL it
+     * runs, and so is its close.
+     *
+     * @internal Serves QueryCompiler::refuse_position_in_own_select(); not a supported API.
+     * @return list<string>
+     * @throws ActiveRecordException for SQL that the pattern cannot read
+     */
+    public static function without_literals_and_comments(string $sql, Connection $connection): array
+    {
+        $texts = [];
+
+        foreach (self::readings($connection) as $reading) {
+            $mysql = self::MYSQL_TERMINATOR === $reading;
+            $executable = false;
+            $text = preg_replace_callback($reading, function (array $match) use ($mysql, &$executable): string {
+                $token = $match[0];
+
+                if (';' === $token) {
+                    return $token;
+                }
+
+                if (str_starts_with($token, '--') || str_starts_with($token, '/*') || ($mysql && str_starts_with($token, '#'))) {
+                    $executable = $executable || ($mysql && 1 === preg_match('/^\/\*M?!$/', $token));
+
+                    return ' ';
+                }
+
+                return ' literal ';
+            }, $sql);
+
+            if (null === $text) {
+                throw new ActiveRecordException(sprintf("The SQL '%s' could not be read: %s", $sql, preg_last_error_msg()));
+            }
+
+            $texts[] = $executable ? str_replace('*/', ' ', $text) : $text;
+        }
+
+        return $texts;
+    }
+
+    /**
+     * The readings of SQL written by hand for $connection: MYSQL_TERMINATOR for MySQL and MariaDB, PGSQL_TERMINATOR,
+     * SQLITE_TERMINATOR, or the three for a connection of no adapter of the library.
+     *
+     * @return list<string>
+     */
+    private static function readings(Connection $connection): array
+    {
+        return match (true) {
+            $connection instanceof MysqlAdapter => [self::MYSQL_TERMINATOR],
+            $connection instanceof PgsqlAdapter => [self::PGSQL_TERMINATOR],
+            $connection instanceof SqliteAdapter => [self::SQLITE_TERMINATOR],
+            default => [self::MYSQL_TERMINATOR, self::PGSQL_TERMINATOR, self::SQLITE_TERMINATOR],
+        };
     }
 
     /**

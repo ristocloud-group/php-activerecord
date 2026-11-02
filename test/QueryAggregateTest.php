@@ -634,6 +634,13 @@ class QueryAggregateTest extends DatabaseTest
         $this->assert_same($refusal('sum', '1', 'order_by_raw'), GoldenStatements::capture(fn() => Author::order_by_raw('1')->limit(2)->sum('parent_author_id')));
         $this->assert_same($refusal('avg', '1', 'group_by_raw'), GoldenStatements::capture(fn() => Author::distinct()->group_by_raw('1')->avg('parent_author_id')));
 
+        // a position followed by the suffixes of an order: SQLite reads 1 COLLATE NOCASE, and Postgres 1 USING >, as the
+        // position, and the sum of the window was 5 where get()'s rows (authors 4 and 3) sum to 3; the other databases
+        // refuse those forms, and the suffixes go in any combination
+        foreach (['1 COLLATE NOCASE DESC', '1 USING >', '1 COLLATE "C" DESC NULLS LAST', '(1) USING ~>~ NULLS FIRST', '1 ASC COLLATE NOCASE'] as $sql) {
+            $this->assert_same($refusal('sum', $sql, 'order_by_raw'), GoldenStatements::capture(fn() => Author::order_by_raw($sql)->limit(2)->sum('parent_author_id')), $sql);
+        }
+
         $this->assert_same(3, Author::group_by_raw('parent_author_id')->max('parent_author_id'));
         $this->assert_same(6, Author::group_by_raw('parent_author_id')->sum('parent_author_id'));
         $this->assert_same(6, Author::select('parent_author_id')->group_by_raw('1')->sum('parent_author_id'));

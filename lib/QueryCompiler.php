@@ -591,10 +591,12 @@ final class QueryCompiler
      * with it its positions; so is SELECT DISTINCT * of a count of distinct rows, whose columns are get()'s; and an aggregate
      * in place (neither grouped, distinct nor windowed) has no GROUP BY and leaves its order out.
      *
-     * A position is an item of the SQL, at the top level, that is an integer and nothing else but a direction (ASC, DESC,
-     * NULLS FIRST, NULLS LAST) or WITH ROLLUP, and comments, in parentheses or after a unary + or not: 'name, 2', '1 DESC',
-     * '1 -- the key', '(1)', '+1'. An integer in an expression ('CASE WHEN a THEN 1 ELSE 0 END', 'LEFT(name, 1)'), in a
-     * string or in a comment is none, nor is a value bound to a ? marker, which is not read.
+     * A position is an item of the SQL, at the top level, that is an integer and nothing else but the suffixes of an order
+     * (ASC, DESC, NULLS FIRST, NULLS LAST, COLLATE, USING, WITH ROLLUP) and comments, in parentheses or after a unary + or
+     * not: 'name, 2', '1 DESC', '1 COLLATE NOCASE', '1 -- the key', '(1)', '+1'. Strings and comments are read as the
+     * database of the connection reads them (see names_a_position()). An integer in an expression ('CASE WHEN a THEN 1
+     * ELSE 0 END', 'LEFT(name, 1)'), in a string or in a comment is none, nor is a value bound to a ? marker, which is not
+     * read.
      *
      * @internal Serves Query; not a supported API.
      * @param string|null $column The aggregated column, * for a count of the rows, null for exists()
@@ -638,10 +640,14 @@ final class QueryCompiler
 
     /**
      * Whether SQL of a GROUP BY or an ORDER BY written by hand holds an item that is a position (see
-     * refuse_position_in_own_select()): its strings and quoted identifiers are read as a word, its comments (--, a block
-     * comment, and # on MySQL and MariaDB) as a space, the text in parentheses as none, and what is left is split at its
-     * commas. An integer in parentheses is unwrapped first, (1) and +1 being positions on MySQL, MariaDB and SQLite, and
-     * (1) on Postgres too (measured).
+     * refuse_position_in_own_select()), read as the database of the connection reads its strings, its quoted identifiers
+     * and its comments (RawSqlWriter::without_literals_and_comments(), the readings of the statement terminator): a
+     * literal is a word, and a comment a space. An integer in parentheses is unwrapped, (1) and +1 being positions on
+     * MySQL, MariaDB and SQLite, and (1) on Postgres too (measured); the text left in parentheses is none, and what is
+     * left is split at its commas. An item is a position when it is an integer followed by nothing but the suffixes of an
+     * order: ASC, DESC, NULLS FIRST, NULLS LAST, COLLATE and a name (SQLite reads 1 COLLATE NOCASE as the position),
+     * USING and an operator (Postgres reads 1 USING > so), WITH ROLLUP, in any combination. A database that does not
+     * read a suffix refuses the statement anyway.
      *
      * @throws ActiveRecordException for SQL that the patterns cannot read
      */
@@ -652,28 +658,22 @@ final class QueryCompiler
             return false;
         }
 
-        $hash = $this->connection() instanceof MysqlAdapter ? '|#[^\n]*+' : '';
-        $flat = preg_replace_callback(
-            "/'(?:[^'\\\\]++|\\\\.)*+'|\"(?:[^\"\\\\]++|\\\\.)*+\"|`[^`]*+`|\\[[^\\]]*+\\]|--[^\n]*+$hash|\\/\\*.*?\\*\\//s",
-            fn(array $match): string => in_array($match[0][0], ["'", '"', '`', '['], true) ? ' word ' : ' ',
-            $sql,
-        );
-        // an integer in parentheses, or after a unary +, is a position too: (1), ((1)), +1
-        if (null !== $flat) {
+        foreach (RawSqlWriter::without_literals_and_comments($sql, $this->connection()) as $text) {
+            // an integer in parentheses, or after a unary +, is a position too: (1), ((1)), +1
             do {
-                $flat = preg_replace('/\(\s*+\+?\s*+(\d++)\s*+\)/', ' $1 ', $flat, -1, $unwrapped);
-            } while (null !== $flat && $unwrapped > 0);
-        }
+                $text = preg_replace('/\(\s*+\+?\s*+(\d++)\s*+\)/', ' $1 ', $text, -1, $unwrapped);
+            } while (null !== $text && $unwrapped > 0);
 
-        $flat = null === $flat ? null : preg_replace('/\((?:[^()]++|(?R))*+\)/', '()', $flat);
+            $text = null === $text ? null : preg_replace('/\((?:[^()]++|(?R))*+\)/', '()', $text);
 
-        if (null === $flat) {
-            throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for a position: %s", $sql, preg_last_error_msg()));
-        }
+            if (null === $text) {
+                throw new ActiveRecordException(sprintf("The SQL '%s' could not be read for a position: %s", $sql, preg_last_error_msg()));
+            }
 
-        foreach (explode(',', $flat) as $item) {
-            if (preg_match('/^\s*+\+?\s*+\d++(?:\s++(?:ASC|DESC))?(?:\s++NULLS\s++(?:FIRST|LAST))?(?:\s++WITH\s++ROLLUP)?\s*$/i', $item)) {
-                return true;
+            foreach (explode(',', $text) as $item) {
+                if (preg_match('/^\s*+\+?\s*+\d++(?:\s++(?:ASC|DESC|NULLS\s++(?:FIRST|LAST)|COLLATE\s++[^\s,]++|USING\s++(?:OPERATOR\s*+\(\)|[^\s\w,()]++)|WITH\s++ROLLUP))*+\s*+$/i', $item)) {
+                    return true;
+                }
             }
         }
 
