@@ -52,11 +52,14 @@ class Cache
                 throw new CacheException("Cache URL must specify a scheme (e.g. memcache://... or file://...): $url");
             }
 
-            $file = ucwords(Inflector::instance()->camelize($parsed_url['scheme']));
-            $class = "ActiveRecord\\$file";
-            require_once __DIR__ . "/cache/$file.php";
+            $backend = CacheBackend::tryFrom(ucwords(Inflector::instance()->camelize($parsed_url['scheme'])));
+
+            if ($backend === null) {
+                throw new CacheException("Unsupported cache scheme '{$parsed_url['scheme']}': use file, memcache or redis");
+            }
+
             /** @var File|Memcache|Redis $adapter */
-            $adapter = new $class($parsed_url, $options);
+            $adapter = new ($backend->class_name())($parsed_url, $options);
             static::$adapter = $adapter;
         } else {
             static::$adapter = null;

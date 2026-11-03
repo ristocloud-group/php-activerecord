@@ -1,7 +1,5 @@
 <?php
 
-require_once __DIR__ . "/../lib/cache/File.php";
-
 use ActiveRecord\File;
 
 class FileCacheTest extends SnakeCase_PHPUnit_Framework_TestCase

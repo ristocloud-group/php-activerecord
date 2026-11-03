@@ -110,4 +110,26 @@ class CacheTest extends SnakeCase_PHPUnit_Framework_TestCase
             $this->assert_true(strpos($e->getMessage(), 'must specify a scheme') !== false);
         }
     }
+
+    public function test_every_shipped_cache_backend_has_a_case(): void
+    {
+        $shipped = array_map(
+            static fn(string $file): string => basename($file, '.php'),
+            glob(__DIR__ . '/../lib/cache/*.php')
+        );
+        $shipped = array_values(array_diff($shipped, ['CacheBackend']));
+        $cases = array_column(ActiveRecord\CacheBackend::cases(), 'value');
+        sort($shipped);
+        sort($cases);
+
+        $this->assert_equals($shipped, $cases);
+    }
+
+    public function test_an_unknown_cache_scheme_throws_a_cache_exception(): void
+    {
+        $this->expectException(ActiveRecord\CacheException::class);
+        $this->expectExceptionMessage("Unsupported cache scheme 'foo': use file, memcache or redis");
+
+        Cache::initialize('foo://localhost');
+    }
 }

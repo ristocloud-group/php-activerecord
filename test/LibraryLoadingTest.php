@@ -14,7 +14,7 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     // The files that still require or include another one; a split removes its entry
     private const array REQUIRING_FILES = [
-        'Cache.php', 'ConditionCompiler.php', 'Conditions.php', 'Connection.php', 'SQLBuilder.php', 'relationships/AbstractRelationship.php',
+        'ConditionCompiler.php', 'Conditions.php', 'Connection.php', 'SQLBuilder.php', 'relationships/AbstractRelationship.php',
     ];
 
     public function test_the_library_files_load_one_another_by_an_absolute_path(): void

@@ -168,10 +168,10 @@ abstract class Connection
     }
 
     /**
-     * Loads the specified class for an adapter.
+     * Resolves the class of an adapter through ConnectionAdapter; the autoloader loads it on first use.
      *
      * @param string $adapter Name of the adapter.
-     * @return string The full name of the class including namespace.
+     * @return class-string<Connection> The full name of the class including namespace.
      */
     private static function load_adapter_class($adapter)
     {
@@ -180,15 +180,13 @@ abstract class Connection
         }
 
         $class = ucwords($adapter) . 'Adapter';
-        $fqclass = 'ActiveRecord\\' . $class;
-        $source = __DIR__ . "/adapters/$class.php";
+        $case = ConnectionAdapter::tryFrom($class);
 
-        if (!file_exists($source)) {
-            throw new DatabaseException("$fqclass not found!");
+        if ($case === null) {
+            throw new DatabaseException("ActiveRecord\\{$class} not found!");
         }
 
-        require_once($source);
-        return $fqclass;
+        return $case->class_name();
     }
 
     /**

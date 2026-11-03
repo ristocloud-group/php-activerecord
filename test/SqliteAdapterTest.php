@@ -2,8 +2,6 @@
 
 use ActiveRecord\Column;
 
-require_once __DIR__ . '/../lib/adapters/SqliteAdapter.php';
-
 // a model on the table that test_omitted_pk_that_is_not_the_rowid_alias_stays_null() creates
 class SqliteRowidAliasProbe extends ActiveRecord\Model
 {

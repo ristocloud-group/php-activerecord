@@ -11,7 +11,7 @@
  * Usage: php file_cache_atomicity_writer.php <cache_dir> <iterations>
  */
 
-require __DIR__ . '/../../lib/cache/File.php';
+require __DIR__ . '/../../vendor/autoload.php';
 
 $dir        = $argv[1] ?? sys_get_temp_dir();
 $iterations = (int) ($argv[2] ?? 200);

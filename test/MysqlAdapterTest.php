@@ -2,8 +2,6 @@
 
 use ActiveRecord\Column;
 
-require_once __DIR__ . '/../lib/adapters/MysqlAdapter.php';
-
 // a model on the TINYINT(1) AUTO_INCREMENT table the GH #164 tests create
 class MysqlTinyCounter extends ActiveRecord\Model
 {
