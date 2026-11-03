@@ -2233,10 +2233,13 @@ class Query
      * rejects it: they would otherwise make a row of an empty one. An INSERT takes no clause of the
      * query: one is refused, as insert() refuses it (Table's inserts hold none).
      *
+     * With $prepared, the values come prepared already and are bound as they are: Table::run_insert()
+     * prepares them for its caller, which gets them back, before it calls this (#185).
+     *
      * @internal Serves Table's inserts; not a supported API.
      * @param array<string, mixed> $row
      */
-    public function execute_insert(array $row, ?string $pk = null, ?string $sequence = null, ?string $returning = null, bool $timestamps = true): \PDOStatement
+    public function execute_insert(array $row, ?string $pk = null, ?string $sequence = null, ?string $returning = null, bool $timestamps = true, bool $prepared = false): \PDOStatement
     {
         $table = $this->table();
         $compiler = new QueryCompiler($table);
@@ -2244,7 +2247,7 @@ class Query
 
         // the statement names the columns (#92) and binds each value as the finders do, a DateTime in
         // the format of its column: what Table::process_data() prepares
-        $row = $table->real_column_keys($table->process_data($row));
+        $row = $table->real_column_keys($prepared ? $row : $table->process_data($row));
 
         if ($timestamps && is_hash($row)) {
             $row = Timestamps::apply_to_insert($table, $table->class->getName(), $row);

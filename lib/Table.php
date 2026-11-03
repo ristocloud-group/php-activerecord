@@ -556,8 +556,9 @@ class Table
         // $data keeps its attribute names for the caller (#92), its values as the statement binds them
         $data = $this->process_data($data);
 
-        // null (no row) is an empty row, which the engine rejects as it rejects anything but a hash
-        return Query::for_table($this)->execute_insert($data ?: [], $pk, $sequence_name, $returning, $timestamps);
+        // null (no row) is an empty row, which the engine rejects as it rejects anything but a hash.
+        // prepared: true, the values were prepared just above
+        return Query::for_table($this)->execute_insert($data ?: [], $pk, $sequence_name, $returning, $timestamps, prepared: true);
     }
 
     /**
@@ -887,7 +888,7 @@ class Table
 
     private function set_associations(): void
     {
-        require_once 'Relationship.php';
+        require_once __DIR__ . '/Relationship.php';
         $namespace = $this->class->getNamespaceName();
 
         foreach ($this->class->getStaticProperties() as $name => $definitions) {

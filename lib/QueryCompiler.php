@@ -74,6 +74,13 @@ final class QueryCompiler
     private ?array $columns_by_key = null;
 
     /**
+     * The legacy options aggregated_clauses() read last, and the clauses it read of them.
+     *
+     * @var array{array<string, mixed>, QueryState}|null
+     */
+    private ?array $aggregated = null;
+
+    /**
      * The statements are rendered for $connection when one is given, else for $table's: a bulk write
      * of Model gives the connection it always built its statement on (see Query::execute_update()).
      * With $refuse_terminator false, the legacy conditions are not read for a statement terminator (see
@@ -256,22 +263,37 @@ final class QueryCompiler
         $clauses = $this->aggregated_clauses($state);
         $windowed = null !== $clauses->limit || null !== $clauses->offset;
         $rows = clone $state;
-        $apply = fn(string $expression): string => implode(', ', array_map(fn(string $function): string => "$function($expression)", $functions));
 
         if (!$windowed) {
             self::leave_out_order($rows);
         }
 
         if (!$windowed && !$clauses->distinct && [] === $clauses->groups && [] === $clauses->havings) {
-            $this->select_rows($rows, ['raw' => $apply($all ? '*' : $this->column($column, $state)), 'bindings' => []]);
+            $this->select_rows($rows, ['raw' => self::apply_functions($functions, $all ? '*' : $this->column($column, $state)), 'bindings' => []]);
 
             return $this->compile_select($rows);
         }
 
         $aggregate = $this->over_rows($rows, $clauses, $column);
-        $aggregate->select($apply($all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
+        $aggregate->select(self::apply_functions($functions, $all ? '*' : 't.' . $this->connection()->quote_name($this->result_name($column))));
 
         return $aggregate;
+    }
+
+    /**
+     * Each function of $functions applied to $expression, in the order given: "COUNT(*)", "MIN(x), MAX(x)".
+     *
+     * @param list<'COUNT'|'MIN'|'MAX'|'SUM'|'AVG'> $functions
+     */
+    private static function apply_functions(array $functions, string $expression): string
+    {
+        $applied = [];
+
+        foreach ($functions as $function) {
+            $applied[] = "$function($expression)";
+        }
+
+        return implode(', ', $applied);
     }
 
     /**
@@ -312,6 +334,9 @@ final class QueryCompiler
      * keep), and the window that their 'limit' and 'offset' render (an offset of 0 renders none). So a count of legacy
      * options follows the one rule of the builder's. The state is read, never compiled: the legacy options are
      * compiled as they always are.
+     *
+     * The clauses of legacy options are read once for the compiler, which the terminals ask more than once (count()
+     * refuses a position, then compiles), and are read only: the callers never change them (#185).
      */
     private function aggregated_clauses(QueryState $state): QueryState
     {
@@ -320,22 +345,26 @@ final class QueryCompiler
         }
 
         $options = $state->legacy;
-        $sql = fn(string $key): ?string => isset($options[$key]) && is_scalar($options[$key]) && '' !== (string) $options[$key] ? (string) $options[$key] : null;
+
+        if (null !== $this->aggregated && $this->aggregated[0] === $options) {
+            return $this->aggregated[1];
+        }
+
         $clauses = new QueryState();
 
-        if (null !== ($select = $sql('select'))) {
+        if (null !== ($select = self::legacy_sql($options, 'select'))) {
             $clauses->selects = [['raw' => $select, 'bindings' => []]];
         }
 
-        if (null !== ($group = $sql('group')) && '0' !== $group) {
+        if (null !== ($group = self::legacy_sql($options, 'group')) && '0' !== $group) {
             $clauses->groups = [['type' => 'raw', 'sql' => $group, 'bindings' => []]];
         }
 
-        if (null !== ($having = $sql('having')) && '0' !== $having) {
+        if (null !== ($having = self::legacy_sql($options, 'having')) && '0' !== $having) {
             $clauses->havings = [['type' => 'raw', 'boolean' => 'AND', 'sql' => $having, 'bindings' => []]];
         }
 
-        if (null !== ($order = $sql('order')) && '0' !== $order) {
+        if (null !== ($order = self::legacy_sql($options, 'order')) && '0' !== $order) {
             $clauses->orders = [['type' => 'raw', 'sql' => $order, 'bindings' => []]];
         }
 
@@ -343,8 +372,20 @@ final class QueryCompiler
         $limit = $options['limit'] ?? null;
         $clauses->limit = (0 === $limit || '0' === $limit) ? 0 : (intval($limit) ?: null);
         $clauses->offset = intval($options['offset'] ?? 0) ?: null;
+        $this->aggregated = [$options, $clauses];
 
         return $clauses;
+    }
+
+    /**
+     * The SQL of the legacy option $key, as aggregated_clauses() reads it: a scalar that is not empty, as a string; else
+     * null.
+     *
+     * @param array<string, mixed> $options
+     */
+    private static function legacy_sql(array $options, string $key): ?string
+    {
+        return isset($options[$key]) && is_scalar($options[$key]) && '' !== (string) $options[$key] ? (string) $options[$key] : null;
     }
 
     /**
@@ -1302,12 +1343,21 @@ final class QueryCompiler
      * order of the fields. Legacy options that are an empty array hold no option, and are none. The fields of a new
      * state are read once: they are scalars, arrays and null, which no state shares by reference.
      *
+     * A state that holds no clause of the builder, the state of every legacy entry, is told first, field by field
+     * (see holds_no_builder_clause()): get_object_vars() cost each statement half a microsecond (#185).
+     *
      * @internal Serves QueryCompiler and Query (the clauses a closure group holds); not a supported API.
      * @param list<string> $except
      * @return list<string>
      */
     public static function held_fields(QueryState $state, array $except): array
     {
+        if (self::holds_no_builder_clause($state)) {
+            $legacy = null !== $state->legacy && [] !== $state->legacy && !in_array('legacy', $except, true);
+
+            return $legacy ? ['legacy'] : [];
+        }
+
         static $new = null;
         $new ??= get_object_vars(new QueryState());
         $held = [];
@@ -1319,6 +1369,19 @@ final class QueryCompiler
         }
 
         return $held;
+    }
+
+    /**
+     * Whether every field of a state but the legacy options is as in a new state. It names each field: a field added to
+     * QueryState must be added here too, which QueryEngineTest checks for every field of the class.
+     */
+    private static function holds_no_builder_clause(QueryState $state): bool
+    {
+        return [] === $state->selects && !$state->distinct && null === $state->from && null === $state->from_alias
+            && null === $state->from_raw && [] === $state->from_bindings && [] === $state->joins && [] === $state->wheres
+            && !$state->empty_where && !$state->skipped_when && [] === $state->groups && [] === $state->havings
+            && [] === $state->orders && null === $state->limit && null === $state->offset && [] === $state->includes
+            && !$state->readonly;
     }
 
     /**

@@ -833,7 +833,7 @@ class SQLBuilder
      */
     private function apply_where_hashes(array $hashes): void
     {
-        require_once 'Expressions.php';
+        require_once __DIR__ . '/Expressions.php';
         $where = [];
         $values = [];
 
@@ -854,7 +854,7 @@ class SQLBuilder
      */
     private function apply_where_conditions(array $args): void
     {
-        require_once 'Expressions.php';
+        require_once __DIR__ . '/Expressions.php';
         $num_args = count($args);
 
         if ($num_args == 1 && is_hash($args[0])) {
@@ -903,7 +903,7 @@ class SQLBuilder
 
     private function build_insert(): string
     {
-        require_once 'Expressions.php';
+        require_once __DIR__ . '/Expressions.php';
 
         if (null === $this->data) {
             throw new ActiveRecordException('SQLBuilder: insert() must be called before building an INSERT statement');

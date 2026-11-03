@@ -6,7 +6,7 @@
 
 namespace ActiveRecord;
 
-require_once 'Column.php';
+require_once __DIR__ . '/Column.php';
 
 use PDO;
 use PDOException;
