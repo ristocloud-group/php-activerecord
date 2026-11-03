@@ -22,7 +22,7 @@ parameters:
 			message: '#^Access to an undefined property ActiveRecord\\AbstractRelationship\:\:\$primary_key\.$#'
 			identifier: property.notFound
 			count: 3
-			path: lib/Relationship.php
+			path: lib/relationships/AbstractRelationship.php
 
 		-
 			message: '#^Negated boolean expression is always false\.$#'

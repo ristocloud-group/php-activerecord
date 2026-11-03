@@ -1,9 +1,5 @@
 <?php
 
-// Relationship classes load lazily (require_once in lib/Table.php), but the
-// HabtmStubProbe subclass below needs its parent at parse time.
-require_once __DIR__ . '/../lib/Relationship.php';
-
 class NotModel {};
 
 class AuthorWithNonModelRelationship extends ActiveRecord\Model
