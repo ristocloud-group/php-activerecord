@@ -175,13 +175,13 @@ Both enums are `@internal`, so they add no public API.
 
 ## 5. Backward compatibility
 
-### 5.1 Approved changes (release notes, draft 2.2.0)
+### 5.1 Approved changes (release notes, draft 3.0.0)
 
 1. **BREAKING: Composer is required, and `ActiveRecord.php` is removed.** The library's classes are loaded only through Composer's autoloader (`require 'vendor/autoload.php'`). A `require` of `ActiveRecord.php`, which used to load the manifest, now fails because the file does not exist: remove it.
 2. **BREAKING: classes load on first use.** Before a class is first used, `class_exists('ActiveRecord\X', false)`, `interface_exists(..., false)` and `get_declared_classes()` no longer report it. The one exception is `Utils`, which is declared up front with the library's functions. A compile error in a file now surfaces on first use of its class instead of at boot. For code that does not inspect declared classes nothing changes: `instanceof` and `catch` on a class that was never loaded answer `false`, which is correct, since no object of it can exist.
 3. **BREAKING: `lib/` is reorganized.** There is one class per file, and the new folders are `lib/exceptions/`, `lib/relationships/` and `lib/serializers/`. A direct `require` of a file in `lib/` must be removed, because the autoloader loads it.
 4. **Fix: unknown cache scheme.** An unknown cache scheme (`Cache::initialize('foo://...')`) throws `CacheException` ("Unsupported cache scheme 'foo': use file, memcache or redis"). It used to stop with a fatal error from `require_once` of a file that does not exist.
-5. **BREAKING: `PHP_ACTIVERECORD_VERSION_ID` is removed.** It was stale (`'2.0.0'` in 2.1.0). The installed version is `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`, which gives the tag (`2.2.0`) or the branch (`dev-master`, with `getReference()` for the commit).
+5. **BREAKING: `PHP_ACTIVERECORD_VERSION_ID` is removed.** It was stale (`'2.0.0'` in 2.1.0). The installed version is `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`, which gives the tag (`3.0.0`) or the branch (`dev-master`, with `getReference()` for the commit).
 
 ### 5.2 Unchanged on purpose
 
@@ -236,7 +236,7 @@ Both enums are `@internal`, so they add no public API.
   - a new adapter or cache backend also needs its case in `ConnectionAdapter` / `CacheBackend`.
 
   It also adds the `composer dump-autoload` gotcha for the mounted `vendor/`.
-- **Release notes.** The five items of §5.1 go into the 2.2.0 draft when the PR merges.
+- **Release notes.** The five items of §5.1 go into the 3.0.0 draft when the PR merges. The release was renamed from 2.2.0 to 3.0.0 on 2026-11-03, for the number of breaking changes it carries.
 - **Notes for the monolith team.** Moving to the fork brings the three BREAKING items. The monolith needs no code change for them, as checked in §3, and they belong next to the `chunk` signature clash.
 
 ## 8. Delivery
