@@ -10,7 +10,7 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
     private const array BASE_DIRS = ['', 'adapters', 'cache', 'exceptions', 'relationships', 'serializers'];
 
     // The files that still declare more than one class; a split removes its entry
-    private const array MULTI_CLASS_FILES = ['Exceptions.php', 'Inflector.php', 'Relationship.php', 'Serialization.php', 'Validations.php'];
+    private const array MULTI_CLASS_FILES = ['Inflector.php', 'Relationship.php', 'Serialization.php', 'Validations.php'];
 
     // The files that still require or include another one; a split removes its entry
     private const array REQUIRING_FILES = [

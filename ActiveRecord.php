@@ -25,5 +25,7 @@ require __DIR__ . '/lib/SQLBuilder.php';
 require __DIR__ . '/lib/Reflections.php';
 require __DIR__ . '/lib/Inflector.php';
 require __DIR__ . '/lib/CallBack.php';
-require __DIR__ . '/lib/Exceptions.php';
+foreach (glob(__DIR__ . '/lib/exceptions/*.php') as $file) {
+    require_once $file;
+}
 require __DIR__ . '/lib/Cache.php';
