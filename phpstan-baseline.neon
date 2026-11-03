@@ -22,7 +22,7 @@ parameters:
 			message: '#^Access to an undefined property ActiveRecord\\AbstractRelationship\:\:\$primary_key\.$#'
 			identifier: property.notFound
 			count: 3
-			path: lib/Relationship.php
+			path: lib/relationships/AbstractRelationship.php
 
 		-
 			message: '#^Negated boolean expression is always false\.$#'
@@ -34,4 +34,4 @@ parameters:
 			message: '#^Call to function is_null\(\) with string will always evaluate to false\.$#'
 			identifier: function.impossibleType
 			count: 1
-			path: lib/Validations.php
+			path: lib/Errors.php

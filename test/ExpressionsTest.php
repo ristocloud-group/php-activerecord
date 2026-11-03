@@ -1,7 +1,5 @@
 <?php
 
-require_once __DIR__ . '/../lib/Expressions.php';
-
 use ActiveRecord\Expressions;
 use ActiveRecord\ConnectionManager;
 use ActiveRecord\DatabaseException;

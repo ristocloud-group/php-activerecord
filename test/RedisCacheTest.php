@@ -1,7 +1,5 @@
 <?php
 
-require_once __DIR__ . "/../lib/cache/Redis.php";
-
 use ActiveRecord\Cache;
 use ActiveRecord\Redis;
 

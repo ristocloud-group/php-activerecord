@@ -1,7 +1,6 @@
 <?php
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Category.php';
 require_once __DIR__ . '/models/Product.php';
 require_once __DIR__ . '/models/Review.php';

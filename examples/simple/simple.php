@@ -1,7 +1,6 @@
 <?php
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 
 // The simplest possible model: an empty subclass. The table name ("books")
 // and every column are introspected from the live database at runtime — the

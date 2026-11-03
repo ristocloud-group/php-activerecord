@@ -1,7 +1,5 @@
 <?php
 
-require_once __DIR__ . '/../lib/adapters/MysqlAdapter.php'; // adapters load on demand, not via the manifest
-
 use ActiveRecord\Connection;
 use ActiveRecord\DatabaseException;
 

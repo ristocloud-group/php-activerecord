@@ -127,6 +127,44 @@ class ConnectionTest extends SnakeCase_PHPUnit_Framework_TestCase
         ActiveRecord\Connection::instance('oci://test:test@127.0.0.1/dev');
     }
 
+    public function test_every_shipped_adapter_has_a_case_and_every_case_a_connection_class(): void
+    {
+        $shipped = array_map(
+            static fn(string $file): string => basename($file, '.php'),
+            glob(__DIR__ . '/../lib/adapters/*Adapter.php')
+        );
+        $shipped = array_values(array_diff($shipped, ['ConnectionAdapter']));
+        $cases = array_column(ActiveRecord\ConnectionAdapter::cases(), 'value');
+        sort($shipped);
+        sort($cases);
+
+        $this->assert_equals($shipped, $cases);
+        foreach (ActiveRecord\ConnectionAdapter::cases() as $case) {
+            $this->assert_true(is_subclass_of($case->class_name(), ActiveRecord\Connection::class));
+        }
+    }
+
+    public function test_an_unknown_protocol_names_the_adapter_it_did_not_find(): void
+    {
+        $this->expectException(ActiveRecord\DatabaseException::class);
+        $this->expectExceptionMessage('ActiveRecord\FooAdapter not found!');
+
+        ActiveRecord\Connection::instance('foo://test:test@127.0.0.1/db');
+    }
+
+    public function test_a_protocol_resolves_with_its_first_letter_in_either_case_only(): void
+    {
+        // Resolved through the private method: PDO itself rejects a "Mysql:" DSN, so no connection can be opened.
+        $resolve = new ReflectionMethod(Connection::class, 'load_adapter_class');
+
+        $this->assert_equals(ActiveRecord\MysqlAdapter::class, $resolve->invoke(null, 'mysql'));
+        $this->assert_equals(ActiveRecord\MysqlAdapter::class, $resolve->invoke(null, 'Mysql'));
+
+        $this->expectException(ActiveRecord\DatabaseException::class);
+        $this->expectExceptionMessage('ActiveRecord\MYSQLAdapter not found!');
+        $resolve->invoke(null, 'MYSQL');
+    }
+
     /**
      * Schema-cache identity computed by $adapter_class for a connection URL,
      * without opening a connection.

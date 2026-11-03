@@ -42,6 +42,7 @@ class Cache
      * @param string $url URL to your cache server
      * @param array<string, mixed> $options Specify additional options
      * @return void
+     * @throws CacheException If the URL has no scheme, or the scheme is not file, memcache or redis
      */
     public static function initialize($url, $options = [])
     {
@@ -52,12 +53,18 @@ class Cache
                 throw new CacheException("Cache URL must specify a scheme (e.g. memcache://... or file://...): $url");
             }
 
-            $file = ucwords(Inflector::instance()->camelize($parsed_url['scheme']));
-            $class = "ActiveRecord\\$file";
-            require_once __DIR__ . "/cache/$file.php";
-            /** @var File|Memcache|Redis $adapter */
-            $adapter = new $class($parsed_url, $options);
-            static::$adapter = $adapter;
+            $backend = CacheBackend::tryFrom(ucwords(Inflector::instance()->camelize($parsed_url['scheme'])));
+
+            if ($backend === null) {
+                throw new CacheException("Unsupported cache scheme '{$parsed_url['scheme']}': use file, memcache or redis");
+            }
+
+            // File and Memcache take the parsed URL as their only argument; Redis also takes the options
+            static::$adapter = match ($backend) {
+                CacheBackend::File => new File($parsed_url),
+                CacheBackend::Memcache => new Memcache($parsed_url),
+                CacheBackend::Redis => new Redis($parsed_url, $options),
+            };
         } else {
             static::$adapter = null;
         }

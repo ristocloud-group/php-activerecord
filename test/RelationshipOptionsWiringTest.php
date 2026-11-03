@@ -1,11 +1,5 @@
 <?php
 
-// Unit-level test: constructs relationship classes directly, without going through
-// Table::set_associations() (which is what normally triggers the lazy
-// `require_once 'Relationship.php';` in lib/Table.php). Load explicitly so the classes
-// exist regardless of test run order/isolation.
-require_once __DIR__ . '/../lib/Relationship.php';
-
 use ActiveRecord\HasMany;
 use ActiveRecord\BelongsTo;
 use ActiveRecord\RelationshipException;

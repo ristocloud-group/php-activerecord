@@ -4,16 +4,6 @@ use ActiveRecord\Errors;
 
 class ErrorsTest extends DatabaseTest
 {
-    public function set_up($connection_name = null)
-    {
-        parent::set_up($connection_name);
-
-        // Errors is defined in Validations.php, which Model require_once's lazily
-        // during the validation flow. Trigger that load so `new Errors()` resolves
-        // regardless of test ordering (Author has no validations, so this is a no-op).
-        (new Author())->is_valid();
-    }
-
     private function make_errors(?Author $author = null): Errors
     {
         return new Errors($author ?? new Author());

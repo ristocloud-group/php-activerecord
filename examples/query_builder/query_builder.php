@@ -4,7 +4,6 @@
 // run through. See the "Query builder" section of the README.
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Customer.php';
 require_once __DIR__ . '/models/Invoice.php';
 
