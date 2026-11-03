@@ -1416,4 +1416,36 @@ class QueryEngineTest extends DatabaseTest
         $this->assert_sql_has('INSERT INTO authors', (string) $this->conn->last_query);
         $this->assert_same('Routed', Author::find(1)->name);
     }
+
+    // held_fields() tells a state without builder clauses by naming each field (#185): every field of QueryState but
+    // the legacy options, given a value other than a new state's, is one it reports, with legacy options or without
+    public function test_held_fields_reports_every_field_of_query_state(): void
+    {
+        foreach ((new ReflectionClass(ActiveRecord\QueryState::class))->getProperties() as $property) {
+            $field = $property->getName();
+            $type = $property->getType();
+            $this->assert_true($type instanceof ReflectionNamedType, $field);
+            $value = match ($type->getName()) {
+                'array' => ['held'],
+                'bool' => true,
+                'string' => 'held',
+                'int' => 1,
+            };
+
+            foreach ([null, ['conditions' => 'author_id = 1']] as $legacy) {
+                $state = new ActiveRecord\QueryState();
+                $state->legacy = $legacy;
+                $property->setValue($state, $value);
+                $expected = 'legacy' === $field || null === $legacy ? [$field] : ['legacy', $field];
+
+                $this->assert_same($expected, ActiveRecord\QueryCompiler::held_fields($state, []), $field);
+                $this->assert_same('legacy' === $field ? [] : [$field], ActiveRecord\QueryCompiler::held_fields($state, ['legacy']), $field);
+            }
+        }
+
+        $this->assert_same([], ActiveRecord\QueryCompiler::held_fields(new ActiveRecord\QueryState(), []));
+        $empty = new ActiveRecord\QueryState();
+        $empty->legacy = [];
+        $this->assert_same([], ActiveRecord\QueryCompiler::held_fields($empty, []));
+    }
 }
