@@ -17,12 +17,4 @@ enum CacheBackend: string
     case File = 'File';
     case Memcache = 'Memcache';
     case Redis = 'Redis';
-
-    /**
-     * @return class-string<File|Memcache|Redis>
-     */
-    public function class_name(): string
-    {
-        return __NAMESPACE__ . '\\' . $this->value;
-    }
 }

@@ -163,12 +163,12 @@ enum ConnectionAdapter: string
 - It returns `->class_name()`, and `new $fqclass(...)` in `Connection::instance()` autoloads the adapter.
 - Resolution is case-sensitive, as `file_exists()` is on Linux in production: `mysql` and `Mysql` resolve, `MYSQL` does not, the same as today.
 
-**`lib/cache/CacheBackend.php`:** the same shape. The cases are `File = 'File'`, `Memcache = 'Memcache'` and `Redis = 'Redis'`, and `class_name()` works as above.
+**`lib/cache/CacheBackend.php`:** the same shape, with the cases `File = 'File'`, `Memcache = 'Memcache'` and `Redis = 'Redis'`, but no `class_name()`. `Cache::initialize()` builds each backend with its own constructor, so the enum only lists the backends (amended after the final review, 2026-11-03).
 
 `Cache::initialize()`:
 - The missing-scheme check and its message stay.
 - Next, `CacheBackend::tryFrom(ucwords(Inflector::instance()->camelize($scheme)))`. When the result is `null`, it throws `CacheException("Unsupported cache scheme '$scheme': use file, memcache or redis")`. The URL is left out of the message, because it can carry credentials.
-- Otherwise it calls `new ($backend->class_name())($parsed_url, $options)`.
+- Otherwise a `match ($backend)` builds the backend: `new File($parsed_url)`, `new Memcache($parsed_url)` and `new Redis($parsed_url, $options)`. These are the arguments each constructor takes. File's and Memcache's constructors take one argument, so the extra one the old dynamic `new` passed was ignored, and PHPStan refuses a dynamic `new` with a narrowed `class-string`.
 - Today an unknown scheme requires a missing file, a fatal error that cannot be caught. The new behavior is listed in §5.1.
 
 Both enums are `@internal`, so they add no public API.
