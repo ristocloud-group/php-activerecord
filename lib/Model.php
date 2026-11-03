@@ -2927,8 +2927,6 @@ class Model
      */
     private function serialize($type, $options)
     {
-        require_once __DIR__ . '/Serialization.php';
-
         return match ($type) {
             'Xml' => (new XmlSerializer($this, $options))->to_s(),
             'Json' => (new JsonSerializer($this, $options))->to_s(),
