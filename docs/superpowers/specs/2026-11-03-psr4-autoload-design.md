@@ -41,7 +41,7 @@ Until #189 those `require_once` calls used relative paths, which cost 5 µs of C
 1. Composer's PSR-4 autoloader loads every class of the library, on first use.
 2. One class, interface or enum per file, named after its file.
 3. No `require` or `include` left in `lib/`.
-4. `ActiveRecord.php` keeps only the version constant, and stays in `autoload.files`.
+4. `ActiveRecord.php` and its constant `PHP_ACTIVERECORD_VERSION_ID` are removed. The installed version is read from Composer.
 5. Adapters and cache backends are resolved from a native enum of the supported ones, not from a path.
 6. Behavior is unchanged except for the changes in §5.1, which are approved and documented.
 
@@ -59,7 +59,7 @@ Until #189 those `require_once` calls used relative paths, which cost 5 µs of C
 | D1 | **Option B.** Every `ActiveRecord\` class loads lazily on first use, and the change is documented as BREAKING. The maintainer approved this BC break explicitly. |
 | D2 | **Composer only.** The library is loaded through `vendor/autoload.php`. |
 | D3 | **Subfolders as extra PSR-4 base dirs.** The new files go into `lib/exceptions/`, `lib/relationships/` and `lib/serializers/`, next to the existing `lib/adapters/` and `lib/cache/`. |
-| D4 | **`ActiveRecord.php` stays,** in `autoload.files`, with only `define('PHP_ACTIVERECORD_VERSION_ID', '2.2.0')`. The constant read `'2.0.0'` and is corrected to the current draft release. |
+| D4 | **`ActiveRecord.php` and `PHP_ACTIVERECORD_VERSION_ID` are removed** (BREAKING). Nothing reads the constant: not `lib/`, not the tests, not the monolith. It was stale (`'2.0.0'` while 2.1.0 was released), and Composer reports the installed version with `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`. The maintainer first chose to keep it, then decided to remove it after review (2026-11-03). |
 | D5 | **Native enums for adapters and cache backends.** `ConnectionAdapter` and `CacheBackend` list what the library ships, and an unknown name never reaches the filesystem. No `class_exists()` is used. |
 | D6 | **PHPStan baseline: re-point only.** The entries whose file is split keep their message and count, and only their `path` changes. No new entries. |
 
@@ -68,7 +68,7 @@ Until #189 those `require_once` calls used relative paths, which cost 5 µs of C
 All of it was verified on 2026-11-03.
 
 - **40 of the 60 classes are eager today.** After `require 'vendor/autoload.php'` on master, 40 of the 60 `ActiveRecord\` classes are declared. The other 20 are already lazy: `Expressions`, the 6 relationship classes, the 5 serializer classes, `Validations`, `Errors`, the 3 adapters and the 3 cache backends.
-- **No file in `lib/` runs code when it is loaded,** other than the `require_once` of `Column.php` at the top of `Connection.php`, which goes away. The version `define` is in `ActiveRecord.php`, which stays in `files`.
+- **No file in `lib/` runs code when it is loaded,** other than the `require_once` of `Column.php` at the top of `Connection.php`, which goes away. The version `define` in `ActiveRecord.php` goes away with the file (D4).
 - **The library never relies on a class being declared.** Nothing in `lib/` calls `class_exists(..., false)` or `get_declared_classes()`. `Redis` calls `class_exists('Predis\Client')`, which autoloads.
 - **The RistoCloud monolith does not depend on eager loading.** It was checked statically at HEAD `23d2ca846a`, with `vendor/` excluded:
   - it loads the library only through Composer;
@@ -93,7 +93,7 @@ All of it was verified on 2026-11-03.
             "lib/exceptions/", "lib/relationships/", "lib/serializers/"
         ]
     },
-    "files": ["ActiveRecord.php", "lib/Utils.php"]
+    "files": ["lib/Utils.php"]
 }
 ```
 
@@ -102,13 +102,7 @@ All of it was verified on 2026-11-03.
 
 ### 4.2 `ActiveRecord.php`
 
-```php
-<?php
-
-define('PHP_ACTIVERECORD_VERSION_ID', '2.2.0');
-```
-
-The manifest is gone. The constant is bumped whenever the draft release changes version.
+The file is deleted and leaves `autoload.files`, together with its manifest and its `define` (D4). The root of the repository then holds no PHP entry point: the library is `lib/` plus `composer.json`.
 
 ### 4.3 File layout
 
@@ -183,11 +177,11 @@ Both enums are `@internal`, so they add no public API.
 
 ### 5.1 Approved changes (release notes, draft 2.2.0)
 
-1. **BREAKING: Composer is required.** The library's classes are loaded only through Composer's autoloader (`vendor/autoload.php`). `ActiveRecord.php` now only defines `PHP_ACTIVERECORD_VERSION_ID`, so a `require` of it no longer declares any class.
+1. **BREAKING: Composer is required, and `ActiveRecord.php` is removed.** The library's classes are loaded only through Composer's autoloader (`require 'vendor/autoload.php'`). A `require` of `ActiveRecord.php`, which used to load the manifest, now fails because the file does not exist: remove it.
 2. **BREAKING: classes load on first use.** Before a class is first used, `class_exists('ActiveRecord\X', false)`, `interface_exists(..., false)` and `get_declared_classes()` no longer report it. The one exception is `Utils`, which is declared up front with the library's functions. A compile error in a file now surfaces on first use of its class instead of at boot. For code that does not inspect declared classes nothing changes: `instanceof` and `catch` on a class that was never loaded answer `false`, which is correct, since no object of it can exist.
 3. **BREAKING: `lib/` is reorganized.** There is one class per file, and the new folders are `lib/exceptions/`, `lib/relationships/` and `lib/serializers/`. A direct `require` of a file in `lib/` must be removed, because the autoloader loads it.
 4. **Fix: unknown cache scheme.** An unknown cache scheme (`Cache::initialize('foo://...')`) throws `CacheException` ("Unsupported cache scheme 'foo': use file, memcache or redis"). It used to stop with a fatal error from `require_once` of a file that does not exist.
-5. **`PHP_ACTIVERECORD_VERSION_ID` is `'2.2.0'`.** It read `'2.0.0'`.
+5. **BREAKING: `PHP_ACTIVERECORD_VERSION_ID` is removed.** It was stale (`'2.0.0'` in 2.1.0). The installed version is `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`, which gives the tag (`2.2.0`) or the branch (`dev-master`, with `getReference()` for the commit).
 
 ### 5.2 Unchanged on purpose
 
@@ -218,7 +212,7 @@ Both enums are `@internal`, so they add no public API.
 
 - Remove the direct `require_once` of `lib/` files from 11 test files, among them `RelationshipTest`, whose comment about the lazy require is also updated.
 - `test/helpers/file_cache_atomicity_writer.php` is a standalone process: it requires `vendor/autoload.php` instead of `lib/cache/File.php`.
-- `test/helpers/config.php`, `test/benchmarks/hot_paths.php` and the five examples drop their `require` of `ActiveRecord.php`, because `vendor/autoload.php` is enough.
+- `test/helpers/config.php`, `test/benchmarks/hot_paths.php` and the five examples drop their `require` of `ActiveRecord.php`, which no longer exists, because `vendor/autoload.php` is enough.
 - `phpstan.neon` drops `bootstrapFiles: ActiveRecord.php`; PHPStan already loads Composer's autoloader.
 - **`phpstan-baseline.neon`:** re-point the `path` of the entries whose file is split (D6):
   - `lib/Relationship.php` becomes `lib/relationships/AbstractRelationship.php`, for the `AbstractRelationship::$primary_key` entry, count 3;
@@ -236,7 +230,7 @@ Both enums are `@internal`, so they add no public API.
 ## 7. Documentation and release
 
 - **README.** The installation section states that the library is loaded through Composer's autoloader only (`require 'vendor/autoload.php'`), and every example drops `require 'ActiveRecord.php'`.
-- **`CLAUDE.md`.** Rewrite the Architecture paragraph, which today describes the manual manifest and the missing PSR-4 autoloader. The new text says:
+- **`CLAUDE.md`.** Rewrite the Architecture paragraph, which today names `ActiveRecord.php` as the entry point and describes the manual manifest and the missing PSR-4 autoloader. The new text says:
   - the library uses PSR-4 through Composer, with six base dirs and one class per file;
   - a new file only has to sit in the right base dir;
   - a new adapter or cache backend also needs its case in `ConnectionAdapter` / `CacheBackend`.
@@ -250,7 +244,7 @@ Both enums are `@internal`, so they add no public API.
 One PR from `master` after 86aa21b (#189), in commits that are each green:
 
 1. **Split.** Add the PSR-4 `autoload` next to the existing manifest and split the five files (§4.3). The manifest keeps declaring the same 40 classes: the 14 exception files, and `Inflector` together with `StandardInflector`. The lazy `require_once` calls of split files are removed, so the autoloader resolves them. Tests that required a moved file are updated, and no behavior changes.
-2. **Lazy.** Reduce `ActiveRecord.php` to the `define`, remove the remaining `require` calls in `lib/`, add `ConnectionAdapter` and `CacheBackend` with their resolutions, add `lib/Utils.php` to `files`, and update the bootstrap, examples, benchmark and PHPStan config.
+2. **Lazy.** Delete `ActiveRecord.php` and replace it in `files` with `lib/Utils.php`, remove the remaining `require` calls in `lib/`, add `ConnectionAdapter` and `CacheBackend` with their resolutions, and update the bootstrap, examples, benchmark and PHPStan config.
 3. **Guards and documentation.** The tests in §6.1, the baseline re-point, README and `CLAUDE.md`.
 
 Reviewers can then check the pure move (1) apart from the change in loading (2).
