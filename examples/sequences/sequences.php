@@ -21,7 +21,6 @@
 // to a pgsql:// URL (this repo's Docker setup already does).
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/models/Note.php';
 require_once __DIR__ . '/models/Room.php';
 require_once __DIR__ . '/models/Event.php';

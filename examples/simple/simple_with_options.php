@@ -1,7 +1,6 @@
 <?php
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 
 // A model that overrides the naming conventions. By default a `Book` model would
 // map to a `books` table with an `id` primary key; here we point it at a

@@ -6,8 +6,6 @@
 
 namespace ActiveRecord;
 
-require_once __DIR__ . '/Column.php';
-
 use PDO;
 use PDOException;
 use Closure;

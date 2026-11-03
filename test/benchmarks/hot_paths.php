@@ -20,7 +20,6 @@ use ActiveRecord\Config;
 use ActiveRecord\ConnectionManager;
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 require_once __DIR__ . '/../helpers/DatabaseLoader.php';
 require_once __DIR__ . '/../helpers/model_autoloader.php';
 

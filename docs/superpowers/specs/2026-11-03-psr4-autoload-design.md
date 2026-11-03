@@ -212,7 +212,7 @@ Both enums are `@internal`, so they add no public API.
 
 - Remove the direct `require_once` of `lib/` files from 11 test files, among them `RelationshipTest`, whose comment about the lazy require is also updated.
 - `test/helpers/file_cache_atomicity_writer.php` is a standalone process: it requires `vendor/autoload.php` instead of `lib/cache/File.php`.
-- `test/helpers/config.php`, `test/benchmarks/hot_paths.php` and the five examples drop their `require` of `ActiveRecord.php`, which no longer exists, because `vendor/autoload.php` is enough.
+- `test/helpers/config.php`, `test/benchmarks/hot_paths.php` and the 14 examples drop their `require` of `ActiveRecord.php`, which no longer exists, because `vendor/autoload.php` is enough.
 - `phpstan.neon` drops `bootstrapFiles: ActiveRecord.php`; PHPStan already loads Composer's autoloader.
 - **`phpstan-baseline.neon`:** re-point the `path` of the entries whose file is split (D6):
   - `lib/Relationship.php` becomes `lib/relationships/AbstractRelationship.php`, for the `AbstractRelationship::$primary_key` entry, count 3;

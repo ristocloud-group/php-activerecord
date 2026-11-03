@@ -1,7 +1,6 @@
 <?php
 
 require_once __DIR__ . '/../../vendor/autoload.php';
-require_once __DIR__ . '/../../ActiveRecord.php';
 
 // A model that declares no $table_name gets one from its class name: the
 // inflector underscores it and pluralizes the last word (Inflector::tableize()).

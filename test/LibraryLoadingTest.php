@@ -1,45 +1,48 @@
 <?php
 
-// The files of the library load one another by an absolute path (__DIR__), never by a relative one. PHP resolves a
-// relative path through the include_path and the working directory at every require_once, also for a file it loaded
-// already: without OPcache (the CLI default) that cost 5 µs of CPU a call, and SQLBuilder made one or two of them for
-// every statement it built (#185). A relative path could also load another file of that name on the include_path.
 class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
 {
     // The directories of lib/ that composer.json maps to the ActiveRecord\ namespace, relative to lib/ ('' is lib/ itself)
     private const array BASE_DIRS = ['', 'adapters', 'cache', 'exceptions', 'relationships', 'serializers'];
 
-    // The files that still declare more than one class; a split removes its entry
-    private const array MULTI_CLASS_FILES = [];
-
-    // The files that still require or include another one; a split removes its entry
-    private const array REQUIRING_FILES = [
-        'ConditionCompiler.php', 'Conditions.php', 'Connection.php', 'SQLBuilder.php', 'relationships/AbstractRelationship.php',
-    ];
-
-    public function test_the_library_files_load_one_another_by_an_absolute_path(): void
+    public function test_the_autoloader_declares_only_utils_up_front(): void
     {
-        $relative = [];
-        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(__DIR__ . '/../lib', FilesystemIterator::SKIP_DOTS));
+        $declared = json_decode($this->run_in_fresh_process(
+            'echo json_encode(array_values(array_filter([...get_declared_classes(), ...get_declared_interfaces()],'
+            . ' fn($c) => str_starts_with($c, "ActiveRecord\\\\"))));',
+        ), true, flags: JSON_THROW_ON_ERROR);
 
-        foreach ($files as $file) {
-            if ('php' === $file->getExtension()) {
-                foreach ($this->literal_includes((string) file_get_contents($file->getPathname())) as [$line, $path]) {
-                    $relative[] = $file->getFilename() . ":$line $path";
-                }
+        $this->assert_same(['ActiveRecord\\Utils'], $declared);
+    }
+
+    public function test_every_library_class_autoloads_from_its_own_file(): void
+    {
+        $wrong = [];
+
+        foreach ($this->library_files() as $path) {
+            $declared = $this->declarations((string) file_get_contents(__DIR__ . "/../lib/$path"));
+            $class = 'ActiveRecord\\' . $declared['classes'][0];
+
+            if (!class_exists($class) && !interface_exists($class) && !enum_exists($class)) {
+                $wrong[] = "$path: $class does not autoload";
+            } elseif (realpath((new ReflectionClass($class))->getFileName()) !== realpath(__DIR__ . "/../lib/$path")) {
+                $wrong[] = "$path: $class loads from " . (new ReflectionClass($class))->getFileName();
             }
         }
 
-        $this->assert_same([], $relative);
+        $this->assert_same([], $wrong);
     }
 
-    // The guard reads the code, not the comments: an include whose path starts with a string literal is relative
-    public function test_an_include_of_a_literal_path_is_found_and_one_of_an_absolute_path_is_not(): void
+    public function test_library_objects_and_statics_work_in_a_fresh_process(): void
     {
-        $code = "<?php\n// require_once 'Commented.php';\nrequire_once 'Relative.php';\nrequire_once(\"Relative.php\");\n"
-            . "require_once __DIR__ . '/Absolute.php';\ninclude \$path;\n";
+        $output = $this->run_in_fresh_process(<<<'PHP'
+            if (unserialize(serialize(new ActiveRecord\DateTime('2026-01-02 03:04:05'))) instanceof ActiveRecord\DateTime) { echo 'ok '; }
+            if (ActiveRecord\Serialization::$DATETIME_FORMAT !== '') { echo 'ok '; }
+            try { throw new ActiveRecord\RecordNotFound('x'); } catch (ActiveRecord\RecordNotFound $e) { echo 'ok '; }
+            if (((new stdClass()) instanceof ActiveRecord\BelongsTo) === false) { echo 'ok'; }
+            PHP);
 
-        $this->assert_same([[3, "'Relative.php'"], [4, '"Relative.php"']], $this->literal_includes($code));
+        $this->assert_same('ok ok ok ok', $output);
     }
 
     // The base dirs the guards below read are the ones composer.json maps to ActiveRecord\, so the two cannot drift apart
@@ -83,14 +86,6 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
         foreach ($this->library_files() as $path) {
             $declared = $this->declarations((string) file_get_contents(__DIR__ . "/../lib/$path"));
 
-            if (in_array($path, self::MULTI_CLASS_FILES, true)) {
-                if (count($declared['classes']) < 2) {
-                    $wrong[] = "$path: listed in MULTI_CLASS_FILES but declares " . count($declared['classes']) . ' class(es)';
-                }
-
-                continue;
-            }
-
             if ('ActiveRecord' !== $declared['namespace']) {
                 $wrong[] = "$path: namespace is " . var_export($declared['namespace'], true);
             }
@@ -107,8 +102,8 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_same([], $wrong);
     }
 
-    // Composer loads a class on demand, so a file that requires another one is a leftover of the manifest
-    public function test_no_library_file_requires_another(): void
+    // Composer loads a class on demand, so no file of lib/ requires or includes another one
+    public function test_no_library_file_requires_or_includes_another(): void
     {
         $requiring = [];
 
@@ -122,11 +117,7 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
             }
         }
 
-        $expected = self::REQUIRING_FILES;
-        sort($expected);
-        sort($requiring);
-
-        $this->assert_same($expected, $requiring);
+        $this->assert_same([], $requiring);
     }
 
     // The helper counts declared classes only: not a ::class constant, not an anonymous class, not a method
@@ -197,28 +188,24 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
     }
 
     /**
-     * The require and include statements of $code whose path starts with a string literal, by line.
-     *
-     * @return list<array{int, string}>
+     * Runs $code in a new PHP process that has loaded nothing but vendor/autoload.php, and returns its stdout.
      */
-    private function literal_includes(string $code): array
+    private function run_in_fresh_process(string $code): string
     {
-        $includes = [];
-        $tokens = array_values(array_filter(
-            token_get_all($code),
-            fn(array|string $token): bool => !is_array($token) || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true),
-        ));
+        $autoload = (string) realpath(__DIR__ . '/../vendor/autoload.php');
+        $process = proc_open([PHP_BINARY, '-d', 'pcov.enabled=0'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assert_true(is_resource($process));
 
-        foreach ($tokens as $i => $token) {
-            if (is_array($token) && in_array($token[0], [T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE], true)) {
-                $path = '(' === $tokens[$i + 1] ? $tokens[$i + 2] : $tokens[$i + 1];
+        fwrite($pipes[0], "<?php require '$autoload'; " . $code);
+        fclose($pipes[0]);
+        $stdout = (string) stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
 
-                if (is_array($path) && T_CONSTANT_ENCAPSED_STRING === $path[0]) {
-                    $includes[] = [$token[2], $path[1]];
-                }
-            }
-        }
+        $this->assert_same(0, proc_close($process), $stderr);
+        $this->assert_same('', $stderr);
 
-        return $includes;
+        return $stdout;
     }
 }

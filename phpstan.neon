@@ -9,5 +9,3 @@ parameters:
     paths:
         - lib
         - examples
-    bootstrapFiles:
-        - ActiveRecord.php

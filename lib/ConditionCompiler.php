@@ -181,7 +181,6 @@ final class ConditionCompiler
      */
     private function hash(string $name, mixed $value): array
     {
-        require_once __DIR__ . '/Expressions.php';
         $column = $this->reference($name);
         $value = is_array($value)
             ? array_map(fn(mixed $element): mixed => $this->value($column['column'], $element), $value)

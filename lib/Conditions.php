@@ -149,7 +149,6 @@ final class Conditions
         $bindings = array_values($bindings);
 
         if ([] !== array_filter($bindings, is_array(...))) {
-            require_once __DIR__ . '/Expressions.php';
             $expressions = new Expressions($this->table->connection(), $sql);
             $expressions->bind_values($bindings);
             $sql = $expressions->to_s();

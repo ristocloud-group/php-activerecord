@@ -609,7 +609,6 @@ abstract class AbstractRelationship implements InterfaceRelationship
     protected function to_positional_conditions(Connection $conn, array $conditions)
     {
         if (is_hash($conditions)) {
-            require_once __DIR__ . '/../Expressions.php';
             /** @var class-string<Model> $class */
             $class = $this->class_name;
             $aliases = $class::$alias_attribute;
