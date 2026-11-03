@@ -57,16 +57,22 @@ Gotchas that aren't obvious from the tooling:
   pass — design so nothing skips in the Docker environment.
 - **The PHPStan baseline (`phpstan-baseline.neon`) is frozen: new code must not
   add suppressions to it.** Achieve green by fixing the code.
+- After any `autoload` change in `composer.json`, run
+  `docker compose exec tests composer dump-autoload`: `vendor/` is mounted from
+  the host, so the container's autoloader goes stale otherwise.
 - CI (`.github/workflows/ci.yml`) runs the suite across a PHP × DB-version
   matrix. To test another PHP locally, rebuild with
   `docker compose build --build-arg PHP_VERSION=8.4`.
 
 ## Architecture (the map; read the files for specifics)
 
-Entry point `ActiveRecord.php` (repo root) is a **manual `require` manifest** of
-every `lib/*.php` — **there is no PSR-4 autoloader for the library itself**, so
-a new file under `lib/` must be added to `ActiveRecord.php` by hand. Everything
-lives in the `ActiveRecord\` namespace, roughly one class per file.
+The library loads through Composer PSR-4: `ActiveRecord\` maps to the six base
+dirs in `composer.json` (`lib/`, `lib/adapters/`, `lib/cache/`,
+`lib/exceptions/`, `lib/relationships/`, `lib/serializers/`), one class per
+file, and `LibraryLoadingTest` is the guard. A new class only needs a file named
+after it in the right base dir. A new adapter or cache backend also needs a case
+in `ConnectionAdapter` / `CacheBackend`. `lib/Utils.php` (the functions) is the
+only file in `autoload.files`. Everything lives in the `ActiveRecord\` namespace.
 
 The core flow: a user's **`Model`** subclass — configured via `static` arrays
 (`$has_many`, `$belongs_to`, `$validates_*`, `$before_save`/`$after_create`

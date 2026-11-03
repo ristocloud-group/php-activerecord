@@ -73,6 +73,8 @@ This fork is not published on Packagist. Install it with [Composer](https://getc
 }
 ```
 
+The library loads only through Composer's autoloader: `require 'vendor/autoload.php';`. It has no other entry point. To read the installed version, call `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`.
+
 Setup is very easy and straight-forward. There are essentially only two configuration points you must concern yourself with:
 
 1. Configuring your database connections.
