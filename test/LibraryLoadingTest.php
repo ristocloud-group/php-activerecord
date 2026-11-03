@@ -10,11 +10,11 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
     private const array BASE_DIRS = ['', 'adapters', 'cache', 'exceptions', 'relationships', 'serializers'];
 
     // The files that still declare more than one class; a split removes its entry
-    private const array MULTI_CLASS_FILES = ['Inflector.php', 'Validations.php'];
+    private const array MULTI_CLASS_FILES = [];
 
     // The files that still require or include another one; a split removes its entry
     private const array REQUIRING_FILES = [
-        'Cache.php', 'ConditionCompiler.php', 'Conditions.php', 'Connection.php', 'Model.php', 'SQLBuilder.php', 'relationships/AbstractRelationship.php',
+        'Cache.php', 'ConditionCompiler.php', 'Conditions.php', 'Connection.php', 'SQLBuilder.php', 'relationships/AbstractRelationship.php',
     ];
 
     public function test_the_library_files_load_one_another_by_an_absolute_path(): void
