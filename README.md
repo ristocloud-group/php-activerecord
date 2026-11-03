@@ -73,7 +73,7 @@ This fork is not published on Packagist. Install it with [Composer](https://getc
 }
 ```
 
-The library loads only through Composer's autoloader: `require 'vendor/autoload.php';`. It has no other entry point. To read the installed version, call `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`.
+The library loads only through Composer's autoloader: `require 'vendor/autoload.php';`. It has no other entry point. Composer 2.7.7 or newer gives a clean optimized dump (`composer dump-autoload --optimize`); older Composer 2 prints PSR-4 "does not comply … Skipping" warnings for the classes in `lib/`'s subfolders but still loads every class. To read the installed version, call `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`.
 
 Setup is very easy and straight-forward. There are essentially only two configuration points you must concern yourself with:
 

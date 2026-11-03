@@ -1,8 +1,7 @@
 <?php
 
 $finder = PhpCsFixer\Finder::create()
-    ->in([__DIR__ . '/lib', __DIR__ . '/test', __DIR__ . '/examples'])
-    ->append([__DIR__ . '/ActiveRecord.php']);
+    ->in([__DIR__ . '/lib', __DIR__ . '/test', __DIR__ . '/examples']);
 
 return (new PhpCsFixer\Config())
     ->setRiskyAllowed(false)

@@ -81,9 +81,11 @@ attribute access via `__call`/`__callStatic`/`__get`/`__set` — delegates to it
 **`Table`** (one per class, statically cached; turns finder options
 `conditions`/`order`/`limit`/`include`/… into SQL). **Schema is introspected
 from the live database at runtime and cached — models never declare columns.**
-`Table` runs through **`Connection`** + a `lib/adapters/*Adapter.php` (a thin PDO
-wrapper; adapters supply quoting, `LIMIT` syntax, and introspection queries).
-Relationships and eager-loading live in `lib/Relationship.php` — **`has_many …
+`Table` runs through **`Connection`** + a `lib/adapters/*Adapter.php` adapter (a thin PDO
+wrapper; adapters supply quoting, `LIMIT` syntax, and introspection queries;
+`ConnectionAdapter` there is the enum that maps a protocol to its adapter class).
+Relationships and eager-loading live in `lib/relationships/` (`AbstractRelationship`,
+`HasMany`, `BelongsTo`, … one class per file) — **`has_many …
 through` is a historical bug hotspot** (see the GitHub release notes and open issues).
 The remaining pieces are self-describing — read the file: `SQLBuilder`,
 `Validations` (+`Errors`), `CallBack`, `Serialization`, `Cache`

@@ -464,8 +464,8 @@ class ActiveRecordTest extends DatabaseTest
 
         try {
             $book->save();
-            $this->fail('expected exception ActiveRecord\ReadonlyException');
-        } catch (ActiveRecord\ReadonlyException $e) {
+            $this->fail('expected exception ActiveRecord\ReadOnlyException');
+        } catch (ActiveRecord\ReadOnlyException $e) {
         }
 
         $book->name = 'some new name';

@@ -17,32 +17,85 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
 
     public function test_every_library_class_autoloads_from_its_own_file(): void
     {
-        $wrong = [];
+        $files = [];
 
         foreach ($this->library_files() as $path) {
             $declared = $this->declarations((string) file_get_contents(__DIR__ . "/../lib/$path"));
-            $class = 'ActiveRecord\\' . $declared['classes'][0];
 
-            if (!class_exists($class) && !interface_exists($class) && !enum_exists($class)) {
-                $wrong[] = "$path: $class does not autoload";
-            } elseif (realpath((new ReflectionClass($class))->getFileName()) !== realpath(__DIR__ . "/../lib/$path")) {
-                $wrong[] = "$path: $class loads from " . (new ReflectionClass($class))->getFileName();
+            if ([] === $declared['classes']) {
+                $this->fail("lib/$path declares no class");
             }
+
+            $files['ActiveRecord\\' . $declared['classes'][0]] = (string) realpath(__DIR__ . "/../lib/$path");
         }
 
-        $this->assert_same([], $wrong);
+        $output = $this->run_in_fresh_process(
+            '$wrong = [];'
+            . ' foreach (' . var_export($files, true) . ' as $class => $file) {'
+            . ' if (!class_exists($class) && !interface_exists($class) && !enum_exists($class)) { $wrong[] = "$class does not autoload"; }'
+            . ' elseif (realpath((new ReflectionClass($class))->getFileName()) !== $file) { $wrong[] = "$class loads from " . (new ReflectionClass($class))->getFileName(); }'
+            . ' }'
+            . ' echo json_encode($wrong);',
+        );
+
+        $this->assert_same([], json_decode($output, true, flags: JSON_THROW_ON_ERROR));
     }
 
     public function test_library_objects_and_statics_work_in_a_fresh_process(): void
     {
-        $output = $this->run_in_fresh_process(<<<'PHP'
-            if (unserialize(serialize(new ActiveRecord\DateTime('2026-01-02 03:04:05'))) instanceof ActiveRecord\DateTime) { echo 'ok '; }
-            if (ActiveRecord\Serialization::$DATETIME_FORMAT !== '') { echo 'ok '; }
-            try { throw new ActiveRecord\RecordNotFound('x'); } catch (ActiveRecord\RecordNotFound $e) { echo 'ok '; }
-            if (((new stdClass()) instanceof ActiveRecord\BelongsTo) === false) { echo 'ok'; }
-            PHP);
+        $serialized = serialize(new ActiveRecord\DateTime('2026-01-02 03:04:05'));
 
-        $this->assert_same('ok ok ok ok', $output);
+        $output = $this->run_in_fresh_process(
+            '$serialized = ' . var_export($serialized, true) . ';'
+            . <<<'PHP'
+
+                $loaded = fn(string $class): bool => class_exists($class, false);
+                // unserialize() loads a class that is not loaded yet
+                if (!$loaded('ActiveRecord\DateTime') && unserialize($serialized) instanceof ActiveRecord\DateTime) { echo 'ok '; }
+                // a static property read loads its class
+                if (!$loaded('ActiveRecord\Serialization') && ActiveRecord\Serialization::$DATETIME_FORMAT !== '') { echo 'ok '; }
+                // catch on a class that is not loaded matches nothing and does not load it
+                try { throw new \Exception('x'); } catch (ActiveRecord\RecordNotFound $e) { echo 'wrong '; } catch (\Exception $e) { echo 'ok '; }
+                if (!$loaded('ActiveRecord\RecordNotFound')) { echo 'ok '; }
+                // instanceof on a class that is not loaded is false and does not load it
+                if (((new stdClass()) instanceof ActiveRecord\BelongsTo) === false && !$loaded('ActiveRecord\BelongsTo')) { echo 'ok'; }
+                PHP,
+        );
+
+        $this->assert_same('ok ok ok ok ok', $output);
+    }
+
+    // A wrong-case name worked while every class was declared at boot; on a case-sensitive filesystem it now fails on first use
+    public function test_library_class_names_are_written_in_their_declared_case(): void
+    {
+        $classes = $this->library_class_names();
+        $offenders = [];
+
+        foreach (['lib', 'test', 'examples'] as $dir) {
+            $root = (string) realpath(__DIR__ . "/../$dir");
+
+            foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)) as $file) {
+                if ('php' === $file->getExtension()) {
+                    foreach ($this->wrong_case_names((string) file_get_contents($file->getPathname()), $classes) as $offender) {
+                        $offenders[] = "$dir/" . substr($file->getPathname(), strlen($root) + 1) . ":$offender";
+                    }
+                }
+            }
+        }
+
+        sort($offenders);
+        $this->assert_same([], $offenders);
+    }
+
+    public function test_wrong_case_names_finds_only_a_library_class_in_the_wrong_case(): void
+    {
+        $code = "<?php\nuse ActiveRecord\\Datetime;\n\$a = new ActiveRecord\\DateTime();\n\$b = new \\ActiveRecord\\readonlyexception();\n"
+            . "\$c = new ActiveRecord\\NotALibraryClass(); \$d = ActiveRecord\\Utils::class; \$e = new Other\\datetime();\n";
+
+        $this->assert_same(
+            ['2: ActiveRecord\\Datetime', '4: \\ActiveRecord\\readonlyexception'],
+            $this->wrong_case_names($code, ['DateTime', 'ReadOnlyException', 'Utils']),
+        );
     }
 
     // The base dirs the guards below read are the ones composer.json maps to ActiveRecord\, so the two cannot drift apart
@@ -147,6 +200,47 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
         sort($paths);
 
         return $paths;
+    }
+
+    /**
+     * The class names declared by the files of lib/ (without the ActiveRecord\\ prefix).
+     *
+     * @return list<string>
+     */
+    private function library_class_names(): array
+    {
+        $names = [];
+
+        foreach ($this->library_files() as $path) {
+            $names = [...$names, ...$this->declarations((string) file_get_contents(__DIR__ . "/../lib/$path"))['classes']];
+        }
+
+        return $names;
+    }
+
+    /**
+     * The names in $code, as "line: name", that start with ActiveRecord\\ and spell a library class in a case other than
+     * the declared one.
+     *
+     * @param list<string> $classes The library class names, in their declared case
+     * @return list<string>
+     */
+    private function wrong_case_names(string $code, array $classes): array
+    {
+        $offenders = [];
+
+        foreach (token_get_all($code) as $token) {
+            if (is_array($token) && in_array($token[0], [T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+                && 1 === preg_match('/^\\\\?ActiveRecord\\\\(.+)$/', $token[1], $m)) {
+                foreach ($classes as $class) {
+                    if (0 === strcasecmp($class, $m[1]) && $class !== $m[1]) {
+                        $offenders[] = "$token[2]: $token[1]";
+                    }
+                }
+            }
+        }
+
+        return $offenders;
     }
 
     /**

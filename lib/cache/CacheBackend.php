@@ -19,7 +19,7 @@ enum CacheBackend: string
     case Redis = 'Redis';
 
     /**
-     * @return class-string<mixed>
+     * @return class-string<File|Memcache|Redis>
      */
     public function class_name(): string
     {

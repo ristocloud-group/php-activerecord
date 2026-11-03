@@ -220,8 +220,8 @@ class RelationshipTest extends DatabaseTest
 
         try {
             $event->venue->save();
-            $this->fail('expected exception ActiveRecord\ReadonlyException');
-        } catch (ActiveRecord\ReadonlyException $e) {
+            $this->fail('expected exception ActiveRecord\ReadOnlyException');
+        } catch (ActiveRecord\ReadOnlyException $e) {
         }
 
         $event->venue->name = 'new name';
@@ -430,8 +430,8 @@ class RelationshipTest extends DatabaseTest
 
         try {
             $venue->events[0]->save();
-            $this->fail('expected exception ActiveRecord\ReadonlyException');
-        } catch (ActiveRecord\ReadonlyException $e) {
+            $this->fail('expected exception ActiveRecord\ReadOnlyException');
+        } catch (ActiveRecord\ReadOnlyException $e) {
         }
 
         $venue->events[0]->description = 'new desc';
@@ -714,8 +714,8 @@ class RelationshipTest extends DatabaseTest
 
         try {
             $employee->position->save();
-            $this->fail('expected exception ActiveRecord\ReadonlyException');
-        } catch (ActiveRecord\ReadonlyException $e) {
+            $this->fail('expected exception ActiveRecord\ReadOnlyException');
+        } catch (ActiveRecord\ReadOnlyException $e) {
         }
 
         $employee->position->title = 'new title';

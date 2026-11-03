@@ -78,7 +78,7 @@ All of it was verified on 2026-11-03.
   - its uses of already-lazy classes (`instanceof BelongsTo/HasOne`, `ReflectionProperty(AbstractRelationship::class)`, `Serialization::$DATETIME_FORMAT`) stay correct.
 
   The monolith sets `optimize-autoloader: true`, which builds the classmap from PSR-4-compliant files only. It is still on `zamzar/php-activerecord ^1.7`.
-- **Composer 2.10 accepts nested base dirs.** In a throwaway project, `lib/` and `lib/adapters/` were both declared as base dirs for one prefix. `composer dump-autoload --optimize --strict-psr` exited 0 and the class in `lib/adapters/` autoloaded, both optimized and not.
+- **Composer 2.10 accepts nested base dirs.** In a throwaway project, `lib/` and `lib/adapters/` were both declared as base dirs for one prefix. `composer dump-autoload --optimize --strict-psr` exited 0 and the class in `lib/adapters/` autoloaded, both optimized and not. Composer before 2.7.7 (composer/class-map-generator before 1.3.0) reports false PSR-4 violations for the nested dirs ("does not comply with psr-4 autoloading standard. Skipping." warnings, and `--strict-psr` exits 1) while still mapping every class.
 - **`--strict-psr` does not catch a second class in a file.** The command exits 0 and the extra class is left out of the classmap. A CI step running it would therefore not guard goal 2, and the guard is the token-based test in §6.1.
 
 ## 4. Design
