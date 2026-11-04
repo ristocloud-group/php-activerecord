@@ -1,0 +1,56 @@
+name: Packagist
+
+# Tells Packagist to re-read the repository when a GitHub release is published,
+# so the new version shows up on
+# https://packagist.org/packages/ristocloud-group/php-activerecord without
+# waiting for a manual update. A push to master does not trigger it: dev-master
+# on Packagist moves on the next release.
+#
+# Needs two repository secrets (Settings → Secrets and variables → Actions):
+#   PACKAGIST_API_USERNAME — a Packagist maintainer of the package
+#   PACKAGIST_API_TOKEN    — that user's API token (packagist.org → Profile → Show API Token)
+#
+# Run it by hand (Actions → Packagist → Run workflow) to pick up a release
+# published before this workflow existed.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# The job only calls Packagist: it needs no access to the repository.
+permissions: {}
+
+concurrency:
+  group: packagist
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger the Packagist update
+        env:
+          PACKAGIST_API_USERNAME: ${{ secrets.PACKAGIST_API_USERNAME }}
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if [ -z "$PACKAGIST_API_USERNAME" ] || [ -z "$PACKAGIST_API_TOKEN" ]; then
+            echo "::error::Set the PACKAGIST_API_USERNAME and PACKAGIST_API_TOKEN repository secrets."
+            exit 1
+          fi
+
+          response=$(curl --silent --show-error --fail-with-body \
+            --retry 3 --retry-all-errors --max-time 30 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header "Authorization: Bearer ${PACKAGIST_API_USERNAME}:${PACKAGIST_API_TOKEN}" \
+            --data "{\"repository\":\"${REPOSITORY_URL}\"}" \
+            'https://packagist.org/api/update-package')
+          echo "$response"
+
+          if ! echo "$response" | jq -e '.status == "success"' > /dev/null; then
+            echo "::error::Packagist did not accept the update request."
+            exit 1
+          fi
