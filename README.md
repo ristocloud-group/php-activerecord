@@ -60,18 +60,14 @@ These are policy minimums; `composer.json` carries no database-version constrain
 
 ## Installation ##
 
-This fork is not published on Packagist. Install it with [Composer](https://getcomposer.org/) from its Git repository — add a VCS repository to your `composer.json` and require the package by its name (`ristocloud-group/php-activerecord`):
+Install it with [Composer](https://getcomposer.org/) from [Packagist](https://packagist.org/packages/ristocloud-group/php-activerecord):
 
-```json
-{
-    "repositories": [
-        { "type": "vcs", "url": "https://github.com/ristocloud-group/php-activerecord" }
-    ],
-    "require": {
-        "ristocloud-group/php-activerecord": "dev-master"
-    }
-}
+```sh
+composer require ristocloud-group/php-activerecord
 ```
+
+> [!IMPORTANT]
+> Install the package from Packagist, not straight from this GitHub repository. If your `composer.json` still lists this repository under `repositories` (a `vcs` entry pointing at `https://github.com/ristocloud-group/php-activerecord`), remove that entry, require a released version instead of `dev-master`, and run `composer update ristocloud-group/php-activerecord`.
 
 The library loads only through Composer's autoloader: `require 'vendor/autoload.php';`. It has no other entry point. Composer 2.7.7 or newer gives a clean optimized dump (`composer dump-autoload --optimize`); older Composer 2 prints PSR-4 "does not comply … Skipping" warnings for the classes in `lib/`'s subfolders but still loads every class. To read the installed version, call `\Composer\InstalledVersions::getPrettyVersion('ristocloud-group/php-activerecord')`.
 
