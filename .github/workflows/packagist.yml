@@ -1,20 +1,21 @@
 name: Packagist
 
-# Tells Packagist to re-read the repository, so a new tag (a release) or a push
-# to master shows up on https://packagist.org/packages/ristocloud-group/php-activerecord
-# without waiting for a manual update.
+# Tells Packagist to re-read the repository when a GitHub release is published,
+# so the new version shows up on
+# https://packagist.org/packages/ristocloud-group/php-activerecord without
+# waiting for a manual update. A push to master does not trigger it: dev-master
+# on Packagist moves on the next release.
 #
 # Needs two repository secrets (Settings → Secrets and variables → Actions):
 #   PACKAGIST_API_USERNAME — a Packagist maintainer of the package
 #   PACKAGIST_API_TOKEN    — that user's API token (packagist.org → Profile → Show API Token)
 #
-# Run it by hand (Actions → Packagist → Run workflow) to pick up a tag that was
-# pushed before this workflow existed.
+# Run it by hand (Actions → Packagist → Run workflow) to pick up a release
+# published before this workflow existed.
 
 on:
-  push:
-    branches: [master]
-    tags: ['*']
+  release:
+    types: [published]
   workflow_dispatch:
 
 # The job only calls Packagist: it needs no access to the repository.
