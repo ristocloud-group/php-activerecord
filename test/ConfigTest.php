@@ -89,6 +89,20 @@ class ConfigTest extends SnakeCase_PHPUnit_Framework_TestCase
         $this->assert_false($this->config->get_strict_mass_assignment());
     }
 
+    public function test_tinyint_as_boolean_defaults_to_true()
+    {
+        $this->assert_true($this->config->get_tinyint_as_boolean());
+    }
+
+    public function test_set_tinyint_as_boolean()
+    {
+        $this->config->set_tinyint_as_boolean(false);
+        $this->assert_false($this->config->get_tinyint_as_boolean());
+
+        $this->config->set_tinyint_as_boolean();
+        $this->assert_true($this->config->get_tinyint_as_boolean());
+    }
+
     public function test_initialize_closure()
     {
         $test = $this;

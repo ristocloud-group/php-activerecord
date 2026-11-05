@@ -69,6 +69,11 @@ class Config extends Singleton
     private $strict_mass_assignment = false;
 
     /**
+     * Whether MySQL/MariaDB tinyint(1) columns are typed boolean.
+     */
+    private bool $tinyint_as_boolean = true;
+
+    /**
      * Allows config initialization using a closure.
      *
      * This method is just syntatic sugar.
@@ -238,6 +243,37 @@ class Config extends Singleton
     public function get_strict_mass_assignment(): bool
     {
         return $this->strict_mass_assignment;
+    }
+
+    /**
+     * Turns the MySQL/MariaDB tinyint(1) → boolean convention on or off (on by default).
+     *
+     * When on, a tinyint(1) column that is not AUTO_INCREMENT is a {@link Column::BOOLEAN}:
+     * its values and default read as PHP bools. When off, it is a {@link Column::INTEGER},
+     * as in 1.7.1, for legacy schemas that store small integers (4, -1, …) in tinyint(1).
+     * Postgres and SQLite columns, and the 'boolean' → tinyint(1) DDL mapping, do not change.
+     *
+     * Column metadata is read once per table and kept for the rest of the process, so set
+     * this in Config::initialize(), before the first model is used. The schema cache
+     * ({@link set_cache()}) keeps the two settings under separate keys.
+     *
+     * <code>
+     * ActiveRecord\Config::initialize(function($cfg) {
+     *   $cfg->set_tinyint_as_boolean(false);
+     * });
+     * </code>
+     */
+    public function set_tinyint_as_boolean(bool $enabled = true): void
+    {
+        $this->tinyint_as_boolean = $enabled;
+    }
+
+    /**
+     * Returns whether MySQL/MariaDB tinyint(1) columns are typed boolean.
+     */
+    public function get_tinyint_as_boolean(): bool
+    {
+        return $this->tinyint_as_boolean;
     }
 
     /**

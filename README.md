@@ -166,6 +166,21 @@ ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
 });
 ```
 
+### Optional: tinyint(1) as an integer (MySQL/MariaDB) ###
+
+On MySQL and MariaDB a `tinyint(1)` column is a boolean by convention (the expansion of MySQL's own `BOOLEAN`): its
+values and default read as PHP `true`/`false`. An `AUTO_INCREMENT` `tinyint(1)` and every wider `tinyint` stay
+integers. A legacy schema that stores small integers (`4`, `-1`, …) in `tinyint(1)` can turn the convention off: the
+column is then an integer, as in 1.7.1, so its values are read, written back and serialised as they are. It is global
+and on by default. Column types are read once per table, so set it in `Config::initialize()`, before the first model
+is used; the schema cache keeps the two settings apart.
+
+```php
+ActiveRecord\Config::initialize(function (ActiveRecord\Config $cfg) {
+    $cfg->set_tinyint_as_boolean(false);
+});
+```
+
 ### Optional: caching the schema ###
 
 php-activerecord introspects each table's schema (columns, types, primary key) from the database. Within a single request this is kept in memory, but PHP's shared-nothing model means it is re-introspected on every request. To persist it across requests, configure an external cache. Three backends are bundled:
@@ -914,7 +929,7 @@ php examples/simple/simple.php
 | [`validations/`](examples/validations/) | `$validates_*` macros, a custom `validate()`, the `Errors` object |
 | [`relationships/`](examples/relationships/) | `belongs_to` (incl. `class_name`/`foreign_key` options), `has_many`, `has_one`, `has_many … through`, eager `include`, `create_*` builders, composite-key `has_many` with declared `conditions`, an `OR` in declared `conditions` stays scoped to the owner, a `has_many` keyed by a declared `primary_key` (lazy load, eager `include` and `create_*` agree, a declared `limit` applies per owner), a `has_one` with a declared `offset` (the child at that offset, lazy and eager) |
 | [`callbacks/`](examples/callbacks/) | Lifecycle hooks and halting a save |
-| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking, integers beyond `PHP_INT_MAX`, columns whose names are not attribute names (`"first name"` is `first_name`) |
+| [`attributes/`](examples/attributes/) | Custom `get_*`/`set_*`, `$alias_attribute`, `$attr_accessible` (and strict mass assignment), `$delegate`, dirty tracking, `tinyint(1)` as an integer (`Config::set_tinyint_as_boolean(false)`, MySQL), integers beyond `PHP_INT_MAX`, columns whose names are not attribute names (`"first name"` is `first_name`) |
 | [`serialization/`](examples/serialization/) | `to_json` / `to_xml` / `to_array` with `only`/`except`/`methods`/`include` |
 | [`upsert/`](examples/upsert/) | `Model::upsert()` — bulk insert-or-update with `unique_by`/`update` and managed timestamps |
 | [`query_builder/`](examples/query_builder/) | The fluent query builder: `new_query()` and static forwarding, the where family (operators, an `$alias_attribute`, a hash with a `null` in a list, `where_like`, closure groups, `when`), joins (`join` with a `JoinClause` closure, `left_join`, `joins` / `left_joins` by relationship), `with` (eager loading in two statements), the read terminals, exact aggregates (`avg` is a string), `insert` / `update` / `delete` with their timestamps and `without_timestamps()`, the refused empty `where`, `to_sql` / `to_raw_sql` |

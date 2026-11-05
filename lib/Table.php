@@ -660,8 +660,12 @@ class Table
 
         $table_name = $this->get_fully_qualified_table_name($quote_name);
         $conn = $this->connection();
-        // scoped by connection identity: same-named tables on different databases differ (#45)
-        $this->columns = Cache::get('get_meta_data-' . $conn->cache_identity() . "-$table_name", function () use ($conn, $table_name) {
+        // scoped by connection identity: same-named tables on different databases differ (#45);
+        // the columns introspected with the tinyint(1) convention off are kept apart (#195),
+        // and the default key is unchanged
+        $key = 'get_meta_data-' . $conn->cache_identity() . "-$table_name"
+            . (Config::instance()->get_tinyint_as_boolean() ? '' : '-tinyint-int');
+        $this->columns = Cache::get($key, function () use ($conn, $table_name) {
             return $conn->columns($table_name);
         });
 
