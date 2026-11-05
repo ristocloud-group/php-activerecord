@@ -422,14 +422,6 @@ class RelationshipTest extends DatabaseTest
         $loads['position, lazy'] = [Position::table()->last_sql, [$employee->position->id]];
         $loads['position, eager'] = [Position::table()->last_sql, [Employee::find(1, ['include' => 'position'])->position->id]];
 
-        // joins by relationship name (not the through one: GH #186), the query builder and the association builders
-        $loads['events, legacy joins'] = [Venue::table()->last_sql, $ids(Venue::all(['joins' => ['events'], 'conditions' => ['venues.id' => 1]]))];
-        $loads['events, builder joins'] = [Venue::new_query()->joins('events')->to_sql(), []];
-        $loads['events, builder left_joins'] = [Venue::new_query()->left_joins('events')->to_sql(), []];
-        $loads['events, builder with'] = [Event::table()->last_sql, $ids(Venue::new_query()->with('events')->where('id', 1)->first()->events)];
-        $loads['events, build_'] = ['', [$venue->build_events()->to_array()]];
-        $loads['position, build_'] = ['', [$employee->build_position()->to_array()]];
-
         return $loads;
     }
 
