@@ -8,7 +8,7 @@ namespace ActiveRecord;
  *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
  *     conditions?: mixed, select?: string, readonly?: bool,
  *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
- *     through?: string, source?: string
+ *     through?: string, source?: string, constraints?: mixed
  * }
  * @phpstan-type BelongsToRelationship array{
  *     0: string, class_name?: string, class?: string, namespace?: string,

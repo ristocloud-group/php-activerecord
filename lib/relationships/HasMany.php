@@ -59,11 +59,13 @@ class HasMany extends AbstractRelationship
      * <li><b>group:</b> GROUP BY clause</li>
      * <li><b>order:</b> ORDER BY clause</li>
      * <li><b>through:</b> name of a model</li>
+     * <li><b>constraints:</b> accepted and kept with the declaration for the application's own use
+     * (e.g. its ON DELETE rules); the library never reads it and it never reaches the SQL (#194)</li>
      * </ul>
      *
      * @var list<string>
      */
-    protected static $valid_association_options = ['primary_key', 'order', 'group', 'having', 'limit', 'offset', 'through', 'source'];
+    protected static $valid_association_options = ['primary_key', 'order', 'group', 'having', 'limit', 'offset', 'through', 'source', 'constraints'];
 
     /** @var list<string>|null */
     protected $primary_key;
