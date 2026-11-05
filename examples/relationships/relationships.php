@@ -73,18 +73,6 @@ try {
     out('unsupported belongs_to option: ' . $e->getMessage());
 }
 
-// has_many and has_one accept a 'constraints' key (#194): the library keeps it with
-// the declaration for the application's own use (here its ON DELETE rules, which a
-// base model could read from static::$has_many in delete()) and never puts it in
-// the SQL. belongs_to still rejects it.
-class AuthorWithConstraints extends ActiveRecord\Model
-{
-    public static $table_name = 'authors';
-    public static $has_many = [['posts', 'foreign_key' => 'author_id', 'constraints' => ['ON_DELETE' => 'CASCADE']]];
-}
-
-out('has_many with constraints: ' . count(AuthorWithConstraints::find($ada->id)->posts) . ' posts');
-
 // has_many
 out('post count: ' . count($ada->posts));
 

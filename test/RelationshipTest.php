@@ -396,65 +396,9 @@ class RelationshipTest extends DatabaseTest
 
         $this->assert_not_null($caught, 'An expected RelationshipException has not been raised.');
         $this->assert_same(
-            "Unknown option 'bogus' for relationship 'events'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace, primary_key, order, group, having, limit, offset, through, source, constraints.",
+            "Unknown option 'bogus' for relationship 'events'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace, primary_key, order, group, having, limit, offset, through, source.",
             $caught->getMessage()
         );
-    }
-
-    /**
-     * Loads Venue's events (has_many), hosts (has_many through events) and
-     * Employee's position (has_one), lazily and eagerly.
-     *
-     * @return array<string, array{0: string, 1: list<mixed>}> each load's SQL and the ids it found
-     */
-    private function load_has_many_and_has_one(): array
-    {
-        $ids = fn(array $records): array => array_map(fn($record) => $record->id, $records);
-        $loads = [];
-
-        $venue = Venue::find(1);
-        $loads['events, lazy'] = [Event::table()->last_sql, $ids($venue->events)];
-        $loads['hosts, lazy'] = [Host::table()->last_sql, $ids($venue->hosts)];
-        $loads['events, eager'] = [Event::table()->last_sql, $ids(Venue::find(1, ['include' => 'events'])->events)];
-        $loads['hosts, eager'] = [Host::table()->last_sql, $ids(Venue::find(1, ['include' => 'hosts'])->hosts)];
-
-        $employee = Employee::find(1);
-        $loads['position, lazy'] = [Position::table()->last_sql, [$employee->position->id]];
-        $loads['position, eager'] = [Position::table()->last_sql, [Employee::find(1, ['include' => 'position'])->position->id]];
-
-        return $loads;
-    }
-
-    public function test_has_many_and_has_one_accept_constraints_and_keep_it_out_of_the_sql()
-    {
-        // GH #194: applications keep their own ON DELETE rules on the declaration;
-        // the library accepts the key and never uses it
-        $plain = $this->load_has_many_and_has_one();
-        $this->assert_not_empty($plain['events, lazy'][1]);
-        $this->assert_not_empty($plain['hosts, lazy'][1]);
-
-        Venue::$has_many[0]['constraints'] = ['ON_DELETE' => 'CASCADE'];
-        Venue::$has_many[1]['constraints'] = ['ON_DELETE' => 'RESTRICT'];
-        Employee::$has_one[0]['constraints'] = ['ON_DELETE' => 'CASCADE'];
-        ActiveRecord\Table::clear_cache();
-
-        $this->assert_same($plain, $this->load_has_many_and_has_one());
-    }
-
-    public function test_belongs_to_still_rejects_constraints()
-    {
-        // GH #194 widens has_many/has_one only
-        Event::$belongs_to[0]['constraints'] = ['ON_DELETE' => 'CASCADE'];
-        $caught = null;
-
-        try {
-            Event::first();
-        } catch (ActiveRecord\RelationshipException $e) {
-            $caught = $e;
-        }
-
-        $this->assert_not_null($caught, 'An expected RelationshipException has not been raised.');
-        $this->assert_string_starts_with("Unknown option 'constraints' for relationship 'venue'.", $caught->getMessage());
     }
 
     public function test_has_many_with_explicit_class_name()
