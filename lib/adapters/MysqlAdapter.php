@@ -97,7 +97,9 @@ class MysqlAdapter extends Connection
         // tinyint(1): a counter is never a boolean (#164). (MySQL 8.0.19+ drops
         // display widths from SHOW COLUMNS except for tinyint(1), which is
         // preserved precisely because of this convention; MariaDB reports all widths.)
-        if ('tinyint' === $c->raw_type && 1 === $c->length && !$c->auto_increment) {
+        // Config::set_tinyint_as_boolean(false) turns the convention off (#195).
+        if ('tinyint' === $c->raw_type && 1 === $c->length && !$c->auto_increment
+            && Config::instance()->get_tinyint_as_boolean()) {
             $c->type = Column::BOOLEAN;
         }
 

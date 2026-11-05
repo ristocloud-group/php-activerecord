@@ -8,6 +8,12 @@ class MysqlTinyCounter extends ActiveRecord\Model
     public static $table_name = 'tiny_counters';
 }
 
+// a model on the tiny_numbers table the GH #195 tests create: tinyint(1) columns holding small integers
+class MysqlTinyNumber extends ActiveRecord\Model
+{
+    public static $table_name = 'tiny_numbers';
+}
+
 class MysqlAdapterTest extends AdapterTest
 {
     public function set_up($connection_name = null)
@@ -129,6 +135,130 @@ class MysqlAdapterTest extends AdapterTest
             $this->assert_same(Column::BOOLEAN, $flag->type);
         } finally {
             $this->conn->query('DROP TABLE tiny_flag_keys');
+        }
+    }
+
+    /**
+     * Runs $test with Config::set_tinyint_as_boolean($enabled) on a fresh Table cache,
+     * then restores the option and clears the cache again (GH #195).
+     */
+    private function with_tinyint_as_boolean(bool $enabled, Closure $test): void
+    {
+        $config = ActiveRecord\Config::instance();
+        $original = $config->get_tinyint_as_boolean();
+        $config->set_tinyint_as_boolean($enabled);
+        ActiveRecord\Table::clear_cache();
+
+        try {
+            $test();
+        } finally {
+            $config->set_tinyint_as_boolean($original);
+            ActiveRecord\Table::clear_cache();
+        }
+    }
+
+    public function test_tinyint1_stays_integer_when_tinyint_as_boolean_is_off()
+    {
+        // GH #195: a legacy schema stores small integers in tinyint(1); with the option
+        // off the column is an INTEGER, as in 1.7.1, and so are its defaults
+        $this->with_tinyint_as_boolean(false, function () {
+            $columns = $this->conn->columns('venues');
+
+            $this->assert_same('tinyint', $columns['is_available']->raw_type);
+            $this->assert_same(Column::INTEGER, $columns['is_available']->type);
+            $this->assert_same(Column::INTEGER, $columns['is_retired']->type);
+            $this->assert_same(1, $columns['is_available']->default);
+            $this->assert_same(0, $columns['is_retired']->default);
+            $this->assert_same(Column::INTEGER, $columns['tier']->type);
+        });
+    }
+
+    public function test_tinyint1_keeps_small_integers_when_tinyint_as_boolean_is_off()
+    {
+        // GH #195: with the convention on, 4 and -1 read as true and write back as 1;
+        // with it off they survive a read, a write and serialisation as integers
+        $raw = fn(): array => array_map(
+            fn(array $row) => $row['id'] . ':' . $row['stato'] . ':' . $row['giorno'],
+            $this->conn->query('SELECT id, stato, giorno FROM tiny_numbers ORDER BY id')->fetchAll()
+        );
+
+        $this->conn->query('DROP TABLE IF EXISTS tiny_numbers');
+        $this->conn->query('CREATE TABLE tiny_numbers (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, stato TINYINT(1) NOT NULL DEFAULT 4, giorno TINYINT(1))');
+
+        try {
+            $this->with_tinyint_as_boolean(false, function () use ($raw) {
+                $this->assert_same(4, (new MysqlTinyNumber())->stato);
+
+                $created = MysqlTinyNumber::create(['stato' => -1, 'giorno' => 30]);
+                $this->assert_same(['1:-1:30'], $raw());
+
+                $found = MysqlTinyNumber::find($created->id);
+                $this->assert_same(-1, $found->stato);
+                $this->assert_same(30, $found->giorno);
+
+                $found->stato = 4;
+                $this->assert_true($found->save());
+                $this->assert_same(['1:4:30'], $raw());
+
+                $found = MysqlTinyNumber::find($created->id);
+                $this->assert_same(['id' => 1, 'stato' => 4, 'giorno' => 30], $found->to_array());
+                $this->assert_same('{"id":1,"stato":4,"giorno":30}', $found->to_json());
+            });
+
+            // the default convention reads the same row as booleans
+            $this->with_tinyint_as_boolean(true, function () {
+                $found = MysqlTinyNumber::find(1);
+                $this->assert_same(true, $found->stato);
+                $this->assert_same(true, $found->giorno);
+            });
+        } finally {
+            $this->conn->query('DROP TABLE tiny_numbers');
+        }
+    }
+
+    public function test_auto_increment_tinyint1_and_wider_tinyint_stay_integer_either_way()
+    {
+        // GH #195: the option changes only the plain tinyint(1); an AUTO_INCREMENT
+        // tinyint(1) (GH #164) and a tinyint(4) are INTEGER with it on or off
+        $this->conn->query('DROP TABLE IF EXISTS tiny_widths');
+        $this->conn->query('CREATE TABLE tiny_widths (id TINYINT(1) NOT NULL AUTO_INCREMENT PRIMARY KEY, flag TINYINT(1), wide TINYINT(4))');
+
+        try {
+            foreach ([[true, Column::BOOLEAN], [false, Column::INTEGER]] as [$enabled, $flag_type]) {
+                $this->with_tinyint_as_boolean($enabled, function () use ($flag_type) {
+                    $columns = $this->conn->columns('tiny_widths');
+                    $this->assert_same(Column::INTEGER, $columns['id']->type);
+                    $this->assert_same($flag_type, $columns['flag']->type);
+                    $this->assert_same(Column::INTEGER, $columns['wide']->type);
+                });
+            }
+        } finally {
+            $this->conn->query('DROP TABLE tiny_widths');
+        }
+    }
+
+    public function test_schema_cache_keeps_tinyint_as_boolean_settings_apart()
+    {
+        // GH #195: the schema cache outlives the process, so a cached BOOLEAN must not be
+        // read back once the option is off, nor a cached INTEGER once it is back on
+        $dir = sys_get_temp_dir() . '/phpar-tinyint-schema-cache';
+        ActiveRecord\Config::instance()->set_cache("file://$dir");
+
+        try {
+            ActiveRecord\Cache::flush();
+            $type = function (): int {
+                ActiveRecord\Table::clear_cache(Venue::class);
+                return Venue::table()->columns['is_available']->type;
+            };
+
+            $this->assert_same(Column::BOOLEAN, $type());
+            $this->with_tinyint_as_boolean(false, fn() => $this->assert_same(Column::INTEGER, $type()));
+            $this->assert_same(Column::BOOLEAN, $type());
+            $this->with_tinyint_as_boolean(false, fn() => $this->assert_same(Column::INTEGER, $type()));
+        } finally {
+            ActiveRecord\Cache::flush();
+            ActiveRecord\Cache::initialize(null);
+            ActiveRecord\Table::clear_cache();
         }
     }
 
