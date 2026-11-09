@@ -733,7 +733,8 @@ Invoice::new_query()->lazy_by_id_desc(500);               // the same, as a gene
   method returns `false`; it returns `true` when every page was passed. `lazy*()` models are keyed from 0.
 - Sizes are `$count` for `chunk*` and `$chunk_size` (default 1000) for `lazy*`. Below 1 it throws, at the call.
 - `lazy*()` run no statement until the first model is asked for, and read the next page only when the models of the one
-  before are used. They hold one page of models in memory.
+  before are used. They hold one page of models in memory. Like `cursor()`, they read the query as it was at the call: a
+  later change to the builder does not reach them.
 - A query without an order is read in the order of its primary key, so pages do not repeat or skip rows by chance. Give
   an `order_by()` to `chunk()` or `lazy()` to read in another order. The `limit()` of the query caps the rows of all the
   pages and its `offset()` is where the first page starts. The query itself is not changed.

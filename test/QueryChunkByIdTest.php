@@ -308,6 +308,26 @@ class QueryChunkByIdTest extends DatabaseTest
         $this->assert_refused_before_any_sql(fn() => Author::order_by('name')->lazy_by_id(2), 'lazy_by_id()');
     }
 
+    // Final review F2: the query is read as it was at the call, as cursor() reads it; an offset added after the call
+    // used to skip rows silently, though lazy_by_id() refuses one at the call
+    public function test_lazy_by_id_is_a_snapshot_of_the_query_at_the_call()
+    {
+        $q = Author::new_query();
+        $models = $q->lazy_by_id(2);
+        $q->offset(1)->where('author_id', '>', 2);
+
+        $this->assert_same([1, 2, 3, 4], array_map(fn($m) => $m->author_id, iterator_to_array($models)));
+    }
+
+    public function test_lazy_by_id_desc_is_a_snapshot_of_the_query_at_the_call()
+    {
+        $q = Author::new_query();
+        $models = $q->lazy_by_id_desc(2);
+        $q->offset(1)->where('author_id', '<', 3);
+
+        $this->assert_same([4, 3, 2, 1], array_map(fn($m) => $m->author_id, iterator_to_array($models)));
+    }
+
     public function test_lazy_by_id_include_new_rows()
     {
         $seen = [];

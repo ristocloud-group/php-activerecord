@@ -34,6 +34,16 @@ class QueryLazyTest extends DatabaseTest
         $this->assert_same(1, $g->current()->author_id);
     }
 
+    // Final review F2: the query is read as it was at the call, as cursor() reads it
+    public function test_lazy_is_a_snapshot_of_the_query_at_the_call()
+    {
+        $q = Author::where('author_id', '<', 4);
+        $models = $q->lazy(2);
+        $q->where('author_id', 2)->offset(1);
+
+        $this->assert_same([1, 2, 3], array_map(fn($m) => $m->author_id, array_values(iterator_to_array($models))));
+    }
+
     public function test_lazy_stops_reading_when_consumer_stops()
     {
         $statements = $this->statements(function () {

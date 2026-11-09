@@ -2113,8 +2113,8 @@ class Query
 
     /**
      * The models of the rows, one at a time, read in pages of $chunk_size as chunk() reads them, and keyed from 0.
-     * No statement runs until the first model is asked for, and the next page is read only when the models of the
-     * one before are used.
+     * The query is read as it was at the call, so a later change to it does not reach the models. No statement runs
+     * until the first model is asked for, and the next page is read only when the models of the one before are used.
      *
      * <code>
      * foreach (Author::lazy(500) as $author) { ... }
@@ -2126,7 +2126,8 @@ class Query
     public function lazy(int $chunk_size = 1000): \Generator
     {
         $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
-        $pager = new QueryPager($this);
+        // a copy: the query is read as it was at the call, as cursor() reads it
+        $pager = new QueryPager($this->clone());
 
         return $pager->models($pager->offset_pages($chunk_size));
     }
@@ -2183,8 +2184,9 @@ class Query
 
     /**
      * The models of the rows, one at a time, read in pages of $chunk_size by key as chunk_by_id() reads them, and keyed
-     * from 0. No statement runs until the first model is asked for, and the next page is read only when the models of
-     * the one before are used.
+     * from 0. The query is read as it was at the call, so a later change to it does not reach the models. No statement
+     * runs until the first model is asked for, and the next page is read only when the models of the one before are
+     * used.
      *
      * <code>
      * foreach (Order::where('status', 'open')->lazy_by_id(500) as $order) { ... }
@@ -2198,7 +2200,8 @@ class Query
     {
         $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
         [$column, $alias] = $this->keyset_key(__FUNCTION__, $column, $alias);
-        $pager = new QueryPager($this);
+        // a copy: the query is read as it was at the call, as cursor() reads it
+        $pager = new QueryPager($this->clone());
 
         return $pager->models($pager->keyset_pages(__FUNCTION__, $chunk_size, $column, $alias, false, $include_new_rows));
     }
@@ -2214,7 +2217,8 @@ class Query
     {
         $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
         [$column, $alias] = $this->keyset_key(__FUNCTION__, $column, $alias);
-        $pager = new QueryPager($this);
+        // a copy: the query is read as it was at the call, as cursor() reads it
+        $pager = new QueryPager($this->clone());
 
         return $pager->models($pager->keyset_pages(__FUNCTION__, $chunk_size, $column, $alias, true, false));
     }
