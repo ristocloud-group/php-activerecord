@@ -779,8 +779,10 @@ Invoice::new_query()->chunk_by_id(500, $callback, include_new_rows: true);
   is replaced.
 - The `*_by_id*()` methods on a query with an `offset()`, any offset: `offset(0)` and `for_page()` too.
 - The `*_by_id*()` methods on a model with a composite primary key, without `$column`.
+- `cursor()` on a query with `with()` (Eloquent silently ignores the eager loads): use `lazy()`.
 
-The other difference is not a refusal: `include_new_rows` is opt-in here, where Eloquent always reads new rows.
+The other differences are not refusals: `include_new_rows` is opt-in here, where Eloquent always reads new rows, and a
+stream (`cursor(stream: true)`) locks its connection on every adapter (see the busy rule below).
 
 **One statement: `cursor()`.** `cursor()` runs the query once and gives the models one at a time as a generator, keyed
 from 0, hydrating each row only when it is reached.
@@ -795,13 +797,14 @@ foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {   // rows rea
 }
 ```
 
-- **Buffered (default).** The driver reads every row before the first model is yielded, so the rows are in PHP memory
-  but only one model is hydrated at a time, and other statements may run inside the loop. `get()`, by comparison,
-  hydrates every row.
+- **Buffered (default).** On MySQL, MariaDB and Postgres the driver reads every row before the first model is yielded,
+  so the rows are in PHP memory but only one model is hydrated at a time, and other statements may run inside the loop.
+  `get()`, by comparison, hydrates every row.
 - **`stream: true`.** On MySQL and MariaDB the rows really are read one at a time (unbuffered). On 100,000 rows the
   PHP-side growth measured about 1.3 MB for a stream against about 18 MB buffered. On Postgres a stream saves no memory
-  (the driver still fetches the whole result), and on SQLite the cursor is live: rows written ahead of it while it is
-  read may be read.
+  (the driver still fetches the whole result).
+- **SQLite** steps through the rows natively, buffered or streamed: the cursor is live, and rows written ahead of it
+  while it is read may be read.
 - The query is compiled at the call: a later change to the builder does not reach a cursor already made. No statement
   runs until the first model is asked for.
 - `cursor()` cannot eager load: with `with()` it throws at the call. Use `lazy()` for those.
@@ -818,7 +821,9 @@ foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {
 }
 ```
 
-- The connection is released when the foreach ends, or on `break`. A cursor held in a variable is not: after
+- The connection is released when the foreach ends, or on `break`. On MySQL and MariaDB a `break` still reads the rest
+  of the result from the server, to free the connection: memory stays flat, but the transfer happens (about 1.3 s for
+  300,000 small rows on the test stack). A cursor held in a variable is not released: after
   `$cursor = Invoice::new_query()->cursor(stream: true); foreach ($cursor as $i) { break; }` the connection stays busy
   until `unset($cursor)`.
 - A stream may be read inside a transaction, but `commit()` throws while it is open. `rollback()` does not: it closes

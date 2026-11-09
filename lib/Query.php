@@ -2136,8 +2136,10 @@ class Query
     /**
      * The models of the rows the query selects, one at a time, hydrated as the rows are read from a single SELECT and
      * keyed from 0. The query is compiled at the call, so a later change to it does not reach the cursor, and no
-     * statement runs until the first model is asked for. The rows are read in full before the first model is yielded,
-     * so other statements may run while iterating. It cannot eager load relationships: use lazy() for those.
+     * statement runs until the first model is asked for. On MySQL, MariaDB and Postgres the rows are read in full
+     * before the first model is yielded; SQLite steps through them, so the cursor is live there and may read rows
+     * written ahead of it. Other statements may run while iterating. It cannot eager load relationships: use lazy()
+     * for those.
      *
      * With $stream, the rows are read from the database one at a time where its driver allows it, and the connection is
      * busy from the first model until the cursor ends or is destroyed: any other query, transaction start or commit on
