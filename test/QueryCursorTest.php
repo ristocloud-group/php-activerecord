@@ -190,6 +190,23 @@ class QueryCursorTest extends DatabaseTest
         $this->assert_same('Tito', Author::find(1)->name);
     }
 
+    // Final review F5: a failing cursor leaves its own SQL in Table::$last_sql, as find_by_sql() does
+    public function test_failing_cursor_leaves_its_sql_in_last_sql()
+    {
+        foreach ([false, true] as $stream) {
+            Author::find(1);
+            $query = Author::where_raw('no_such_column = 1');
+
+            try {
+                iterator_to_array($query->cursor(stream: $stream));
+                $this->fail('DatabaseException expected');
+            } catch (DatabaseException) {
+            }
+
+            $this->assert_same($query->to_sql(), Author::table()->last_sql);
+        }
+    }
+
     public function test_stream_inside_transaction()
     {
         $connection = Author::table()->connection();

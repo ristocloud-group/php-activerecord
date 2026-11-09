@@ -28,6 +28,8 @@ final class Cursor
      *
      * @return \Generator<int, TModel>
      * @throws ConnectionBusy for a stream on a connection that already streams one
+     * @throws DatabaseException when the statement fails to execute, or a row fails to be read (a stream that the
+     *   server dropped, for example)
      */
     public function models(): \Generator
     {
@@ -36,12 +38,14 @@ final class Cursor
         $connection = $this->table->connection();
         $sth = null;
 
+        // set before the statement runs, as find_by_sql() sets it: a failing cursor leaves its own SQL there
+        $this->table->last_sql = $sql;
+
         try {
             // $sth is set only once the statement has executed: a stream is released only if it held the connection
             $sth = $this->stream ? $connection->stream_query($sql, $values) : $connection->query($sql, $values);
-            $this->table->last_sql = $sql;
 
-            while (($row = $sth->fetch())) {
+            while (($row = self::fetch($sth))) {
                 /** @var TModel $model */
                 $model = $this->table->hydrate($row, $this->readonly);
 
@@ -55,6 +59,22 @@ final class Cursor
                     $connection->release_stream();
                 }
             }
+        }
+    }
+
+    /**
+     * The next row of $sth, false after the last one. A database error while reading it is a DatabaseException, as
+     * one while executing is (see Connection::query()).
+     *
+     * @return array<string, mixed>|false
+     * @throws DatabaseException
+     */
+    private static function fetch(\PDOStatement $sth): array|false
+    {
+        try {
+            return $sth->fetch();
+        } catch (\PDOException $e) {
+            throw new DatabaseException($e);
         }
     }
 }

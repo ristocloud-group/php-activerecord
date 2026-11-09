@@ -825,8 +825,9 @@ foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {
   made inside a `Model::transaction()` closure is still held outside it, the transaction can be neither committed nor
   rolled back: finish or `unset()` the cursor first.
 - MySQL: the server writes rows as the client reads them, and drops the connection after `net_write_timeout` (60 s by
-  default) when the client is slower. The next statement then fails with error 2006 "server has gone away". Raise
-  `net_write_timeout` for a slow loop, or use the buffered cursor.
+  default) when the client is slower. The loop's next read then fails with error 2006 "server has gone away" or 2013
+  "lost connection", as an `ActiveRecord\DatabaseException`. Raise `net_write_timeout` for a slow loop, or use the
+  buffered cursor.
 
 **Shadowing.** A model's own static method wins over the forwarded name (see Entry points), so a model that defines its
 own `chunk()` keeps it: call the builder's as `Invoice::new_query()->chunk(...)`.
