@@ -10,7 +10,9 @@ namespace ActiveRecord;
  * The page generators behind the iteration methods of Query (chunk, lazy, ...): each reads the pages of a
  * query as copies of it, one statement for each page, and leaves the query as it is. They yield each page by
  * reference and drop it before the next page is read, so a reader that drops its own copy too (see models()) holds
- * one page of models at a page switch, not two: a generator keeps the value it yielded until it yields again.
+ * one page of models at a page switch, not two: a generator keeps the value it yielded until it yields again. (A model
+ * with a non-null date attribute references itself through its DateTime, so PHP frees it at its next cycle
+ * collection, not at the page switch.)
  *
  * @internal Serves Query; not a supported API.
  * @template TModel of Model

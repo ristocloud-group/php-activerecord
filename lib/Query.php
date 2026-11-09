@@ -2159,8 +2159,9 @@ class Query
      * @throws ActiveRecordException before any statement, for a $count below 1, a model of a composite primary key
      *   without a $column, a $column that is no column of the model, a query with an offset, or ordered by anything but
      *   the key; and after a page whose last model has no $alias attribute (or a null one), or whose last key is the
-     *   one of the page before (the next page would read the same rows again: a key that is not unique, or a wrong
-     *   $alias), before that page is passed
+     *   one of the page before (the next page would read the same rows again: an $alias that is not the key), before
+     *   that page is passed. A key that is not unique is not detected: rows that share the last key of a page with
+     *   rows after it are skipped
      */
     public function chunk_by_id(int $count, callable $callback, ?string $column = null, ?string $alias = null, bool $include_new_rows = false): bool
     {

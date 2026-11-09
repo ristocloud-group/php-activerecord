@@ -56,8 +56,9 @@ Taken on 2026-11-09 (**supersede Appendix A** where they differ):
 
 1. Examples from the Laravel docs port by changing the method case, except for the deviations of §4.6.
 2. `chunk_by_id` processes every matching row when the loop deletes or updates the rows it reads.
-3. Memory: `chunk`/`lazy` hold one page of models; `cursor()` holds one model plus the driver's buffer; `cursor(stream:
-   true)` on MySQL/MariaDB holds one row.
+3. Memory: `chunk`/`lazy` hold one page of models (a model with a non-null date attribute is freed at PHP's next cycle
+   collection, as it references itself through its `DateTime`); `cursor()` holds one model plus the driver's buffer;
+   `cursor(stream: true)` on MySQL/MariaDB holds one row.
 4. One engine: every page and every cursor read is compiled by `QueryCompiler` and runs through `Table` / `Connection`,
    as `get()` does. No SQL is written outside the engine.
 5. No behavior change for existing code.

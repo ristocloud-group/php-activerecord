@@ -735,19 +735,23 @@ Invoice::new_query()->lazy_by_id_desc(500);               // the same, as a gene
   method returns `false`; it returns `true` when every page was passed. `lazy*()` models are keyed from 0.
 - Sizes are `$count` for `chunk*` and `$chunk_size` (default 1000) for `lazy*`. Below 1 it throws, at the call.
 - `lazy*()` run no statement until the first model is asked for, and read the next page only when the models of the one
-  before are used. They hold one page of models in memory. They read the query as it was at the call: a later change to
-  the builder does not reach them.
+  before are used. They hold one page of models in memory: a page is let go before the next is read. A model with a
+  non-null date attribute is the exception: it references itself through its `ActiveRecord\DateTime`, so PHP frees it
+  at its next cycle collection, not at the page switch. They read the query as it was at the call: a later change to the
+  builder does not reach them.
 - A query without an order is read in the order of its primary key, so pages do not repeat or skip rows by chance. Give
-  an `order_by()` to `chunk()` or `lazy()` to read in another order. A `distinct()` or grouped query that does not
-  select (or group by) the primary key needs one: the database rejects the implicit primary-key order there (MySQL
-  errors 3065 and 1055). The `limit()` of the query caps the rows of all the pages. For `chunk()` and `lazy()`, its
-  `offset()` is where the first page starts (the keyset methods throw on one, below). The query itself is not changed.
+  an `order_by()` to `chunk()` or `lazy()` to read in another order. On a `distinct()` or grouped query that does not
+  select (or group by) the primary key, MySQL and Postgres reject the implicit primary-key order (MySQL errors 3065 and
+  1055); MariaDB and SQLite accept it, so give an explicit `order_by()` there for portable code. The `limit()` of the
+  query caps the rows of all the pages. For `chunk()` and `lazy()`, its `offset()` is where the first page starts (the
+  keyset methods throw on one, below). The query itself is not changed.
 
 **Offset or keyset.** `chunk()` and `lazy()` page by offset (`LIMIT n OFFSET m`). If the loop deletes the rows it reads,
 or updates a column the query filters on, the pages move under it and **rows are skipped**. `chunk_by_id()` and
 `lazy_by_id()` (and their `_desc` variants) page by key: each page is `WHERE id > last ORDER BY id LIMIT n`, so the loop
 may delete or update the rows it reads. Use them for that, and for big tables, where a large offset is slow. The key
-must be unique and must not change during the reading (not detected).
+must be unique and must not change during the reading. Neither is detected: with a key that is not unique, the rows
+that share the last key of a page with rows after it are skipped silently.
 
 ```php
 Invoice::new_query()->chunk_by_id(500, $callback, column: 'number');              // another unique column
