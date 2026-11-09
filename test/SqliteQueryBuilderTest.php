@@ -400,4 +400,21 @@ class SqliteQueryBuilderTest extends DatabaseTest
         $this->assert_same('SELECT * FROM `authors` LIMIT 0', Author::limit(0)->to_sql());
         $this->assert_same('SELECT * FROM `authors` LIMIT 9223372036854775806,1', Author::for_page(PHP_INT_MAX, 1)->to_sql());
     }
+
+    // SQLite reads a cursor live: a row written meanwhile ahead of it is read (documented in the spec; Author upcases its name)
+    public function test_cursor_is_live_on_sqlite(): void
+    {
+        $names = [];
+        $created = false;
+
+        foreach (Author::order_by('author_id')->cursor() as $author) {
+            if (!$created) {
+                Author::create(['name' => 'Ahead']);
+                $created = true;
+            }
+            $names[] = $author->name;
+        }
+
+        $this->assert_true(in_array('AHEAD', $names, true));
+    }
 }

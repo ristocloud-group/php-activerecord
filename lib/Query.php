@@ -142,6 +142,7 @@ class Query
         'average',
         'chunk',
         'lazy',
+        'cursor',
         'chunk_by_id',
         'chunk_by_id_desc',
         'lazy_by_id',
@@ -2130,6 +2131,36 @@ class Query
         $pager = new QueryPager($this->clone(), $this->table());
 
         return $pager->models($pager->offset_pages($chunk_size));
+    }
+
+    /**
+     * The models of the rows the query selects, one at a time, hydrated as the rows are read from a single SELECT and
+     * keyed from 0. The query is compiled at the call, so a later change to it does not reach the cursor, and no
+     * statement runs until the first model is asked for. The rows are read in full before the first model is yielded,
+     * so other statements may run while iterating. It cannot eager load relationships: use lazy() for those.
+     *
+     * <code>
+     * foreach (Author::where('active', true)->cursor() as $author) { ... }
+     * </code>
+     *
+     * @return \Generator<int, TModel>
+     * @throws ActiveRecordException at the call, for a query that eager loads relationships (with())
+     */
+    public function cursor(): \Generator
+    {
+        $options = $this->state->legacy ?? [];
+
+        if ([] !== $this->state->includes || array_key_exists('include', $options)) {
+            throw new ActiveRecordException(sprintf('%s() cannot eager load relationships (with()); use lazy() instead', __FUNCTION__));
+        }
+
+        $sql = $this->compiler()->compile_select($this->state);
+        $readonly = $this->state->readonly || (array_key_exists('readonly', $options) && $options['readonly']);
+
+        /** @var Cursor<TModel> $cursor */
+        $cursor = new Cursor($this->table(), $sql, $readonly, false);
+
+        return $cursor->models();
     }
 
     /**

@@ -292,6 +292,24 @@ class Table
     }
 
     /**
+     * The model of the class of this table for a row read from it: not a new record, not dirty, readonly when asked.
+     *
+     * @internal Serves find_by_sql() and Cursor; not a supported API.
+     * @param array<string, mixed> $row
+     */
+    public function hydrate(array $row, bool $readonly): Model
+    {
+        /** @var Model $model */
+        $model = new $this->class->name($row, false, true, false);
+
+        if ($readonly) {
+            $model->readonly();
+        }
+
+        return $model;
+    }
+
+    /**
      * @param string $sql
      * @param array<int, mixed>|null $values
      * @param bool $readonly
@@ -308,12 +326,7 @@ class Table
         $sth = $this->connection()->query($sql, $bind_values);
 
         while (($row = $sth->fetch())) {
-            /** @var Model $model */
-            $model = new $this->class->name($row, false, true, false);
-
-            if ($readonly) {
-                $model->readonly();
-            }
+            $model = $this->hydrate($row, $readonly);
 
             if ($collect_attrs_for_includes) {
                 $attrs[] = $model->attributes();
