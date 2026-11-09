@@ -326,7 +326,7 @@ class Table
         $sth = $this->connection()->query($sql, $bind_values);
 
         while (($row = $sth->fetch())) {
-            $model = $this->hydrate($row, $readonly);
+            $model = $this->hydrate($row, (bool) $readonly);
 
             if ($collect_attrs_for_includes) {
                 $attrs[] = $model->attributes();

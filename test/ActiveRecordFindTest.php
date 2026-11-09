@@ -408,6 +408,19 @@ class ActiveRecordFindTest extends DatabaseTest
         $this->assert_equals(2, count($author));
     }
 
+    // $readonly of find_by_sql() is read by truthiness, whatever its type
+    public function test_find_by_sql_reads_readonly_by_truthiness()
+    {
+        $sql = 'SELECT * FROM authors WHERE author_id = ?';
+
+        foreach ([[null, false], [[], false], [false, false], [['x'], true], [1, true], [true, true]] as [$readonly, $expected]) {
+            $models = Author::table()->find_by_sql($sql, [1], $readonly);
+
+            $this->assert_same(1, count($models));
+            $this->assert_same($expected, $models[0]->is_readonly());
+        }
+    }
+
     public function test_find_by_sql()
     {
         $author = Author::find_by_sql("SELECT * FROM authors WHERE author_id in(1,2)");
