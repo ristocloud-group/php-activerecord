@@ -355,7 +355,7 @@ abstract class Connection
      */
     public function query($sql, &$values = [])
     {
-        $this->refuse_when_busy(__FUNCTION__);
+        $this->refuse_when_busy(__FUNCTION__ . '()');
 
         return $this->prepare_and_execute($sql, $values, false);
     }
@@ -374,7 +374,8 @@ abstract class Connection
      */
     public function stream_query(string $sql, array $values = []): \PDOStatement
     {
-        $this->refuse_when_busy(__FUNCTION__);
+        // named as the user wrote it: a second stream comes from cursor(stream: true)
+        $this->refuse_when_busy('cursor(stream: true)');
         $sth = $this->prepare_and_execute($sql, $values, true);
         $this->stream = $sth;
 
@@ -441,12 +442,12 @@ abstract class Connection
     }
 
     /**
-     * Throws ConnectionBusy, naming $method, when a cursor streams on this connection.
+     * Throws ConnectionBusy, naming the refused $call (as 'query()'), when a cursor streams on this connection.
      */
-    private function refuse_when_busy(string $method): void
+    private function refuse_when_busy(string $call): void
     {
         if (null !== $this->stream) {
-            throw new ConnectionBusy(sprintf('%s() cannot run while the connection streams a cursor (cursor(stream: true)): iterate the cursor to its end, or unset() it, first', $method));
+            throw new ConnectionBusy(sprintf('%s cannot run while the connection streams a cursor (cursor(stream: true)): iterate the cursor to its end, or unset() it, first', $call));
         }
     }
 
@@ -611,7 +612,7 @@ abstract class Connection
      */
     public function transaction()
     {
-        $this->refuse_when_busy(__FUNCTION__);
+        $this->refuse_when_busy(__FUNCTION__ . '()');
 
         if ($this->transaction_depth === 0) {
             if (!$this->connection->beginTransaction()) {
@@ -632,7 +633,7 @@ abstract class Connection
      */
     public function commit()
     {
-        $this->refuse_when_busy(__FUNCTION__);
+        $this->refuse_when_busy(__FUNCTION__ . '()');
 
         if ($this->transaction_depth > 1) {
             $this->query('RELEASE SAVEPOINT ar_sp_' . ($this->transaction_depth - 1));

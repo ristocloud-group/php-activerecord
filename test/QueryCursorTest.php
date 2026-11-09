@@ -247,13 +247,31 @@ class QueryCursorTest extends DatabaseTest
     public function test_second_stream_is_refused()
     {
         foreach (Author::new_query()->cursor(stream: true) as $a) {
-            $this->assert_busy(fn() => Author::new_query()->cursor(stream: true)->current(), 'stream_query()');
+            // the refusal names the user's call, not the internal method (pre-publication review)
+            $this->assert_busy(fn() => Author::new_query()->cursor(stream: true)->current(), 'cursor(stream: true)');
             // the refused stream never held the connection, so it must not free it from the open one
             $this->assert_busy(fn() => Author::find(1), 'query()');
             break;
         }
 
         $this->assert_same('Tito', Author::find(1)->name);
+    }
+
+    // Pre-publication review: what looks like a read inside a stream is a statement too (README, the busy rule): a lazy
+    // relationship load, and the first-use schema read of a model whose table is not loaded yet
+    public function test_stream_refuses_a_lazy_relationship_load_and_a_first_schema_read()
+    {
+        Book::table(); // its schema read first: the relationship load below is then one query
+        ActiveRecord\Table::clear_cache(Venue::class); // not loaded yet
+
+        foreach (Author::new_query()->cursor(stream: true) as $a) {
+            $this->assert_busy(fn() => $a->books, 'query()');
+            $this->assert_busy(fn() => Venue::table(), 'query()');
+            break;
+        }
+
+        $this->assert_same(['Ancient Art of Main Tanking'], array_map(fn($b) => $b->name, Author::find(1)->books));
+        $this->assert_same('venues', Venue::table()->table);
     }
 
     public function test_break_from_direct_foreach_releases()
