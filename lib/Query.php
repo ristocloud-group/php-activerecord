@@ -2108,7 +2108,7 @@ class Query
     {
         $this->refuse_chunk_size(__FUNCTION__, $count);
 
-        return $this->run_pages((new QueryPager($this))->offset_pages($count), $callback);
+        return $this->run_pages((new QueryPager($this, $this->table()))->offset_pages($count), $callback);
     }
 
     /**
@@ -2126,8 +2126,8 @@ class Query
     public function lazy(int $chunk_size = 1000): \Generator
     {
         $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
-        // a copy: the query is read as it was at the call, as cursor() reads it
-        $pager = new QueryPager($this->clone());
+        // a copy: the query is read as it was at the call
+        $pager = new QueryPager($this->clone(), $this->table());
 
         return $pager->models($pager->offset_pages($chunk_size));
     }
@@ -2140,9 +2140,10 @@ class Query
      * the query caps the rows of all the pages. The query itself is not changed.
      *
      * $column is the key, the primary key by default: a column of the model, by its name, an alias or an attribute
-     * name, or qualified with the model's table (or its from() alias) when the query joins. It must be unique and must
-     * not change during the reading. $alias is the attribute the last key of a page is read from, by default the one
-     * of $column: give it for a key the query selects under another name. An order of the query on the key is replaced.
+     * name, or qualified with the model's table (or its from() alias), with or without a join. It must be unique and
+     * must not change during the reading. $alias is the attribute the last key of a page is read from, by default the
+     * one of $column: give it for a key the query selects under another name. An order of the query on the key is
+     * replaced.
      *
      * Rows inserted during the reading are not read by default: the pages stop at the largest key that the query
      * matches before the first page. With $include_new_rows they are read, as Eloquent's chunkById() reads them, and a
@@ -2157,14 +2158,16 @@ class Query
      * @param callable(list<TModel>, int): mixed $callback
      * @throws ActiveRecordException before any statement, for a $count below 1, a model of a composite primary key
      *   without a $column, a $column that is no column of the model, a query with an offset, or ordered by anything but
-     *   the key; and after a page whose last model has no $alias attribute (or a null one), before that page is passed
+     *   the key; and after a page whose last model has no $alias attribute (or a null one), or whose last key is the
+     *   one of the page before (the next page would read the same rows again: a key that is not unique, or a wrong
+     *   $alias), before that page is passed
      */
     public function chunk_by_id(int $count, callable $callback, ?string $column = null, ?string $alias = null, bool $include_new_rows = false): bool
     {
         $this->refuse_chunk_size(__FUNCTION__, $count);
         [$column, $alias] = $this->keyset_key(__FUNCTION__, $column, $alias);
 
-        return $this->run_pages((new QueryPager($this))->keyset_pages(__FUNCTION__, $count, $column, $alias, false, $include_new_rows), $callback);
+        return $this->run_pages((new QueryPager($this, $this->table()))->keyset_pages(__FUNCTION__, $count, $column, $alias, false, $include_new_rows), $callback);
     }
 
     /**
@@ -2172,14 +2175,15 @@ class Query
      * starts at the highest key, so rows inserted during the reading, with higher keys, are not read.
      *
      * @param callable(list<TModel>, int): mixed $callback
-     * @throws ActiveRecordException as chunk_by_id() does
+     * @throws ActiveRecordException as chunk_by_id() does: before any statement, or after a page whose last model has
+     *   no $alias attribute (or a null one), or whose last key is the one of the page before
      */
     public function chunk_by_id_desc(int $count, callable $callback, ?string $column = null, ?string $alias = null): bool
     {
         $this->refuse_chunk_size(__FUNCTION__, $count);
         [$column, $alias] = $this->keyset_key(__FUNCTION__, $column, $alias);
 
-        return $this->run_pages((new QueryPager($this))->keyset_pages(__FUNCTION__, $count, $column, $alias, true, false), $callback);
+        return $this->run_pages((new QueryPager($this, $this->table()))->keyset_pages(__FUNCTION__, $count, $column, $alias, true, false), $callback);
     }
 
     /**
@@ -2194,14 +2198,14 @@ class Query
      *
      * @return \Generator<int, TModel>
      * @throws ActiveRecordException as chunk_by_id() does: at the call, before any statement, or during the reading
-     *   for a missing $alias attribute
+     *   for a missing $alias attribute, or a last key of a page that is the one of the page before
      */
     public function lazy_by_id(int $chunk_size = 1000, ?string $column = null, ?string $alias = null, bool $include_new_rows = false): \Generator
     {
         $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
         [$column, $alias] = $this->keyset_key(__FUNCTION__, $column, $alias);
-        // a copy: the query is read as it was at the call, as cursor() reads it
-        $pager = new QueryPager($this->clone());
+        // a copy: the query is read as it was at the call
+        $pager = new QueryPager($this->clone(), $this->table());
 
         return $pager->models($pager->keyset_pages(__FUNCTION__, $chunk_size, $column, $alias, false, $include_new_rows));
     }
@@ -2211,14 +2215,15 @@ class Query
      * chunk_by_id_desc()).
      *
      * @return \Generator<int, TModel>
-     * @throws ActiveRecordException as lazy_by_id() does
+     * @throws ActiveRecordException as lazy_by_id() does: at the call, before any statement, or during the reading for
+     *   a missing $alias attribute, or a last key of a page that is the one of the page before
      */
     public function lazy_by_id_desc(int $chunk_size = 1000, ?string $column = null, ?string $alias = null): \Generator
     {
         $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
         [$column, $alias] = $this->keyset_key(__FUNCTION__, $column, $alias);
-        // a copy: the query is read as it was at the call, as cursor() reads it
-        $pager = new QueryPager($this->clone());
+        // a copy: the query is read as it was at the call
+        $pager = new QueryPager($this->clone(), $this->table());
 
         return $pager->models($pager->keyset_pages(__FUNCTION__, $chunk_size, $column, $alias, true, false));
     }
@@ -2602,7 +2607,8 @@ class Query
     }
 
     /**
-     * Passes each page to the callback with its number from 1, and stops at the first strict false it returns.
+     * Passes each page to the callback with its number from 1, and stops at the first strict false it returns. A page
+     * is released before the next one is read (see QueryPager): a foreach would keep it in its variable.
      *
      * @param \Generator<int, list<TModel>> $pages
      * @param callable(list<TModel>, int): mixed $callback
@@ -2610,10 +2616,11 @@ class Query
      */
     private function run_pages(\Generator $pages, callable $callback): bool
     {
-        foreach ($pages as $index => $page) {
-            if (false === $callback($page, $index + 1)) {
+        while ($pages->valid()) {
+            if (false === $callback($pages->current(), $pages->key() + 1)) {
                 return false;
             }
+            $pages->next();
         }
 
         return true;
@@ -2697,10 +2704,7 @@ class Query
         return $column;
     }
 
-    /**
-     * @internal Serves QueryPager; not a supported API.
-     */
-    public function table(): Table
+    private function table(): Table
     {
         return $this->table ??= Table::load($this->model_class);
     }

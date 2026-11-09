@@ -162,4 +162,31 @@ class QueryChunkTest extends DatabaseTest
         $this->assert_true($result);
         $this->assert_same([[1, 2], [3, 4]], $pages);
     }
+
+    // Pre-publication review: a page passed to the callback is released before the next page is read
+    public function test_one_page_is_held_at_a_page_switch()
+    {
+        foreach (['chunk', 'chunk_by_id', 'chunk_by_id_desc'] as $method) {
+            $first = null;
+            $alive = [];
+            $this->statements(function () use ($method, &$first) {
+                Author::new_query()->$method(2, function (array $authors) use (&$first) {
+                    $first ??= WeakReference::create($authors[0]);
+                });
+            }, function () use (&$first, &$alive) {
+                if (null !== $first) {
+                    $alive[] = null !== $first->get();
+                }
+            });
+
+            // the second page and the empty third one: 4 authors in pages of 2
+            $this->assert_same([false, false], $alive, "$method(): the first page is released before the next is read");
+        }
+    }
+
+    // Pre-publication review: QueryPager gets the table from Query, which keeps table() private, as before the paging
+    public function test_query_table_stays_private()
+    {
+        $this->assert_true((new ReflectionMethod(ActiveRecord\Query::class, 'table'))->isPrivate());
+    }
 }

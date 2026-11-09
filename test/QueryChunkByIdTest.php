@@ -308,7 +308,7 @@ class QueryChunkByIdTest extends DatabaseTest
         $this->assert_refused_before_any_sql(fn() => Author::order_by('name')->lazy_by_id(2), 'lazy_by_id()');
     }
 
-    // Final review F2: the query is read as it was at the call, as cursor() reads it; an offset added after the call
+    // Final review F2: the query is read as it was at the call; an offset added after the call
     // used to skip rows silently, though lazy_by_id() refuses one at the call
     public function test_lazy_by_id_is_a_snapshot_of_the_query_at_the_call()
     {
@@ -389,6 +389,11 @@ class QueryChunkByIdTest extends DatabaseTest
         $this->assert_same([1, 3, 4], $this->capped_ids($query()->lazy_by_id(1)));
         $this->assert_same([4, 3, 1], $this->capped_ids($query()->lazy_by_id_desc(1)));
         $this->assert_same([1, 3, 4], $this->capped_ids($query()->lazy_by_id(1, include_new_rows: true)));
+
+        // a lone raw condition that holds an OR is not enclosed by the pager, but by the compiler, beside the key's
+        $raw = fn() => Author::where_raw('author_id = 1 OR author_id >= 3');
+        $this->assert_same([[1], [3], [4]], $this->capped_pages(fn($callback) => $raw()->chunk_by_id(1, $callback)));
+        $this->assert_same([[4], [3], [1]], $this->capped_pages(fn($callback) => $raw()->chunk_by_id_desc(1, $callback)));
     }
 
     public function test_page_sql_encloses_the_query_where()
@@ -439,6 +444,29 @@ class QueryChunkByIdTest extends DatabaseTest
         }
 
         $this->assert_same([[1]], $pages);
+    }
+
+    // Pre-publication review: a datetime key that does not advance is caught too. Its values are DateTime objects,
+    // which are never identical, so they are compared by value. Reached by an $alias on a datetime column that every
+    // row holds the same value of, between the keys of the two rows: each page after the first reads the second row
+    // again.
+    public function test_datetime_key_that_does_not_advance_throws()
+    {
+        DatedCount::new_query()->update(['seen_at' => '2026-01-01 12:00:00']);
+        $pages = [];
+
+        try {
+            DatedCount::new_query()->chunk_by_id(1, function (array $models) use (&$pages) {
+                $pages[] = array_map(fn($m) => $m->at->format('Y-m-d H:i:s'), $models);
+
+                return count($pages) < 6;
+            }, 'at', 'seen_at');
+            $this->fail('expected an ActiveRecordException');
+        } catch (ActiveRecordException $e) {
+            $this->assert_same("chunk_by_id() was aborted because the key [seen_at] did not advance past '2026-01-01 12:00:00'", $e->getMessage());
+        }
+
+        $this->assert_same([['2026-01-01 10:00:00']], $pages);
     }
 
     public function test_chunk_by_id_leaves_query_unchanged()

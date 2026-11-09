@@ -8,7 +8,9 @@ namespace ActiveRecord;
 
 /**
  * The page generators behind the iteration methods of Query (chunk, lazy, ...): each reads the pages of a
- * query as copies of it, one statement for each page, and leaves the query as it is.
+ * query as copies of it, one statement for each page, and leaves the query as it is. They yield each page by
+ * reference and drop it before the next page is read, so a reader that drops its own copy too (see models()) holds
+ * one page of models at a page switch, not two: a generator keeps the value it yielded until it yields again.
  *
  * @internal Serves Query; not a supported API.
  * @template TModel of Model
@@ -17,17 +19,20 @@ final class QueryPager
 {
     /**
      * @param Query<TModel> $query
+     * @param Table $table The table of the query's model, which Query keeps private
      */
-    public function __construct(private readonly Query $query) {}
+    public function __construct(private readonly Query $query, private readonly Table $table) {}
 
     /**
      * The pages of the query, read by offset: the query's own offset is the start and its own limit caps the rows
-     * of all the pages. A query without an order is read in the order of its primary key. Pages are never empty,
-     * and the last one is the first to hold fewer rows than $count (no extra query asks for more).
+     * of all the pages. A query without an order is read in the order of its primary key. Pages are never empty.
+     * The reading stops after a page shorter than asked for, with no further query; when the rows are an exact
+     * multiple of $count, it ends on one more query that reads nothing, and a reading capped by the limit may end on a
+     * full page.
      *
      * @return \Generator<int, list<TModel>> The page index, from 0, to the models of the page
      */
-    public function offset_pages(int $count): \Generator
+    public function &offset_pages(int $count): \Generator
     {
         $state = $this->query->state();
         $start = $state->offset ?? 0;
@@ -36,7 +41,7 @@ final class QueryPager
 
         if ([] === $state->orders) {
             /** @var list<string> $pk */
-            $pk = (array) $this->query->table()->pk;
+            $pk = (array) $this->table->pk;
             foreach ($pk as $column) {
                 $base->order_by($column);
             }
@@ -52,7 +57,10 @@ final class QueryPager
 
             yield $index => $page;
 
-            if (count($page) < $size) {
+            $read = count($page);
+            $page = null; // released before the next page is read
+
+            if ($read < $size) {
                 return;
             }
 
@@ -75,9 +83,10 @@ final class QueryPager
      * @param string $method The method that reads the pages, for the message of the exception
      * @return \Generator<int, list<TModel>> The page index, from 0, to the models of the page
      * @throws ActiveRecordException after a page whose last model has no $alias attribute, or a null one, or whose last
-     *   key is the one of the page before (the next page would read the same rows), before the page is yielded
+     *   key is the one of the page before (the next page would read the same rows; two dates are compared by value),
+     *   before the page is yielded
      */
-    public function keyset_pages(string $method, int $count, string $column, string $alias, bool $desc, bool $include_new_rows): \Generator
+    public function &keyset_pages(string $method, int $count, string $column, string $alias, bool $desc, bool $include_new_rows): \Generator
     {
         $remaining = $this->query->state()->limit;
 
@@ -131,14 +140,19 @@ final class QueryPager
             }
 
             // the next page would read the same rows again, forever (compared strictly: two big keys read as digits
-            // must not be compared as the floats they would make)
-            if ($last === $previous) {
-                throw new ActiveRecordException(sprintf('%s() was aborted because the key [%s] did not advance past %s', $method, $alias, var_export($last, true)));
+            // must not be compared as the floats they would make; two dates, objects, by value)
+            if ($last instanceof \DateTimeInterface && $previous instanceof \DateTimeInterface ? $last == $previous : $last === $previous) {
+                $shown = $last instanceof \DateTimeInterface ? var_export($last->format('Y-m-d H:i:s'), true) : var_export($last, true);
+
+                throw new ActiveRecordException(sprintf('%s() was aborted because the key [%s] did not advance past %s', $method, $alias, $shown));
             }
 
             yield $index => $page;
 
-            if (count($page) < $size) {
+            $read = count($page);
+            $page = null; // released before the next page is read
+
+            if ($read < $size) {
                 return;
             }
 
@@ -166,7 +180,7 @@ final class QueryPager
 
     /**
      * The models of the pages, one at a time, keyed from 0 along all the pages. (yield from would repeat the key of
-     * each page.)
+     * each page.) A page is released before the next one is read: a foreach would keep it in its variable.
      *
      * @param \Generator<int, list<TModel>> $pages
      * @return \Generator<int, TModel>
@@ -174,10 +188,13 @@ final class QueryPager
     public function models(\Generator $pages): \Generator
     {
         $key = 0;
-        foreach ($pages as $page) {
+        while ($pages->valid()) {
+            $page = $pages->current();
             foreach ($page as $model) {
                 yield $key++ => $model;
             }
+            unset($page, $model);
+            $pages->next();
         }
     }
 }
