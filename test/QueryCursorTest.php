@@ -261,11 +261,18 @@ class QueryCursorTest extends DatabaseTest
     // relationship load, and the first-use schema read of a model whose table is not loaded yet
     public function test_stream_refuses_a_lazy_relationship_load_and_a_first_schema_read()
     {
-        Book::table(); // its schema read first: the relationship load below is then one query
-        ActiveRecord\Table::clear_cache(Venue::class); // not loaded yet
+        // DatabaseTest::set_up() empties the Table cache: Venue's is not loaded. Book's schema is read first, so the
+        // relationship load below is its SELECT alone. (Table::clear_cache() of a class not cached empties all of it.)
+        Book::table();
+
+        $cached = fn(string $class) => array_key_exists($class, (new ReflectionProperty(ActiveRecord\Table::class, 'cache'))->getValue());
 
         foreach (Author::new_query()->cursor(stream: true) as $a) {
+            // Book's schema is loaded, so the statement refused here is the relationship's own SELECT
+            $this->assert_true($cached(Book::class), "Book's table is cached when the relationship loads");
             $this->assert_busy(fn() => $a->books, 'query()');
+
+            $this->assert_false($cached(Venue::class), "Venue's table is not loaded yet");
             $this->assert_busy(fn() => Venue::table(), 'query()');
             break;
         }
