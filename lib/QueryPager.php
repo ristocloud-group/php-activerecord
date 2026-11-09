@@ -68,12 +68,14 @@ final class QueryPager
      * limit caps the rows of all the pages; its orders are replaced by the key's (Query has refused any other).
      * Ascending and without $include_new_rows, the rows read stop at the largest key the query matches before the
      * first page, so rows inserted during the reading are not read; no matching row means no page. The last key of
-     * a page is the $alias attribute of its last model, exact (an INTEGER beyond PHP_INT_MAX stays its digits).
+     * a page is the $alias attribute of its last model, exact (an INTEGER beyond PHP_INT_MAX stays its digits). The
+     * conditions of the query are ANDed with the key's as one group, in parentheses, so that a top-level OR in them
+     * cannot escape the key's.
      *
      * @param string $method The method that reads the pages, for the message of the exception
      * @return \Generator<int, list<TModel>> The page index, from 0, to the models of the page
-     * @throws ActiveRecordException after a page whose last model has no $alias attribute, or a null one, before the
-     *   page is yielded
+     * @throws ActiveRecordException after a page whose last model has no $alias attribute, or a null one, or whose last
+     *   key is the one of the page before (the next page would read the same rows), before the page is yielded
      */
     public function keyset_pages(string $method, int $count, string $column, string $alias, bool $desc, bool $include_new_rows): \Generator
     {
@@ -99,6 +101,7 @@ final class QueryPager
         }
 
         $base = $this->query->clone()->reorder($column, $desc ? 'desc' : 'asc');
+        self::enclose_wheres($base->state());
 
         if (null !== $bound) {
             $base->where($column, '<=', $bound);
@@ -120,10 +123,17 @@ final class QueryPager
                 return;
             }
 
+            $previous = $last;
             $last = $page[array_key_last($page)]->attributes()[$alias] ?? null;
 
             if (null === $last) {
                 throw new ActiveRecordException(sprintf('%s() was aborted because the [%s] column is not present in the query result', $method, $alias));
+            }
+
+            // the next page would read the same rows again, forever (compared strictly: two big keys read as digits
+            // must not be compared as the floats they would make)
+            if ($last === $previous) {
+                throw new ActiveRecordException(sprintf('%s() was aborted because the key [%s] did not advance past %s', $method, $alias, var_export($last, true)));
             }
 
             yield $index => $page;
@@ -136,6 +146,22 @@ final class QueryPager
                 $remaining -= $size;
             }
         }
+    }
+
+    /**
+     * Encloses the conditions of $state in one group, the one a where(Closure) adds, when there is more than one: the
+     * conditions ANDed after them then apply to all of them, not to the last one an OR joins. A lone condition is left
+     * as it is: a group or a raw condition beside another is in parentheses already (see ConditionCompiler).
+     */
+    private static function enclose_wheres(QueryState $state): void
+    {
+        if (count($state->wheres) < 2) {
+            return;
+        }
+
+        $group = new QueryState();
+        $group->wheres = $state->wheres;
+        $state->wheres = [['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group]];
     }
 
     /**

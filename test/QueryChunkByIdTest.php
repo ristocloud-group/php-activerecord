@@ -321,6 +321,106 @@ class QueryChunkByIdTest extends DatabaseTest
         $this->assert_same(5, count($seen));
     }
 
+    /**
+     * The author_ids of the pages of a keyset method, run by $run with the callback it is given; the callback stops the
+     * reading after 6 pages, so a key that does not advance cannot loop forever.
+     *
+     * @return list<list<int>>
+     */
+    private function capped_pages(callable $run): array
+    {
+        $pages = [];
+        $run(function (array $models) use (&$pages) {
+            $pages[] = array_map(fn($m) => $m->author_id, $models);
+
+            return count($pages) < 6;
+        });
+
+        return $pages;
+    }
+
+    /**
+     * The author_ids a lazy keyset generator yields, at most 6.
+     *
+     * @return list<int>
+     */
+    private function capped_ids(Generator $models): array
+    {
+        $ids = [];
+        foreach ($models as $model) {
+            $ids[] = $model->author_id;
+            if (count($ids) >= 6) {
+                break;
+            }
+        }
+
+        return $ids;
+    }
+
+    // Final review F1: the key conditions are ANDed with the query's WHERE as a whole. A top-level OR in it used to
+    // escape them (a OR b AND key > ?), so the pages re-read the lowest rows forever.
+    public function test_top_level_or_where_is_enclosed()
+    {
+        $query = fn() => Author::where('author_id', 1)->or_where('author_id', '>=', 3);
+
+        $this->assert_same([[1], [3], [4]], $this->capped_pages(fn($callback) => $query()->chunk_by_id(1, $callback)));
+        $this->assert_same([[4], [3], [1]], $this->capped_pages(fn($callback) => $query()->chunk_by_id_desc(1, $callback)));
+        $this->assert_same([[1], [3], [4]], $this->capped_pages(fn($callback) => $query()->chunk_by_id(1, $callback, include_new_rows: true)));
+        $this->assert_same([1, 3, 4], $this->capped_ids($query()->lazy_by_id(1)));
+        $this->assert_same([4, 3, 1], $this->capped_ids($query()->lazy_by_id_desc(1)));
+        $this->assert_same([1, 3, 4], $this->capped_ids($query()->lazy_by_id(1, include_new_rows: true)));
+    }
+
+    public function test_page_sql_encloses_the_query_where()
+    {
+        $query = Author::where('author_id', 1)->or_where('author_id', '>=', 3);
+        $sql = $query->to_sql();
+        $where = substr($sql, strpos($sql, ' WHERE ') + strlen(' WHERE '));
+
+        $statements = $this->statements(fn() => $this->capped_pages(fn($callback) => $query->chunk_by_id(1, $callback)));
+        $pages = array_values(array_filter($statements, fn($s) => str_contains($s, ' LIMIT ')));
+
+        $this->assert_same(4, count($pages));
+        foreach ($pages as $page) {
+            $this->assert_string_contains_string(" WHERE ($where) AND ", $page);
+        }
+    }
+
+    // A single condition, and a single group, are not wrapped a second time
+    public function test_a_lone_condition_is_not_wrapped_again()
+    {
+        $statements = $this->statements(fn() => Author::where('author_id', '>', 1)->chunk_by_id(5, fn() => null));
+        $page = array_values(array_filter($statements, fn($s) => str_contains($s, ' LIMIT ')))[0];
+        $this->assert_string_not_contains_string('((', $page);
+
+        $statements = $this->statements(fn() => Author::where(fn($q) => $q->where('author_id', 1)->or_where('author_id', 3))->chunk_by_id(5, fn() => null));
+        $page = array_values(array_filter($statements, fn($s) => str_contains($s, ' LIMIT ')))[0];
+        $this->assert_string_not_contains_string('((', $page);
+    }
+
+    // Final review F1, the hardening: a page whose last key is the one of the page before would read the same rows
+    // again, forever. Reached here by a key alias selected as a constant: every page ends on k = 1.
+    public function test_key_that_does_not_advance_throws()
+    {
+        $pages = [];
+
+        try {
+            $this->capped_pages(function ($callback) use (&$pages) {
+                Author::select('*')->select_raw('1 AS k')->chunk_by_id(1, function (array $models) use ($callback, &$pages) {
+                    $pages[] = array_map(fn($m) => $m->author_id, $models);
+
+                    return $callback($models);
+                }, 'author_id', 'k');
+            });
+            $this->fail('expected an ActiveRecordException');
+        } catch (ActiveRecordException $e) {
+            // the value as the driver reads it: '1' (MySQL, MariaDB) or 1 (SQLite)
+            $this->assert_matches_regular_expression("/^chunk_by_id\\(\\) was aborted because the key \\[k\\] did not advance past '?1'?$/", $e->getMessage());
+        }
+
+        $this->assert_same([[1]], $pages);
+    }
+
     public function test_chunk_by_id_leaves_query_unchanged()
     {
         $q = Author::where('author_id', '>', 1)->limit(3);
