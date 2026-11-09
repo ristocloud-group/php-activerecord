@@ -1,14 +1,14 @@
 <?php
 
-use ActiveRecord\Connection;
 use ActiveRecord\ActiveRecordException;
-use Psr\Log\AbstractLogger;
 
 /**
  * Query::lazy(): the models one at a time, read in pages by offset (spec §4.2).
  */
 class QueryLazyTest extends DatabaseTest
 {
+    use CapturesStatements;
+
     public function test_lazy_yields_models_with_sequential_keys()
     {
         $models = iterator_to_array(Author::lazy(3));
@@ -36,29 +36,13 @@ class QueryLazyTest extends DatabaseTest
 
     public function test_lazy_stops_reading_when_consumer_stops()
     {
-        $connection = Author::table()->connection();
-        $property = new ReflectionProperty(Connection::class, 'logger');
-        $original = $property->getValue($connection);
-        $logger = new class extends AbstractLogger {
-            /** @var list<string> */
-            public array $messages = [];
-
-            public function log($level, string|Stringable $message, array $context = []): void
-            {
-                $this->messages[] = (string) $message;
-            }
-        };
-        $property->setValue($connection, $logger);
-
-        try {
+        $statements = $this->statements(function () {
             foreach (Author::lazy(1) as $a) {
                 break;
             }
-        } finally {
-            $property->setValue($connection, $original);
-        }
+        });
 
-        $on_authors = array_filter($logger->messages, fn($sql) => str_contains($sql, 'authors'));
+        $on_authors = array_filter($statements, fn($sql) => str_contains($sql, 'authors'));
         $this->assert_same(1, count($on_authors));
     }
 }

@@ -1,14 +1,14 @@
 <?php
 
-use ActiveRecord\Connection;
 use ActiveRecord\ActiveRecordException;
-use Psr\Log\AbstractLogger;
 
 /**
  * Query::chunk(): the rows in pages read by offset (spec §4.2, §4.6).
  */
 class QueryChunkTest extends DatabaseTest
 {
+    use CapturesStatements;
+
     /**
      * Runs the chunk with a callback that records the author_ids of each page and the page numbers.
      *
@@ -24,36 +24,6 @@ class QueryChunkTest extends DatabaseTest
         });
 
         return [$result, $pages, $numbers];
-    }
-
-    /**
-     * The statements the callable runs, as the connection of Author logs them.
-     *
-     * @return list<string>
-     */
-    private function statements(callable $run): array
-    {
-        $connection = Author::table()->connection();
-        $property = new ReflectionProperty(Connection::class, 'logger');
-        $original = $property->getValue($connection);
-        $logger = new class extends AbstractLogger {
-            /** @var list<string> */
-            public array $messages = [];
-
-            public function log($level, string|Stringable $message, array $context = []): void
-            {
-                $this->messages[] = (string) $message;
-            }
-        };
-        $property->setValue($connection, $logger);
-
-        try {
-            $run();
-        } finally {
-            $property->setValue($connection, $original);
-        }
-
-        return $logger->messages;
     }
 
     public function test_chunk_pages_in_pk_order_without_order()
