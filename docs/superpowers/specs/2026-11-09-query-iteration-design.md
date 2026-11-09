@@ -1,13 +1,13 @@
 # Query iteration — chunk, lazy and cursor on the query builder
 
 **Date:** 2026-11-09
-**Status:** Design approved section by section in chat (sections 1–4, 2026-11-09) — awaiting review of this written spec.
+**Status:** Approved (2026-11-09); implemented in the two stacked PRs.
 **Author:** Claude (paired with maintainer)
 **Program:** sub-project 1 of 6 of the "Eloquent fluent query builder" program (see the builder core spec,
 `2026-10-21-query-builder-core-design.md` §1.2). It is built **second**, after the builder core (merged 2026-11-02,
 #178–#183). Its starting decisions are that spec's Appendix A; this document supersedes the Appendix where they differ
 (§1.3).
-**Branches:** this document lives on `spec/query-iteration`, cut from `origin/master` 3316cbf.
+**Branches:** cut from `origin/master` 3316cbf.
 
 ---
 

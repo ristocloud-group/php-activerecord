@@ -416,14 +416,15 @@ The names are Eloquent's in snake_case, with the `or_` variants it has (`orWhere
 | `toSql`, `toRawSql`, `getBindings` | `to_sql`, `to_raw_sql`, `get_bindings` |
 | `get`, `first`, `firstOrFail`, `firstOr`, `sole`, `find`, `findOrFail`, `findMany`, `findOr`, `value`, `soleValue`, `pluck`, `exists`, `doesntExist` | `get`, `first`, `first_or_fail`, `first_or`, `sole`, `find`, `find_or_fail`, `find_many`, `find_or`, `value`, `sole_value`, `pluck`, `exists`, `doesnt_exist` |
 | `count`, `min`, `max`, `sum`, `avg`, `average` | `count`, `min`, `max`, `sum`, `avg`, `average` |
+| `chunk`, `chunkById`, `chunkByIdDesc`, `lazy`, `lazyById`, `lazyByIdDesc` | `chunk`, `chunk_by_id`, `chunk_by_id_desc`, `lazy`, `lazy_by_id`, `lazy_by_id_desc` |
 | `insert`, `update`, `delete`, `upsert` | `insert`, `update`, `delete`, `upsert` |
 
 Added here: `joins()` and `left_joins()` join by relationship name, `readonly()` flags the models a query finds as
 readonly, and `Model::without_timestamps()` suspends the timestamps of a model for a closure.
 
 Eloquent's other builder features are not part of it: relationship queries (`whereHas`, `withCount`, ...), subqueries and
-unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, chunking and
-cursors, query scopes, and the date, JSON and full-text wheres.
+unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, cursors, query
+scopes, and the date, JSON and full-text wheres.
 
 ### Legacy and builder side by side ###
 
@@ -701,8 +702,9 @@ Invoice::where('status', 'open')->count();                  // 3
 ### Iterating over many rows ###
 
 `get()` loads every row at once. To walk a big table, read it in pages: `chunk()` and `chunk_by_id()` pass each page to a
-callback, and `lazy()` and `lazy_by_id()` give the models one at a time as a generator. Each page is one statement, and the
-`with()` relationships are loaded for each page, not for each row.
+callback, and `lazy()` and `lazy_by_id()` give the models one at a time as a generator. Each page is one statement (an
+ascending `chunk_by_id()` or `lazy_by_id()` without `include_new_rows` runs one `max()` probe first), and the `with()`
+relationships are loaded for each page, not for each row.
 
 ```php
 Customer::where('active', 1)->chunk(100, function (array $customers, int $page): void {
@@ -733,11 +735,13 @@ Invoice::new_query()->lazy_by_id_desc(500);               // the same, as a gene
   method returns `false`; it returns `true` when every page was passed. `lazy*()` models are keyed from 0.
 - Sizes are `$count` for `chunk*` and `$chunk_size` (default 1000) for `lazy*`. Below 1 it throws, at the call.
 - `lazy*()` run no statement until the first model is asked for, and read the next page only when the models of the one
-  before are used. They hold one page of models in memory. Like `cursor()`, they read the query as it was at the call: a
-  later change to the builder does not reach them.
+  before are used. They hold one page of models in memory. They read the query as it was at the call: a later change to
+  the builder does not reach them.
 - A query without an order is read in the order of its primary key, so pages do not repeat or skip rows by chance. Give
-  an `order_by()` to `chunk()` or `lazy()` to read in another order. The `limit()` of the query caps the rows of all the
-  pages and its `offset()` is where the first page starts. The query itself is not changed.
+  an `order_by()` to `chunk()` or `lazy()` to read in another order. A `distinct()` or grouped query that does not
+  select (or group by) the primary key needs one: the database rejects the implicit primary-key order there (MySQL
+  errors 3065 and 1055). The `limit()` of the query caps the rows of all the pages. For `chunk()` and `lazy()`, its
+  `offset()` is where the first page starts (the keyset methods throw on one, below). The query itself is not changed.
 
 **Offset or keyset.** `chunk()` and `lazy()` page by offset (`LIMIT n OFFSET m`). If the loop deletes the rows it reads,
 or updates a column the query filters on, the pages move under it and **rows are skipped**. `chunk_by_id()` and
@@ -753,7 +757,7 @@ Invoice::new_query()->chunk_by_id(500, $callback, include_new_rows: true);
 
 - `$column` is the key, the primary key by default. It is a column of the model, by its name, an alias
   (`$alias_attribute`) or an attribute name, or the column's own name qualified with the model's table (or its `from()`
-  alias) when the query joins. Another table's column, or a name that is no column of the model, throws.
+  alias), with or without a join. Another table's column, or a name that is no column of the model, throws.
 - `$alias` is the attribute the last key of a page is read from, by default that of `$column`. Give it when the query
   selects the key under another name. If the last model of a page has no such attribute, or a `null` one, it throws
   before that page is passed.
@@ -763,14 +767,16 @@ Invoice::new_query()->chunk_by_id(500, $callback, include_new_rows: true);
   them and they have no such option.
 - An integer key beyond `PHP_INT_MAX` is kept as its digit string and bound as such.
 
-**Where it differs from Eloquent**: all of these throw, at the call and before any statement.
+**Where it differs from Eloquent**: these throw, at the call and before any statement.
 
 - A size below 1, on every method.
-- `chunk_by_id()` and `lazy_by_id()` on a query ordered by anything but the key (Eloquent keeps the order and silently
-  skips rows): remove it with `reorder()`. An order on the key itself is replaced.
-- `chunk_by_id()` and `lazy_by_id()` on a query with an `offset()`.
-- `chunk_by_id()` and `lazy_by_id()` on a model with a composite primary key, without `$column`.
-- And `include_new_rows` is opt-in here, where Eloquent always reads new rows.
+- The `*_by_id*()` methods (`chunk_by_id()`, `lazy_by_id()` and their `_desc` variants) on a query ordered by anything
+  but the key (Eloquent keeps the order and silently skips rows): remove it with `reorder()`. An order on the key itself
+  is replaced.
+- The `*_by_id*()` methods on a query with an `offset()`, any offset: `offset(0)` and `for_page()` too.
+- The `*_by_id*()` methods on a model with a composite primary key, without `$column`.
+
+The other difference is not a refusal: `include_new_rows` is opt-in here, where Eloquent always reads new rows.
 
 **Shadowing.** A model's own static method wins over the forwarded name (see Entry points), so a model that defines its
 own `chunk()` keeps it: call the builder's as `Invoice::new_query()->chunk(...)`.
