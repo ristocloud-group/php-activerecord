@@ -258,12 +258,14 @@
   - `Connection::release_stream(): void` (`@internal`), which clears busy.
   - `protected function unbuffered(Closure $execute): mixed` (`@internal` hook), default `return $execute();`.
   - Private `refuse_when_busy(string $method): void` throws `ConnectionBusy` with `sprintf('%s() cannot run while the connection streams a cursor (cursor(stream: true)): iterate the cursor to its end, or unset() it, first', $method)`. Called first in `query()`, `stream_query()`, `transaction()`, `commit()`, `rollback()`.
+    *Changed in the final review: rollback() closes the stream (spec §4.5).*
   - `Query::cursor(bool $stream = false)`.
   - Share the prepare/bind code of `query()` and `stream_query()` through one private method. `query()` keeps its signature and logging.
 
 - [ ] **Step 1: Write the failing tests**, appended to `test/QueryCursorTest.php`. Each runs on every adapter.
   - `test_stream_blocks_other_queries`: inside `foreach (Author::new_query()->cursor(stream: true) as $a)`, `Author::find(1)` throws `ConnectionBusy` containing `query()`. After the loop (run to its end), `Author::find(1)` works.
   - `test_stream_blocks_transactions`: inside the loop, `transaction()`, `commit()` and `rollback()` on `Author::table()->connection()` each throw `ConnectionBusy`.
+    *Changed in the final review: rollback() closes the stream (spec §4.5).*
   - `test_second_stream_is_refused`: a nested `Author::new_query()->cursor(stream: true)` throws `ConnectionBusy` at its first iteration.
   - `test_break_from_direct_foreach_releases`: after `foreach (... cursor(stream: true) as $a) { break; }`, `Author::find(1)` works.
   - `test_held_cursor_keeps_busy_until_unset` (Review Focus 2): `$c = Author::new_query()->cursor(stream: true); foreach ($c as $a) { break; }` — `Author::find(1)` throws `ConnectionBusy`. After `unset($c)`, it works.

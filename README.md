@@ -416,15 +416,15 @@ The names are Eloquent's in snake_case, with the `or_` variants it has (`orWhere
 | `toSql`, `toRawSql`, `getBindings` | `to_sql`, `to_raw_sql`, `get_bindings` |
 | `get`, `first`, `firstOrFail`, `firstOr`, `sole`, `find`, `findOrFail`, `findMany`, `findOr`, `value`, `soleValue`, `pluck`, `exists`, `doesntExist` | `get`, `first`, `first_or_fail`, `first_or`, `sole`, `find`, `find_or_fail`, `find_many`, `find_or`, `value`, `sole_value`, `pluck`, `exists`, `doesnt_exist` |
 | `count`, `min`, `max`, `sum`, `avg`, `average` | `count`, `min`, `max`, `sum`, `avg`, `average` |
-| `chunk`, `chunkById`, `chunkByIdDesc`, `lazy`, `lazyById`, `lazyByIdDesc` | `chunk`, `chunk_by_id`, `chunk_by_id_desc`, `lazy`, `lazy_by_id`, `lazy_by_id_desc` |
+| `chunk`, `chunkById`, `chunkByIdDesc`, `lazy`, `lazyById`, `lazyByIdDesc`, `cursor` | `chunk`, `chunk_by_id`, `chunk_by_id_desc`, `lazy`, `lazy_by_id`, `lazy_by_id_desc`, `cursor` |
 | `insert`, `update`, `delete`, `upsert` | `insert`, `update`, `delete`, `upsert` |
 
 Added here: `joins()` and `left_joins()` join by relationship name, `readonly()` flags the models a query finds as
 readonly, and `Model::without_timestamps()` suspends the timestamps of a model for a closure.
 
 Eloquent's other builder features are not part of it: relationship queries (`whereHas`, `withCount`, ...), subqueries and
-unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, cursors, query
-scopes, and the date, JSON and full-text wheres.
+unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, query scopes,
+and the date, JSON and full-text wheres.
 
 ### Legacy and builder side by side ###
 
@@ -737,8 +737,8 @@ Invoice::new_query()->lazy_by_id_desc(500);               // the same, as a gene
 - `lazy*()` run no statement until the first model is asked for, and read the next page only when the models of the one
   before are used. They hold one page of models in memory: a page is let go before the next is read. A model with a
   non-null date attribute is the exception: it references itself through its `ActiveRecord\DateTime`, so PHP frees it
-  at its next cycle collection, not at the page switch. They read the query as it was at the call: a later change to the
-  builder does not reach them.
+  at its next cycle collection, not at the page switch. Like `cursor()`, they read the query as it was at the call: a
+  later change to the builder does not reach them.
 - A query without an order is read in the order of its primary key, so pages do not repeat or skip rows by chance. Give
   an `order_by()` to `chunk()` or `lazy()` to read in another order. On a `distinct()` or grouped query that does not
   select (or group by) the primary key, MySQL and Postgres reject the implicit primary-key order (MySQL errors 3065 and
