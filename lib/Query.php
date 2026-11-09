@@ -140,6 +140,8 @@ class Query
         'sum',
         'avg',
         'average',
+        'chunk',
+        'lazy',
     ];
 
     private QueryState $state;
@@ -2080,6 +2082,52 @@ class Query
     }
 
     /**
+     * Reads the rows in pages of $count models, one statement for each page, and passes each page to the callback
+     * with its number from 1. The relationships of with() are loaded for each page. A query without an order is read
+     * in the order of its primary key; its offset is where the first page starts and its limit caps the rows of all
+     * the pages. The callback returning false stops the reading, and chunk() returns false then: true when every
+     * page was passed. The query itself is not changed.
+     *
+     * Offset paging is not safe when the callback changes the rows the query selects (deletes them, or updates a
+     * column the query filters on): the pages move under it, and rows are skipped.
+     *
+     * <code>
+     * Author::where('active', 1)->chunk(100, function (array $authors, int $page) {
+     *     foreach ($authors as $author) { ... }
+     * });
+     * </code>
+     *
+     * @param callable(list<TModel>, int): mixed $callback
+     * @throws ActiveRecordException before any statement, for a $count below 1
+     */
+    public function chunk(int $count, callable $callback): bool
+    {
+        $this->refuse_chunk_size(__FUNCTION__, $count);
+
+        return $this->run_pages((new QueryPager($this))->offset_pages($count), $callback);
+    }
+
+    /**
+     * The models of the rows, one at a time, read in pages of $chunk_size as chunk() reads them, and keyed from 0.
+     * No statement runs until the first model is asked for, and the next page is read only when the models of the
+     * one before are used.
+     *
+     * <code>
+     * foreach (Author::lazy(500) as $author) { ... }
+     * </code>
+     *
+     * @return \Generator<int, TModel>
+     * @throws ActiveRecordException at the call, before any statement, for a $chunk_size below 1
+     */
+    public function lazy(int $chunk_size = 1000): \Generator
+    {
+        $this->refuse_chunk_size(__FUNCTION__, $chunk_size);
+        $pager = new QueryPager($this);
+
+        return $pager->models($pager->offset_pages($chunk_size));
+    }
+
+    /**
      * INSERTs rows into the model's table and returns true: one row, a hash of column => value, or a list of them, which
      * go as one INSERT of several VALUES. They are not models: no validation, no callback and no setter runs, as in
      * Eloquent's insert(). The rows are checked before any statement:
@@ -2447,7 +2495,38 @@ class Query
         return ($connection ?? $table->connection())->query(($table->last_sql = $sql->to_s()), $values);
     }
 
-    private function table(): Table
+    /**
+     * @throws ActiveRecordException for a size below 1, which $method names
+     */
+    private function refuse_chunk_size(string $method, int $count): void
+    {
+        if ($count < 1) {
+            throw new ActiveRecordException(sprintf('%s(): the chunk size must be at least 1, %d given', $method, $count));
+        }
+    }
+
+    /**
+     * Passes each page to the callback with its number from 1, and stops at the first strict false it returns.
+     *
+     * @param \Generator<int, list<TModel>> $pages
+     * @param callable(list<TModel>, int): mixed $callback
+     * @return bool false when the callback stopped the pages, else true
+     */
+    private function run_pages(\Generator $pages, callable $callback): bool
+    {
+        foreach ($pages as $index => $page) {
+            if (false === $callback($page, $index + 1)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @internal Serves QueryPager; not a supported API.
+     */
+    public function table(): Table
     {
         return $this->table ??= Table::load($this->model_class);
     }

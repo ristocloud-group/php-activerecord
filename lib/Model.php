@@ -172,6 +172,8 @@ use Closure;
  * @method static int|string|float|null sum(string $column) The exact sum of this column over the rows of this class, as the column's type reads it: 0 of that type when there is none
  * @method static string|float|null avg(string $column) The average of this column over the rows of this class: exact for an integer or decimal column, null when there is none
  * @method static string|float|null average(string $column) The average of this column over the rows of this class, as avg() reads it
+ * @method static bool chunk(int $count, callable $callback) Passes the rows of a new query on this class to the callback in pages of this many models, until it returns false
+ * @method static \Generator<int, static> lazy(int $chunk_size = 1000) The models of a new query on this class one at a time, read in pages of this many
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */

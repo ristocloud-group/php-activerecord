@@ -156,7 +156,7 @@ class QueryForwardingTest extends DatabaseTest
 
     public function test_forwardable_matches_the_method_tags(): void
     {
-        preg_match_all('/@method static \S+ (\w+)\(/', (string) (new ReflectionClass(ActiveRecord\Model::class))->getDocComment(), $m);
+        preg_match_all('/@method static [^(]+? (\w+)\(/', (string) (new ReflectionClass(ActiveRecord\Model::class))->getDocComment(), $m);
 
         $tagged = array_values(array_unique($m[1]));
         $forwardable = array_values(array_unique(ActiveRecord\Query::FORWARDABLE));
