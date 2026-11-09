@@ -174,6 +174,10 @@ use Closure;
  * @method static string|float|null average(string $column) The average of this column over the rows of this class, as avg() reads it
  * @method static bool chunk(int $count, callable $callback) Passes the rows of a new query on this class to the callback in pages of this many models, until it returns false
  * @method static \Generator<int, static> lazy(int $chunk_size = 1000) The models of a new query on this class one at a time, read in pages of this many
+ * @method static bool chunk_by_id(int $count, callable $callback, ?string $column = null, ?string $alias = null, bool $include_new_rows = false) Passes the rows of a new query on this class to the callback in pages of this many models read by key, until it returns false
+ * @method static bool chunk_by_id_desc(int $count, callable $callback, ?string $column = null, ?string $alias = null) Passes the rows of a new query on this class to the callback in pages of this many models read by key, the highest first, until it returns false
+ * @method static \Generator<int, static> lazy_by_id(int $chunk_size = 1000, ?string $column = null, ?string $alias = null, bool $include_new_rows = false) The models of a new query on this class one at a time, read by key in pages of this many
+ * @method static \Generator<int, static> lazy_by_id_desc(int $chunk_size = 1000, ?string $column = null, ?string $alias = null) The models of a new query on this class one at a time, read by key in pages of this many, the highest first
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */
