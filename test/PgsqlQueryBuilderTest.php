@@ -432,4 +432,23 @@ class PgsqlQueryBuilderTest extends DatabaseTest
         $this->assert_same('SELECT * FROM "authors" LIMIT 0 OFFSET 0', Author::limit(0)->to_sql());
         $this->assert_same('SELECT * FROM "authors" LIMIT 1 OFFSET 9223372036854775806', Author::for_page(PHP_INT_MAX, 1)->to_sql());
     }
+
+    // Spec §4.5: PDO pgsql buffers the rows of a stream anyway, but the busy rule applies on every adapter
+    public function test_stream_busy_rule_applies_on_pgsql(): void
+    {
+        $count = 0;
+
+        foreach (Author::new_query()->cursor(stream: true) as $a) {
+            try {
+                Author::find(1);
+                $this->fail('ConnectionBusy expected');
+            } catch (ActiveRecord\ConnectionBusy $e) {
+                $this->assert_string_contains_string('query() cannot run while the connection streams a cursor', $e->getMessage());
+            }
+            ++$count;
+        }
+
+        $this->assert_same(4, $count);
+        $this->assert_same('Tito', Author::find(1)->name);
+    }
 }

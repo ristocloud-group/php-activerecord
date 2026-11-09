@@ -51,6 +51,10 @@ abstract class Connection
      */
     private int $transaction_depth = 0;
     /**
+     * Whether a cursor streams its rows on this connection (stream_query() until release_stream()).
+     */
+    private bool $streaming = false;
+    /**
      * Opaque identity of the database this connection points to.
      * @see cache_identity()
      */
@@ -349,6 +353,75 @@ abstract class Connection
      */
     public function query($sql, &$values = [])
     {
+        $this->refuse_when_busy(__FUNCTION__);
+
+        return $this->prepare_and_execute($sql, $values, false);
+    }
+
+    /**
+     * Prepares, binds and executes $sql as query() does, but through the adapter's unbuffered() hook, so that the
+     * rows can come from the server one at a time, and marks the connection busy once the statement has executed: until
+     * release_stream(), any other query, transaction start, commit or rollback on it throws ConnectionBusy. A failing
+     * execute leaves the connection free. An adapter that overrides query() is not reached by it.
+     *
+     * @internal Serves Cursor (Query::cursor() with stream: true); not a supported API.
+     * @param array<int, mixed> $values Positional bind values
+     * @throws ConnectionBusy when the connection already streams a cursor
+     * @throws DatabaseException when the statement fails to prepare or execute
+     */
+    public function stream_query(string $sql, array $values = []): \PDOStatement
+    {
+        $this->refuse_when_busy(__FUNCTION__);
+        $sth = $this->prepare_and_execute($sql, $values, true);
+        $this->streaming = true;
+
+        return $sth;
+    }
+
+    /**
+     * Frees the connection that stream_query() marked busy, once its statement is closed.
+     *
+     * @internal Serves Cursor (Query::cursor() with stream: true); not a supported API.
+     */
+    public function release_stream(): void
+    {
+        $this->streaming = false;
+    }
+
+    /**
+     * Runs the closure that executes a statement of stream_query(), and returns what it returns. By default it runs it
+     * as is: an adapter whose driver buffers the rows of a statement unless told not to overrides it, to turn the
+     * buffering off around the execute.
+     *
+     * @internal Serves stream_query(); not a supported API.
+     * @template T
+     * @param Closure(): T $execute
+     * @return T
+     */
+    protected function unbuffered(Closure $execute): mixed
+    {
+        return $execute();
+    }
+
+    /**
+     * Throws ConnectionBusy, naming $method, when a cursor streams on this connection.
+     */
+    private function refuse_when_busy(string $method): void
+    {
+        if ($this->streaming) {
+            throw new ConnectionBusy(sprintf('%s() cannot run while the connection streams a cursor (cursor(stream: true)): iterate the cursor to its end, or unset() it, first', $method));
+        }
+    }
+
+    /**
+     * The statement of query() and stream_query(): logs $sql, prepares it, then binds and executes it with
+     * bind_values(), through unbuffered() when $unbuffered.
+     *
+     * @param string $sql Raw SQL string to execute (left untyped, as query() takes it).
+     * @param array<int, mixed> $values Positional bind values
+     */
+    private function prepare_and_execute($sql, array $values, bool $unbuffered): \PDOStatement
+    {
         $this->logger->debug($sql, compact('values'));
 
         $this->last_query = $sql;
@@ -364,7 +437,11 @@ abstract class Connection
         $sth->setFetchMode(PDO::FETCH_ASSOC);
 
         try {
-            if (!$this->bind_values($sth, $values)) {
+            $executed = $unbuffered
+                ? $this->unbuffered(fn(): bool => $this->bind_values($sth, $values))
+                : $this->bind_values($sth, $values);
+
+            if (!$executed) {
                 throw new DatabaseException($this);
             }
         } catch (PDOException $e) {
@@ -496,6 +573,8 @@ abstract class Connection
      */
     public function transaction()
     {
+        $this->refuse_when_busy(__FUNCTION__);
+
         if ($this->transaction_depth === 0) {
             if (!$this->connection->beginTransaction()) {
                 throw new DatabaseException($this);
@@ -514,6 +593,8 @@ abstract class Connection
      */
     public function commit()
     {
+        $this->refuse_when_busy(__FUNCTION__);
+
         if ($this->transaction_depth > 1) {
             $this->query('RELEASE SAVEPOINT ar_sp_' . ($this->transaction_depth - 1));
             --$this->transaction_depth;
@@ -534,6 +615,8 @@ abstract class Connection
      */
     public function rollback()
     {
+        $this->refuse_when_busy(__FUNCTION__);
+
         if ($this->transaction_depth > 1) {
             $this->query('ROLLBACK TO SAVEPOINT ar_sp_' . ($this->transaction_depth - 1));
             --$this->transaction_depth;
