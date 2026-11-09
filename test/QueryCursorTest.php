@@ -115,10 +115,133 @@ class QueryCursorTest extends DatabaseTest
         foreach (Author::new_query()->cursor(stream: true) as $a) {
             $this->assert_busy(fn() => $connection->transaction(), 'transaction()');
             $this->assert_busy(fn() => $connection->commit(), 'commit()');
-            $this->assert_busy(fn() => $connection->rollback(), 'rollback()');
         }
 
         $this->assert_false($connection->inTransaction());
+    }
+
+    // Final review F4 (maintainer decision 2026-11-09): rollback() closes an open stream instead of refusing. With the
+    // arguments kept in exception traces (zend.exception_ignore_args=0, PHP's default without a php.ini), the
+    // exception holds the cursor it was thrown beside, so the stream is still open when Model::transaction() rolls
+    // back: rollback() used to throw ConnectionBusy, losing the exception and leaving the transaction open.
+    public function test_exception_out_of_a_transaction_with_an_open_stream_rolls_back()
+    {
+        $connection = Author::table()->connection();
+        $ignore_args = ini_set('zend.exception_ignore_args', '0');
+
+        try {
+            Author::transaction(function () {
+                Author::create(['name' => 'Rolled back']);
+                $cursor = Author::new_query()->cursor(stream: true);
+                $cursor->current();
+                $this->throw_beside($cursor);
+            });
+            $this->fail('RuntimeException expected');
+        } catch (RuntimeException $e) {
+            $this->assert_same('from the helper', $e->getMessage());
+            // the trace still holds the cursor, as the scenario needs
+            $this->assert_instance_of(Generator::class, $e->getTrace()[0]['args'][0] ?? null);
+        } finally {
+            ini_set('zend.exception_ignore_args', (string) $ignore_args);
+        }
+
+        $this->assert_false($connection->inTransaction());
+        $this->assert_null(Author::find_by_name('Rolled back'));
+    }
+
+    public function test_a_cursor_closed_by_rollback_throws_when_read_again()
+    {
+        $connection = Author::table()->connection();
+        $connection->transaction();
+        $cursor = Author::order_by('author_id')->cursor(stream: true);
+        $this->assert_same(1, $cursor->current()->author_id);
+
+        $connection->rollback();
+
+        $this->assert_false($connection->inTransaction());
+        $this->assert_same('Tito', Author::find(1)->name);
+        $this->assert_closed_by_rollback($cursor);
+    }
+
+    // A stale cursor's finally, run after the rollback closed its stream, must not free a newer stream's connection
+    public function test_a_cursor_closed_by_rollback_does_not_free_a_newer_stream()
+    {
+        $connection = Author::table()->connection();
+        $connection->transaction();
+        $old = Author::new_query()->cursor(stream: true);
+        $old->current();
+        $connection->rollback();
+
+        $new = Author::order_by('author_id')->cursor(stream: true);
+        $this->assert_same(1, $new->current()->author_id);
+        unset($old);
+
+        $this->assert_busy(fn() => Author::find(1), 'query()');
+        $ids = [];
+        for ($new->next(); $new->valid(); $new->next()) {
+            $ids[] = $new->current()->author_id;
+        }
+        $this->assert_same([2, 3, 4], $ids);
+        $this->assert_same('Tito', Author::find(1)->name);
+    }
+
+    public function test_savepoint_rollback_closes_the_stream()
+    {
+        $connection = Author::table()->connection();
+        $connection->transaction();
+        $connection->transaction();
+        Author::create(['name' => 'Inner']);
+        $cursor = Author::new_query()->cursor(stream: true);
+        $cursor->current();
+
+        $connection->rollback();
+
+        $this->assert_true($connection->inTransaction());
+        $this->assert_null(Author::find_by_name('Inner'));
+        $this->assert_closed_by_rollback($cursor);
+
+        $connection->rollback();
+        $this->assert_false($connection->inTransaction());
+    }
+
+    // commit() still refuses: the stream stays open and readable, and the transaction with it
+    public function test_commit_while_streaming_still_refuses()
+    {
+        $connection = Author::table()->connection();
+        $connection->transaction();
+        $cursor = Author::order_by('author_id')->cursor(stream: true);
+        $cursor->current();
+
+        $this->assert_busy(fn() => $connection->commit(), 'commit()');
+        $this->assert_true($connection->inTransaction());
+        $cursor->next();
+        $this->assert_same(2, $cursor->current()->author_id);
+
+        unset($cursor);
+        $connection->rollback();
+        $this->assert_false($connection->inTransaction());
+    }
+
+    // Model::transaction() whose commit is refused by a stream held outside the closure: the rollback of its catch
+    // closes the stream, the transaction is rolled back, and ConnectionBusy comes out
+    public function test_model_transaction_refused_commit_rolls_back()
+    {
+        $cursor = null;
+
+        try {
+            Author::transaction(function () use (&$cursor) {
+                Author::create(['name' => 'Rolled back']);
+                $cursor = Author::new_query()->cursor(stream: true);
+                $cursor->current();
+            });
+            $this->fail('ConnectionBusy expected');
+        } catch (ConnectionBusy $e) {
+            $this->assert_string_starts_with('commit() cannot run while the connection streams a cursor', $e->getMessage());
+        }
+
+        $this->assert_false(Author::table()->connection()->inTransaction());
+        $this->assert_null(Author::find_by_name('Rolled back'));
+        $this->assert_closed_by_rollback($cursor);
     }
 
     public function test_second_stream_is_refused()
@@ -289,6 +412,28 @@ class QueryCursorTest extends DatabaseTest
         } finally {
             $pdo->setAttribute(PDO::ATTR_STATEMENT_CLASS, [PDOStatement::class]);
         }
+    }
+
+    private function throw_beside(Generator $cursor): never
+    {
+        throw new RuntimeException('from the helper');
+    }
+
+    /**
+     * Asserts that reading the cursor again throws: rollback() closed its stream.
+     */
+    private function assert_closed_by_rollback(Generator $cursor): void
+    {
+        try {
+            $cursor->next();
+        } catch (ActiveRecordException $e) {
+            $this->assert_same(ActiveRecordException::class, $e::class);
+            $this->assert_same('The cursor was closed by rollback(): its stream can no longer be read', $e->getMessage());
+
+            return;
+        }
+
+        $this->fail('ActiveRecordException expected');
     }
 
     /**

@@ -2140,9 +2140,10 @@ class Query
      * so other statements may run while iterating. It cannot eager load relationships: use lazy() for those.
      *
      * With $stream, the rows are read from the database one at a time where its driver allows it, and the connection is
-     * busy from the first model until the cursor ends or is destroyed: any other query, transaction start, commit or
-     * rollback on it throws ConnectionBusy, on every adapter. A foreach over the call releases it on break; a cursor held
-     * in a variable stays busy until the variable is unset or goes out of scope.
+     * busy from the first model until the cursor ends or is destroyed: any other query, transaction start or commit on
+     * it throws ConnectionBusy, on every adapter. A rollback closes the stream and frees the connection: the cursor then
+     * throws if read again. A foreach over the call releases it on break; a cursor held in a variable stays busy until
+     * the variable is unset or goes out of scope.
      *
      * <code>
      * foreach (Author::where('active', true)->cursor() as $author) { ... }
@@ -2152,6 +2153,7 @@ class Query
      * @return \Generator<int, TModel>
      * @throws ActiveRecordException at the call, for a query that eager loads relationships (with())
      * @throws ConnectionBusy at the first model of a stream, when the connection already streams one
+     * @throws DatabaseException when the statement fails to execute, or a row fails to be read
      */
     public function cursor(bool $stream = false): \Generator
     {

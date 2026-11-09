@@ -24,10 +24,13 @@ final class Cursor
     /**
      * Sends the statement when the first model is asked for, and yields a model for each row, keyed from 0. The
      * statement's cursor is closed when the generator ends or is dropped. A stream marks the connection busy from its
-     * execute until then (Connection::stream_query()); one that fails to execute leaves the connection free.
+     * execute until then (Connection::stream_query()); one that fails to execute leaves the connection free. A
+     * rollback() of the connection closes a stream and frees the connection before that: the stream then can no longer
+     * be read.
      *
      * @return \Generator<int, TModel>
      * @throws ConnectionBusy for a stream on a connection that already streams one
+     * @throws ActiveRecordException when a stream is read again after a rollback() of the connection closed it
      * @throws DatabaseException when the statement fails to execute, or a row fails to be read (a stream that the
      *   server dropped, for example)
      */
@@ -45,18 +48,21 @@ final class Cursor
             // $sth is set only once the statement has executed: a stream is released only if it held the connection
             $sth = $this->stream ? $connection->stream_query($sql, $values) : $connection->query($sql, $values);
 
-            while (($row = self::fetch($sth))) {
+            while (($row = $this->fetch($connection, $sth))) {
                 /** @var TModel $model */
                 $model = $this->table->hydrate($row, $this->readonly);
 
                 yield $model;
             }
         } finally {
-            try {
-                $sth?->closeCursor();
-            } finally {
-                if ($this->stream && null !== $sth) {
-                    $connection->release_stream();
+            // a stream that a rollback() closed is closed already, and the connection may stream another one since
+            if (null !== $sth && (!$this->stream || $connection->streams($sth))) {
+                try {
+                    $sth->closeCursor();
+                } finally {
+                    if ($this->stream) {
+                        $connection->release_stream($sth);
+                    }
                 }
             }
         }
@@ -67,10 +73,15 @@ final class Cursor
      * one while executing is (see Connection::query()).
      *
      * @return array<string, mixed>|false
+     * @throws ActiveRecordException for a stream that a rollback() of the connection closed
      * @throws DatabaseException
      */
-    private static function fetch(\PDOStatement $sth): array|false
+    private function fetch(Connection $connection, \PDOStatement $sth): array|false
     {
+        if ($this->stream && !$connection->streams($sth)) {
+            throw new ActiveRecordException('The cursor was closed by rollback(): its stream can no longer be read');
+        }
+
         try {
             return $sth->fetch();
         } catch (\PDOException $e) {

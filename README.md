@@ -807,7 +807,7 @@ foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {   // rows rea
 - `cursor()` cannot eager load: with `with()` it throws at the call. Use `lazy()` for those.
 
 **The busy rule.** While a stream is open its connection is busy, on every adapter. `query()`, a transaction start,
-`commit()`, `rollback()` and a second stream on that connection throw `ActiveRecord\ConnectionBusy`. That includes what
+`commit()` and a second stream on that connection throw `ActiveRecord\ConnectionBusy`. That includes what
 looks like a read: a lazy relationship load (`$invoice->customer`) and the first-use schema introspection of a model
 not yet used, both inside the loop. Load what the loop needs beforehand, or use the buffered cursor or `lazy()`. Other
 connections are not affected.
@@ -821,9 +821,12 @@ foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {
 - The connection is released when the foreach ends, or on `break`. A cursor held in a variable is not: after
   `$cursor = Invoice::new_query()->cursor(stream: true); foreach ($cursor as $i) { break; }` the connection stays busy
   until `unset($cursor)`.
-- A stream may be read inside a transaction, but `commit()` and `rollback()` throw while it is open. If a stream cursor
-  made inside a `Model::transaction()` closure is still held outside it, the transaction can be neither committed nor
-  rolled back: finish or `unset()` the cursor first.
+- A stream may be read inside a transaction, but `commit()` throws while it is open. `rollback()` does not: it closes
+  the stream, frees the connection and rolls back (a savepoint too), and reading that cursor again throws
+  `ActiveRecord\ActiveRecordException`. So an exception out of a `Model::transaction()` closure rolls back and comes out
+  as it was, even when it still holds the cursor (an exception keeps the arguments of the calls in its trace). A closure
+  that returns while a stream cursor made in it is still held outside it fails its commit: the transaction is rolled
+  back and `ConnectionBusy` is thrown. Finish or `unset()` the cursor first.
 - MySQL: the server writes rows as the client reads them, and drops the connection after `net_write_timeout` (60 s by
   default) when the client is slower. The loop's next read then fails with error 2006 "server has gone away" or 2013
   "lost connection", as an `ActiveRecord\DatabaseException`. Raise `net_write_timeout` for a slow loop, or use the

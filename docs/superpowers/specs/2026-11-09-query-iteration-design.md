@@ -120,7 +120,7 @@ eager loading through `with()`.
 | `Table::hydrate()` (new, extracted) | `@internal` | `hydrate(array $row, bool $readonly): Model` — the per-row hydration now inline in `find_by_sql()`, extracted so `find_by_sql()` and `Cursor` share it. Behavior-preserving. |
 | `Connection::stream_query()` (new) | `@internal` | Prepares, binds and executes `$sql` through the adapter's unbuffered hook, then marks the connection busy. A new method rather than a parameter on `query()`, because an added parameter breaks a consumer adapter that overrides `query()`. |
 | `Connection::unbuffered(Closure)` (new hook) | `@internal` | Runs the `execute()` closure. Default: as is. `MysqlAdapter` overrides it: buffered queries off, execute, restore the previous value in `finally` (§4.5). |
-| Busy guard in `Connection` | `@internal` | While a stream is open, `query()`, `transaction()`, `commit()` and `rollback()` throw `ConnectionBusy` (§6). |
+| Busy guard in `Connection` | `@internal` | While a stream is open, `query()`, `transaction()` and `commit()` throw `ConnectionBusy`; `rollback()` closes the stream first (§4.5). |
 | `ConnectionBusy` (new, `lib/exceptions/ConnectionBusy.php`) | public | `extends ActiveRecordException`, as `MultipleRecordsFound` does. |
 
 New files need only their file in the right PSR-4 base dir (`LibraryLoadingTest` guards it).
@@ -227,7 +227,7 @@ SELECT ... WHERE (<user's where>) AND id > ? [AND id <= ?] ORDER BY id LIMIT ?
   no deprecation may be raised on PHP 8.5 (§10).
 - **The connection is busy** from the `execute()` until the generator finishes or is destroyed, **on every adapter**
   (not only MySQL), so code tried on SQLite behaves as it will on MySQL. While busy, any other query, transaction
-  start, commit or rollback on that connection throws `ConnectionBusy` — including the schema introspection of a model
+  start or commit on that connection throws `ConnectionBusy` — including the schema introspection of a model
   not loaded yet and a lazy relationship read inside the loop. Other connections are unaffected. A second stream on the
   same connection is "another query".
 - Released in the generator's `finally`, which PHP runs when the loop ends, on `break` (a `foreach` over the call
@@ -236,8 +236,17 @@ SELECT ... WHERE (<user's where>) AND id > ? [AND id <= ?] ORDER BY id LIMIT ?
   until the variable is unset or goes out of scope.
 - Postgres: PDO pgsql buffers the whole result anyway, so `stream` saves no memory there, but the busy rule applies.
   SQLite: steps natively; the busy rule applies.
-- A stream inside an open transaction is allowed; commit/rollback while it is open throw `ConnectionBusy`.
-- A stream read more slowly than MySQL's `net_write_timeout` fails with 2006 (documented).
+- A stream inside an open transaction is allowed; commit while it is open throws `ConnectionBusy`.
+- **`rollback()` closes the stream** (at any depth: savepoint or outermost): it `closeCursor()`s the streaming
+  statement (an error from it is ignored), frees the connection, then rolls back. Reading that cursor again throws
+  `ActiveRecordException` ("The cursor was closed by rollback(): its stream can no longer be read"). Rollback is the
+  failure path, and an exception may still hold the cursor (in its trace's arguments, `zend.exception_ignore_args=0`,
+  PHP's default without a php.ini): refusing there lost the exception in `Model::transaction()` and left the transaction
+  open. The connection remembers its streaming statement, and a cursor releases the connection only while its statement
+  is still that one, so a cursor closed by a rollback never frees a newer stream. *Changed in the final review,
+  maintainer decision 2026-11-09* (it was: rollback throws `ConnectionBusy` like commit).
+- A stream read more slowly than MySQL's `net_write_timeout` fails at the loop's next read with 2006/2013, as a
+  `DatabaseException` (documented).
 
 ### 4.6 Deviations from Eloquent (all throw before any SQL unless stated)
 
@@ -259,7 +268,10 @@ SELECT ... WHERE (<user's where>) AND id > ? [AND id <= ?] ORDER BY id LIMIT ?
 |---|---|---|
 | §4.6 rows 1–5; an unknown `$column` | `ActiveRecordException`, message names the method | at the call, before any SQL |
 | keyset: the alias attribute is missing or `null` on a page's last model | `ActiveRecordException` (as Eloquent's `RuntimeException`: "…the [alias] column is not present in the query result") | after that page (a `select_raw` cannot be checked earlier) |
-| any query / transaction / commit / rollback on a busy connection | `ConnectionBusy` | at that call |
+| keyset: a page's last key equals the previous page's (the next page would repeat it forever) | `ActiveRecordException` ("…the key [alias] did not advance past …") | after that page, before it is passed (final review) |
+| any query / transaction / commit on a busy connection | `ConnectionBusy` | at that call |
+| `rollback()` on a busy connection | none: the stream is closed and the rollback runs (§4.5; changed in the final review, maintainer decision 2026-11-09) | — |
+| reading a stream cursor that a `rollback()` closed | `ActiveRecordException` | at its next read |
 | a database error while executing or fetching (e.g. 2006) | `DatabaseException` | at the failing step; lock released |
 | an exception from the callback or the loop body | propagates unchanged | lock and statement released in `finally` |
 
@@ -303,9 +315,11 @@ every adapter), plus adapter-specific cases in the existing `*QueryBuilderTest` 
   query-counting logger), not one per row; generators' sequential keys; validation errors at the call, before the
   first iteration; every §4.6 throw.
 - **Cursor:** yields the same models as `get()`; `with()` throws; buffered — another query inside the loop works.
-- **Stream:** another query, `transaction()`, `commit()`, `rollback()` and a second stream throw `ConnectionBusy`; the
+- **Stream:** another query, `transaction()`, `commit()` and a second stream throw `ConnectionBusy`; the
   lock is released after a full loop, after `break`, after `unset()` of a held cursor, after an exception in the body;
-  another connection is unaffected; inside a transaction.
+  another connection is unaffected; inside a transaction. `rollback()` (outermost and savepoint) closes the stream; the
+  closed cursor throws when read again and never frees a newer stream; an exception out of `Model::transaction()` whose
+  trace holds the cursor comes out unchanged, with the transaction rolled back (final review).
 - **MySQL/MariaDB:** the buffered-query attribute is off during `execute()` and restored after (both on success and on
   a failing execute); keyset exact on `big_ids` up to 2^64−1.
 - **SQLite:** the live cursor behavior, pinned as documented.

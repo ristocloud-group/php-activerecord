@@ -51,9 +51,10 @@ abstract class Connection
      */
     private int $transaction_depth = 0;
     /**
-     * Whether a cursor streams its rows on this connection (stream_query() until release_stream()).
+     * The statement a cursor streams its rows from on this connection (stream_query() until release_stream(), or a
+     * rollback()), null when none does.
      */
-    private bool $streaming = false;
+    private ?\PDOStatement $stream = null;
     /**
      * Opaque identity of the database this connection points to.
      * @see cache_identity()
@@ -350,6 +351,7 @@ abstract class Connection
      * @param string $sql Raw SQL string to execute.
      * @param array<int, mixed> &$values Optional array of bind values
      * @return mixed A result set object
+     * @throws ConnectionBusy when a cursor streams on this connection (Query::cursor() with stream: true)
      */
     public function query($sql, &$values = [])
     {
@@ -361,8 +363,9 @@ abstract class Connection
     /**
      * Prepares, binds and executes $sql as query() does, but through the adapter's unbuffered() hook, so that the
      * rows can come from the server one at a time, and marks the connection busy once the statement has executed: until
-     * release_stream(), any other query, transaction start, commit or rollback on it throws ConnectionBusy. A failing
-     * execute leaves the connection free. An adapter that overrides query() is not reached by it.
+     * release_stream(), any other query, transaction start or commit on it throws ConnectionBusy, and a rollback()
+     * closes the statement first. A failing execute leaves the connection free. An adapter that overrides query() is
+     * not reached by it.
      *
      * @internal Serves Cursor (Query::cursor() with stream: true); not a supported API.
      * @param array<int, mixed> $values Positional bind values
@@ -373,19 +376,34 @@ abstract class Connection
     {
         $this->refuse_when_busy(__FUNCTION__);
         $sth = $this->prepare_and_execute($sql, $values, true);
-        $this->streaming = true;
+        $this->stream = $sth;
 
         return $sth;
     }
 
     /**
-     * Frees the connection that stream_query() marked busy, once its statement is closed.
+     * Frees the connection that stream_query() marked busy for $statement, once the statement is closed. A statement
+     * that is no longer the connection's stream (a rollback() closed it, and another stream may have started since)
+     * frees nothing.
      *
      * @internal Serves Cursor (Query::cursor() with stream: true); not a supported API.
      */
-    public function release_stream(): void
+    public function release_stream(\PDOStatement $statement): void
     {
-        $this->streaming = false;
+        if ($this->stream === $statement) {
+            $this->stream = null;
+        }
+    }
+
+    /**
+     * Whether $statement is the one this connection streams (see stream_query()): false once it is released, or once a
+     * rollback() closed it.
+     *
+     * @internal Serves Cursor (Query::cursor() with stream: true); not a supported API.
+     */
+    public function streams(\PDOStatement $statement): bool
+    {
+        return $this->stream === $statement;
     }
 
     /**
@@ -404,11 +422,30 @@ abstract class Connection
     }
 
     /**
+     * Closes the statement a cursor streams on this connection, if any, and frees the connection (see rollback()). An
+     * error while closing it is ignored: the connection is freed regardless.
+     */
+    private function close_stream(): void
+    {
+        if (null === $this->stream) {
+            return;
+        }
+
+        try {
+            $this->stream->closeCursor();
+        } catch (PDOException) {
+            // the stream is given up either way: what the rollback needs is the connection
+        } finally {
+            $this->stream = null;
+        }
+    }
+
+    /**
      * Throws ConnectionBusy, naming $method, when a cursor streams on this connection.
      */
     private function refuse_when_busy(string $method): void
     {
-        if ($this->streaming) {
+        if (null !== $this->stream) {
             throw new ConnectionBusy(sprintf('%s() cannot run while the connection streams a cursor (cursor(stream: true)): iterate the cursor to its end, or unset() it, first', $method));
         }
     }
@@ -570,6 +607,7 @@ abstract class Connection
      * PostgreSQL and SQLite).
      *
      * @return void
+     * @throws ConnectionBusy when a cursor streams on this connection (Query::cursor() with stream: true)
      */
     public function transaction()
     {
@@ -590,6 +628,7 @@ abstract class Connection
      * commits the real transaction at the outermost level.
      *
      * @return void
+     * @throws ConnectionBusy when a cursor streams on this connection (Query::cursor() with stream: true)
      */
     public function commit()
     {
@@ -611,11 +650,16 @@ abstract class Connection
      * Rolls back the current scope: back to the savepoint when nested,
      * the whole transaction at the outermost level.
      *
+     * A cursor that streams on this connection (Query::cursor() with stream: true)
+     * is closed first, at any depth, so that the rollback runs: reading it again
+     * throws ActiveRecordException. Rollback is the failure path, where an
+     * exception may still hold the cursor (in the arguments of its trace).
+     *
      * @return void
      */
     public function rollback()
     {
-        $this->refuse_when_busy(__FUNCTION__);
+        $this->close_stream();
 
         if ($this->transaction_depth > 1) {
             $this->query('ROLLBACK TO SAVEPOINT ar_sp_' . ($this->transaction_depth - 1));
