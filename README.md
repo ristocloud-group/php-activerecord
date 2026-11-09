@@ -698,6 +698,86 @@ Invoice::where('status', 'open')->count();                  // 3
   statement in `Table::$last_sql`, as `find()` and `exists()` do. Up to 2.1.0 it counted the rows of the first group,
   ignored the select and the window (0 with an offset), and could return the driver's string.
 
+### Iterating over many rows ###
+
+`get()` loads every row at once. To walk a big table, read it in pages: `chunk()` and `chunk_by_id()` pass each page to a
+callback, and `lazy()` and `lazy_by_id()` give the models one at a time as a generator. Each page is one statement, and the
+`with()` relationships are loaded for each page, not for each row.
+
+```php
+Customer::where('active', 1)->chunk(100, function (array $customers, int $page): void {
+    foreach ($customers as $customer) {
+        // ...
+    }
+});
+
+foreach (Customer::where('active', 1)->lazy(500) as $customer) {
+    // ...
+}
+
+Invoice::where('status', 'open')->chunk_by_id(500, function (array $invoices): void {
+    foreach ($invoices as $invoice) {
+        $invoice->delete();                         // no row is skipped
+    }
+});
+
+foreach (Invoice::where('status', 'open')->lazy_by_id(500) as $invoice) {
+    // ...
+}
+
+Invoice::new_query()->chunk_by_id_desc(500, $callback);   // highest id first
+Invoice::new_query()->lazy_by_id_desc(500);               // the same, as a generator
+```
+
+- The callback gets the page (a list of models) and its number from 1. If it returns `false` the reading stops and the
+  method returns `false`; it returns `true` when every page was passed. `lazy*()` models are keyed from 0.
+- Sizes are `$count` for `chunk*` and `$chunk_size` (default 1000) for `lazy*`. Below 1 it throws, at the call.
+- `lazy*()` run no statement until the first model is asked for, and read the next page only when the models of the one
+  before are used. They hold one page of models in memory.
+- A query without an order is read in the order of its primary key, so pages do not repeat or skip rows by chance. Give
+  an `order_by()` to `chunk()` or `lazy()` to read in another order. The `limit()` of the query caps the rows of all the
+  pages and its `offset()` is where the first page starts. The query itself is not changed.
+
+**Offset or keyset.** `chunk()` and `lazy()` page by offset (`LIMIT n OFFSET m`). If the loop deletes the rows it reads,
+or updates a column the query filters on, the pages move under it and **rows are skipped**. `chunk_by_id()` and
+`lazy_by_id()` (and their `_desc` variants) page by key: each page is `WHERE id > last ORDER BY id LIMIT n`, so the loop
+may delete or update the rows it reads. Use them for that, and for big tables, where a large offset is slow. The key
+must be unique and must not change during the reading (not detected).
+
+```php
+Invoice::new_query()->chunk_by_id(500, $callback, column: 'number');              // another unique column
+Invoice::new_query()->chunk_by_id(500, $callback, column: 'id', alias: 'inv_id'); // key selected as `inv_id`
+Invoice::new_query()->chunk_by_id(500, $callback, include_new_rows: true);
+```
+
+- `$column` is the key, the primary key by default. It is a column of the model, by its name, an alias
+  (`$alias_attribute`) or an attribute name, or the column's own name qualified with the model's table (or its `from()`
+  alias) when the query joins. Another table's column, or a name that is no column of the model, throws.
+- `$alias` is the attribute the last key of a page is read from, by default that of `$column`. Give it when the query
+  selects the key under another name. If the last model of a page has no such attribute, or a `null` one, it throws
+  before that page is passed.
+- **New rows.** By default rows inserted during the reading are not read: the pages stop at the largest key the query
+  matches before the first page. `include_new_rows: true` reads them, as Eloquent's `chunkById` does, and a loop that
+  keeps inserting rows may never end. The `_desc` variants start at the highest key, so rows inserted later are behind
+  them and they have no such option.
+- An integer key beyond `PHP_INT_MAX` is kept as its digit string and bound as such.
+
+**Where it differs from Eloquent**: all of these throw, at the call and before any statement.
+
+- A size below 1, on every method.
+- `chunk_by_id()` and `lazy_by_id()` on a query ordered by anything but the key (Eloquent keeps the order and silently
+  skips rows): remove it with `reorder()`. An order on the key itself is replaced.
+- `chunk_by_id()` and `lazy_by_id()` on a query with an `offset()`.
+- `chunk_by_id()` and `lazy_by_id()` on a model with a composite primary key, without `$column`.
+- And `include_new_rows` is opt-in here, where Eloquent always reads new rows.
+
+**Shadowing.** A model's own static method wins over the forwarded name (see Entry points), so a model that defines its
+own `chunk()` keeps it: call the builder's as `Invoice::new_query()->chunk(...)`.
+
+**Soft delete.** The builder does not go through consumer finder overrides, and neither do these methods. On a base
+model whose `all()` or `find()` hides soft-deleted rows, they return those rows too unless the query says so:
+`Invoice::where_null('deleted_at')->chunk_by_id(...)`.
+
 ### Aggregates ###
 
 ```php
