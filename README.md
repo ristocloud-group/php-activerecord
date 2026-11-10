@@ -897,6 +897,8 @@ Post::new_query()->has_scope('nope');                          // false
   `where('a', 1)->or_where('b', 2)->popular()` is `(a = ? OR b = ?) AND (...)`. Earlier conditions joined only by AND
   keep their shape (`a = ? AND b = ? AND (...)`), and so do all of them when the scope adds no where. A scope is ANDed in
   even when its first condition is an `or_where`. A scope that throws leaves the query's conditions grouped the same way.
+  While it runs, a scope sees only the conditions it adds (unlike Eloquent): a `to_sql()`, `count()` or `exists()` called
+  inside the scope leaves out the query's earlier wheres.
 - **Inside a closure group**, `where(fn (Query $q) => $q->popular())` works while the scope adds only wheres; one that
   adds an order, a join or the like throws the group's usual `ActiveRecordException`.
 - **`has_scope($name)`** is on the model (`Post::has_scope('popular')`) and on a query, and says whether the model
