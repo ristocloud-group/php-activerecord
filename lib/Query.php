@@ -217,15 +217,21 @@ class Query
 
     /**
      * Calls the local scope $name of the model on this query (spec §4.2): its conditions join the query as one
-     * parenthesized group. Any other name is no method of the builder.
+     * parenthesized group, and the query's earlier conditions are grouped too when they hold an OR. Any other name,
+     * and a private or protected method of the builder called from outside, is no method of the builder. The scopes
+     * are read by reflection, without loading the Table.
      *
-     * @param list<mixed> $args
+     * @param array<mixed> $args
      * @throws \BadMethodCallException when the model declares no scope $name
+     * @throws ConfigException when the model declares a scope that collides with another name
+     * @throws ActiveRecordException when the scope returns anything but null or this query
      */
     public function __call(string $name, array $args): static
     {
-        if ($this->table()->scopes()->has($name)) {
-            $this->table()->scopes()->apply($this, $name, $args);
+        $scopes = ScopeRegistry::for_class($this->model_class);
+
+        if ($scopes->has($name)) {
+            $scopes->apply($this, $name, $args);
 
             return $this;
         }
@@ -2767,13 +2773,13 @@ class Query
 
     /**
      * Whether the model of this query declares a local scope reachable by the public name $name (see
-     * Model::has_scope()).
+     * Model::has_scope()). The scopes are read by reflection, without loading the Table.
      *
      * @throws ConfigException when the model declares a scope that collides with another name
      */
     public function has_scope(string $name): bool
     {
-        return $this->table()->scopes()->has($name);
+        return ScopeRegistry::for_class($this->model_class)->has($name);
     }
 
     private function table(): Table

@@ -1,7 +1,6 @@
 <?php
 
 use ActiveRecord\Query;
-use ActiveRecord\Scope;
 
 class CollidingQueryMethodScope extends ActiveRecord\Model
 {

@@ -16,6 +16,9 @@ class ScopeRegistryTest extends DatabaseTest
         $this->assert_false(ScopedAuthor::has_scope('nope'));
         $this->assert_false(ScopedAuthor::has_scope('instance_only'));
         $this->assert_true(ScopedAuthor::new_query()->has_scope('named'));
+        $this->assert_false(ScopedAuthor::new_query()->has_scope('nope'));
+        // a scope is looked up by its name as written
+        $this->assert_false(ScopedAuthor::has_scope('Named'));
     }
 
     public function test_registry_is_built_once(): void
@@ -40,6 +43,11 @@ class ScopeRegistryTest extends DatabaseTest
             'CollidingWriteScope' => ['delete'],
             'CollidingDoubleScope' => ['twice', 'declared twice'],
             'CollidingHasScopeScope' => ['has_scope'],
+            // R8: PHP's method names are case-insensitive, so the checks are too
+            'CollidingCaseScope' => ['Where()', 'Query'],
+            // R8: every public method of the model, static or not, and the methods of the other scopes
+            'CollidingInstanceMethodScope' => ['reload()', 'public method of the model'],
+            'CollidingScopeMethodScope' => ['scope_x()', 'another scope'],
         ];
 
         foreach ($cases as $class => $words) {

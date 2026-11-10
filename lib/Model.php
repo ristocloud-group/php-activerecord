@@ -2056,6 +2056,11 @@ class Model
      * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
      * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
      *
+     * A name that is none of these is one of the model's local scopes, when it declares one by that name
+     * (a public static scope_x() method, or a protected static method marked #[Scope]): Person::popular(...)
+     * is Person::new_query()->popular(...), and returns that query (see {@link has_scope()}). The scopes are
+     * read by reflection, without loading the Table. Any other name is an undefined method.
+     *
      * The forwarding answers a call made where no instance of the class is at hand: from outside, or from
      * a static method. Inside an instance method, static::where(...) (or self::where(...), or the class's
      * own name) reaches {@link __call()} instead, which answers "Call to undefined method: where": use
@@ -2065,9 +2070,11 @@ class Model
      * @param mixed $args Method args
      * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
      *   find-or-create-by-attributes), a list of Model (find-all-by-attributes) or an int|string
-     *   (count-by-attributes). For a builder method, what that method returns.
-     * @throws ActiveRecordException if invalid query, for a static update() or delete(), or if there
-     *   is no such method
+     *   (count-by-attributes). For a builder method, what that method returns. For a scope, the query.
+     * @throws ActiveRecordException if invalid query, for a static update() or delete(), when a scope
+     *   returns anything but null or the query it was given, or if there is no such method
+     * @throws ConfigException when the model declares a scope that collides with another name, or a
+     *   #[Scope] method that is not protected static
      * @see find
      */
     public static function __callStatic($method, $args)

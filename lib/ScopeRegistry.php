@@ -11,6 +11,8 @@ namespace ActiveRecord;
  * the Scope attribute, found by reflection and validated when the registry is built.
  *
  * @internal Serves Table, Model and Query; not a supported API.
+ * @phpstan-import-type Where from QueryState
+ * @phpstan-import-type WhereGroup from QueryState
  */
 final class ScopeRegistry
 {
@@ -26,7 +28,8 @@ final class ScopeRegistry
     private array $scopes = [];
 
     /**
-     * Reflects the scopes of $model_class and validates them.
+     * Reflects the scopes of $model_class and validates them. The names are compared as PHP compares method names,
+     * without regard to case: a scope named like a method in another case would never be reached.
      *
      * @param class-string $model_class
      * @throws ConfigException when a scope collides with another name or a #[Scope] method is not protected static
@@ -36,54 +39,66 @@ final class ScopeRegistry
         $reflection = new \ReflectionClass($model_class);
         $statics = $reflection->getMethods(\ReflectionMethod::IS_STATIC);
 
-        /** @var array<string, list<string>> $declared */
+        /** @var array<string, list<string>> $declared public scope name => the methods that declare it */
         $declared = [];
-        /** @var array<string, true> $scope_methods */
+        /** @var array<string, true> $scope_methods lower-case name of each method that declares a scope */
         $scope_methods = [];
 
         foreach ($statics as $method) {
             $has_attribute = [] !== $method->getAttributes(Scope::class);
 
             if ($has_attribute && !$method->isProtected()) {
-                throw $this->error($model_class, $method->getName(), 'is marked #[Scope], which requires a protected static method');
+                throw $this->error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
             }
 
             if ($has_attribute) {
-                $declared[$method->getName()][] = $method->getName() . '()';
-                $scope_methods[$method->getName()] = true;
+                $declared[$method->getName()][] = $method->getName();
+                $scope_methods[strtolower($method->getName())] = true;
             } elseif ($method->isPublic() && str_starts_with($method->getName(), 'scope_') && strlen($method->getName()) > 6) {
-                $declared[substr($method->getName(), 6)][] = $method->getName() . '()';
-                $scope_methods[$method->getName()] = true;
-            }
-        }
-
-        foreach ($reflection->getMethods() as $method) {
-            if (!$method->isStatic() && [] !== $method->getAttributes(Scope::class)) {
-                throw $this->error($model_class, $method->getName(), 'is marked #[Scope], which requires a protected static method');
+                $declared[substr($method->getName(), 6)][] = $method->getName();
+                $scope_methods[strtolower($method->getName())] = true;
             }
         }
 
         $query_methods = [];
         foreach ((new \ReflectionClass(Query::class))->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
             if (!str_starts_with($method->getName(), '__')) {
-                $query_methods[$method->getName()] = true;
+                $query_methods[strtolower($method->getName())] = true;
             }
         }
 
+        // the static methods of the model and its ancestors, of any visibility, and their public instance methods
+        // (reload(), save(), ...), which PHP calls itself, the scope methods aside
         $static_names = [];
-        foreach ($statics as $method) {
-            if (!isset($scope_methods[$method->getName()])) {
-                $static_names[$method->getName()] = true;
+        $instance_names = [];
+        foreach ($reflection->getMethods() as $method) {
+            $lower = strtolower($method->getName());
+
+            if (!$method->isStatic() && [] !== $method->getAttributes(Scope::class)) {
+                throw $this->error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
+            }
+
+            if (isset($scope_methods[$lower])) {
+                continue;
+            }
+
+            if ($method->isStatic()) {
+                $static_names[$lower] = true;
+            } elseif ($method->isPublic()) {
+                $instance_names[$lower] = true;
             }
         }
 
         foreach ($declared as $name => $methods) {
+            $lower = strtolower($name);
             $reason = match (true) {
-                count($methods) > 1 => 'is declared twice (' . implode(' and ', $methods) . ')',
-                isset($query_methods[$name]) => 'is a public method of Query',
-                isset($static_names[$name]) => 'is a static method of the model or of a class it extends',
-                $this->starts_a_dynamic_finder($name) => 'starts like a dynamic finder',
-                'update' === $name || 'delete' === $name => 'is update or delete, which a model refuses to run without conditions',
+                count($methods) > 1 => 'is declared twice (' . implode('() and ', $methods) . '())',
+                isset($query_methods[$lower]) => 'is a public method of Query',
+                isset($static_names[$lower]) => 'is a static method of the model or of a class it extends',
+                isset($instance_names[$lower]) => 'is a public method of the model or of a class it extends',
+                isset($scope_methods[$lower]) && strtolower($methods[0]) !== $lower => 'is the method of another scope',
+                $this->starts_a_dynamic_finder($lower) => 'starts like a dynamic finder',
+                'update' === $lower || 'delete' === $lower => 'is update or delete, refused by a model without conditions',
                 default => null,
             };
 
@@ -91,7 +106,7 @@ final class ScopeRegistry
                 throw $this->error($model_class, $name, $reason);
             }
 
-            $this->scopes[$name] = isset($scope_methods[$name]) ? $name : 'scope_' . $name;
+            $this->scopes[$name] = $methods[0];
         }
     }
 
@@ -118,41 +133,78 @@ final class ScopeRegistry
 
     /**
      * Runs the scope $name of the model on $query with $args and groups the conditions it added: they join the query
-     * as one parenthesized AND group, so an OR inside the scope cannot escape into the conditions around it. A scope
-     * returns null or the query it was given.
+     * as one parenthesized AND group, so an OR inside the scope cannot escape into the conditions around it. When the
+     * conditions the query held before hold an OR between them, they are grouped too, so that the scope filters every
+     * row (Eloquent does the same): where(a)->or_where(b) and then a scope is (a OR b) AND (...). The scope runs on an
+     * emptied list of conditions, and the two are put back together even when it throws. The flags a where call sets
+     * when it adds nothing stay on the query's state. A scope returns null or the query it was given.
      *
      * @template TModel of Model
      * @param Query<TModel> $query
-     * @param list<mixed> $args
+     * @param array<mixed> $args
      * @return Query<TModel>
      * @throws ActiveRecordException when the scope returns anything but null or $query
      */
     public function apply(Query $query, string $name, array $args): Query
     {
         $state = $query->state();
-        $before = count($state->wheres);
+        $earlier = $state->wheres;
+        $state->wheres = [];
 
-        $result = (new \ReflectionMethod($this->model_class, $this->scopes[$name]))->invoke(null, $query, ...$args);
+        try {
+            $result = (new \ReflectionMethod($this->model_class, $this->scopes[$name]))->invoke(null, $query, ...$args);
 
-        if (null !== $result && $result !== $query) {
-            throw new ActiveRecordException(sprintf(
-                'The scope %s() of %s must return null or the query it was given, %s returned',
-                $name,
-                $this->model_class,
-                get_debug_type($result),
-            ));
-        }
+            if (null !== $result && $result !== $query) {
+                throw new ActiveRecordException(sprintf(
+                    'The scope %s() of %s must return null or the query it was given, %s returned',
+                    $name,
+                    $this->model_class,
+                    get_debug_type($result),
+                ));
+            }
+        } finally {
+            // read again through the query: the scope changed its state
+            $added = $query->state()->wheres;
 
-        if (count($state->wheres) > $before) {
-            $group = new QueryState();
-            $group->wheres = array_slice($state->wheres, $before);
-            $state->wheres = [
-                ...array_slice($state->wheres, 0, $before),
-                ['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group],
+            // a scope that adds no condition leaves the query's own as they were
+            $state->wheres = [] === $added ? $earlier : [
+                ...(self::has_top_level_or($earlier) ? [self::group($earlier)] : $earlier),
+                self::group($added),
             ];
         }
 
         return $query;
+    }
+
+    /**
+     * Whether a condition of $wheres after the first is joined to the one before it by OR (the boolean of the first
+     * is dropped).
+     *
+     * @param list<Where> $wheres
+     */
+    private static function has_top_level_or(array $wheres): bool
+    {
+        foreach (array_slice($wheres, 1) as $where) {
+            if ('OR' === $where['boolean']) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The conditions $wheres as one AND group, the shape of a closure group.
+     *
+     * @param list<Where> $wheres
+     * @return WhereGroup
+     */
+    private static function group(array $wheres): array
+    {
+        $group = new QueryState();
+        $group->wheres = $wheres;
+
+        return ['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group];
     }
 
     private function starts_a_dynamic_finder(string $name): bool
