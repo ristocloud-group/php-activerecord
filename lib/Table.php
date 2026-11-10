@@ -93,11 +93,6 @@ class Table
     private array $real_column_names = [];
 
     /**
-     * The local scopes of the model, built by the first scopes() call.
-     */
-    private ?ScopeRegistry $scopes = null;
-
-    /**
      * @param string $model_class_name
      * @return self
      */
@@ -152,8 +147,8 @@ class Table
     }
 
     /**
-     * The local scopes of the model: reflected and validated on the first call, then kept. Not built by the
-     * constructor, which Table::load() runs before the table is cached.
+     * The local scopes of the model: the registry ScopeRegistry::for_class() keeps for its class, reflected and
+     * validated on the first call. Reading it never touches the database.
      *
      * @internal Serves Model and Query; not a supported API.
      * @throws ConfigException when the model declares a scope that collides with another name
@@ -163,7 +158,7 @@ class Table
         /** @var class-string $class */
         $class = $this->class->name;
 
-        return $this->scopes ??= new ScopeRegistry($class);
+        return ScopeRegistry::for_class($class);
     }
 
     /**

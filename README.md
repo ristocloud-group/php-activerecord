@@ -1118,10 +1118,10 @@ Code ported from the Laravel documentation works by changing the method case, ex
 - **SQL written by hand that holds a statement terminator or leaves a block comment open is refused** at the call (a `;`
   outside its strings and comments, or a `/*` with no `*/` after it, see [Conditions](#conditions)), where Eloquent sends
   it.
-- **A scope's wheres are always grouped**, `AND (...)`, where Eloquent groups them only when it has to (a scope that
-  mixes `or` into them). **A scope name that collides** with a `Query` method, a static method of the model or its
-  ancestors, a dynamic-finder prefix or `update` / `delete` **is a `ConfigException`**, where Eloquent lets the real
-  method win. **An unknown method on a query throws `\BadMethodCallException`**, as Eloquent's does.
+- **A scope's wheres are always grouped**, `AND (...)`, where Eloquent groups them only when it has to (when the scope's
+  wheres, or the query's earlier ones, hold an `or`). **A scope name that collides** with a `Query` method, a static method of the model or its
+  ancestors, a dynamic-finder prefix or `update` / `delete` **is a `ConfigException`**, where Eloquent lets a real
+  method of its own builder or model win (and a scope beats a method it merely forwards to the query builder). **An unknown method on a query throws `\BadMethodCallException`**, as Eloquent's does.
 - The exceptions are this library's: `RecordNotFound` for `first_or_fail()`, `find_or_fail()` and `sole()` (Eloquent's
   `ModelNotFoundException`) and `MultipleRecordsFound` for `sole()`. The terminals return arrays, where Eloquent returns
   Collections.

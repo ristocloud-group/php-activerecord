@@ -1022,7 +1022,7 @@ class Model
      */
     public static function has_scope(string $name): bool
     {
-        return static::table()->scopes()->has($name);
+        return ScopeRegistry::for_class(static::class)->has($name);
     }
 
     /**
@@ -2130,8 +2130,11 @@ class Model
             return static::new_query()->$method(...$args);
         }
 
-        if (static::table()->scopes()->has($method)) {
-            return static::table()->scopes()->apply(static::new_query(), $method, $args);
+        // the registry is built by reflection: an unknown name does not load the Table (or open the connection)
+        $scopes = ScopeRegistry::for_class(static::class);
+
+        if ($scopes->has($method)) {
+            return $scopes->apply(static::new_query(), $method, $args);
         }
 
         throw new ActiveRecordException("Call to undefined method: $method");

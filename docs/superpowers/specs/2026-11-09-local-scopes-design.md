@@ -172,8 +172,8 @@ A `#[Scope]` method that is not `protected static` also throws `ConfigException`
 | Unit | Kind | Responsibility |
 |---|---|---|
 | `Scope` (new, `lib/Scope.php`) | public | `#[\Attribute(\Attribute::TARGET_METHOD)] final class Scope {}` |
-| `ScopeRegistry` (new, `lib/ScopeRegistry.php`) | `@internal` | Built lazily for one model class: reflects its scope methods, validates §3.2, holds `name → method`. `has(string $name): bool`; `apply(Query $query, string $name, array $args): Query` runs the scope, checks the return value, and regroups the wheres it added (§4.2). |
-| `Table` (changed) | `@internal` accessor | `scopes(): ScopeRegistry`, built on the first call and cached on the Table (one per model class, as the Table is). **Not** built in `Table::__construct`, because of the recursion `Table::load()` already warns about. |
+| `ScopeRegistry` (new, `lib/ScopeRegistry.php`) | `@internal` | Built lazily for one model class and cached per class in a private static array of `ScopeRegistry` itself (`for_class()`; a failed build is not cached): reflects its scope methods, validates §3.2, holds `name → method`. `has(string $name): bool`; `apply(Query $query, string $name, array $args): Query` runs the scope, checks the return value, and regroups the wheres it added (§4.2). |
+| `Table` (changed) | `@internal` accessor | `scopes(): ScopeRegistry`, a named accessor that returns `ScopeRegistry::for_class()` for the model. *Amended during implementation (R5, maintainer decision 2026-11-10):* the registry is cached in `ScopeRegistry`, not on the Table, and `Model::__callStatic` and `Model::has_scope` read it without calling `Model::table()`. Reading the scopes is reflection only, so it never loads the Table, opens the connection or reads the schema: an unknown static name on a model whose table is missing (or when the database is down) still throws "Call to undefined method", as before. |
 | `Model` (changed) | public | `__callStatic` gains the scope step (§3.1 item 6). New static `has_scope(string $name): bool`. |
 | `Query` (changed) | public | New `__call(string $name, array $args): static` (scope or `\BadMethodCallException`) and `has_scope(string $name): bool`. |
 
@@ -228,12 +228,14 @@ Post::where('published', 1)->popular(50)->get()
 
 ## 6. Backward compatibility
 
-All four go in the GitHub draft release on merge (changelog policy: every observable change is listed; breaking ones
+All four items go in the GitHub draft release on merge (changelog policy: every observable change is listed; breaking ones
 are marked BREAKING).
 
 1. **BREAKING (approved 2026-11-09):** an unknown method on a `Query` throws `\BadMethodCallException` instead of PHP's
-   `\Error`. The message is unchanged. Code that catches `\Error` for it must catch `\BadMethodCallException`
-   (or `\Throwable`).
+   `\Error`. The message for an undefined method is unchanged. A private or protected method of `Query` called from
+   outside (e.g. `compiler()`) throws the same `\BadMethodCallException` "Call to undefined method
+   ActiveRecord\Query::<name>()" too, where PHP's message was "Call to private method ...". Code that catches
+   `\Error` for either must catch `\BadMethodCallException` (or `\Throwable`).
 2. **BREAKING (potential):** a consumer's existing `public static scope_*` method or `#[ActiveRecord\Scope]` method
    becomes a scope. If its public name collides (§3.2), the model throws `ConfigException` at its first interaction
    with scopes. Monolith: 0 such methods.
@@ -241,8 +243,8 @@ are marked BREAKING).
    `has_scope` with an incompatible signature is a fatal error at class load. Monolith: 0.
 4. **Added:** `Post::x()` / `->x()` for declared scopes, which threw "undefined method" before.
 
-Unchanged: SQL and binds for every call that does not use a scope (golden corpus); the static "undefined method" error;
-`Query::FORWARDABLE` (scopes are not added to it).
+Unchanged: SQL and binds for every call that does not use a scope (golden corpus); the static "undefined method" error, also for a model whose
+table is missing (R5: the registry is read without loading the Table); `Query::FORWARDABLE` (scopes are not added to it).
 
 ---
 

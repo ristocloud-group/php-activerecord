@@ -134,6 +134,19 @@ class QueryScopeTest extends DatabaseTest
         ScopedAuthor::wehre();
     }
 
+    public function test_unknown_static_name_on_a_model_without_table(): void
+    {
+        try {
+            ScopeGhost::typo();
+            $this->fail('typo() did not throw');
+        } catch (ActiveRecordException $e) {
+            $this->assert_same(ActiveRecordException::class, $e::class);
+            $this->assert_same('Call to undefined method: typo', $e->getMessage());
+        }
+
+        $this->assert_false(ScopeGhost::has_scope('x'));
+    }
+
     public function test_static_scope_from_instance_method_is_undefined(): void
     {
         $this->expectException(ActiveRecordException::class);

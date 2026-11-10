@@ -19,6 +19,9 @@ final class ScopeRegistry
      */
     public const array DYNAMIC_FINDER_PREFIXES = ['find_by', 'find_all_by', 'count_by', 'find_or_create_by'];
 
+    /** @var array<class-string, self> the registries built so far, by model class; a failed build is not kept */
+    private static array $registries = [];
+
     /** @var array<string, string> public scope name => name of the method that implements it */
     private array $scopes = [];
 
@@ -90,6 +93,19 @@ final class ScopeRegistry
 
             $this->scopes[$name] = isset($scope_methods[$name]) ? $name : 'scope_' . $name;
         }
+    }
+
+    /**
+     * The registry of $model_class, built on the first call and kept. It is built by reflection only, so it never
+     * touches the database. A build that throws is not kept: it throws again on the next call.
+     *
+     * @internal Serves Table, Model and Query; not a supported API.
+     * @param class-string $model_class
+     * @throws ConfigException when a scope collides with another name or a #[Scope] method is not protected static
+     */
+    public static function for_class(string $model_class): self
+    {
+        return self::$registries[$model_class] ??= new self($model_class);
     }
 
     /**
