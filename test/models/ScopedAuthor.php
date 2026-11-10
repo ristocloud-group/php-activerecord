@@ -45,4 +45,9 @@ class ScopedAuthor extends ActiveRecord\Model
     }
 
     public function scope_instance_only() {}
+
+    public function call_scope_statically()
+    {
+        return static::tito_named();
+    }
 }

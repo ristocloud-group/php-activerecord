@@ -216,6 +216,24 @@ class Query
     }
 
     /**
+     * Calls the local scope $name of the model on this query (spec §4.2): its conditions join the query as one
+     * parenthesized group. Any other name is no method of the builder.
+     *
+     * @param list<mixed> $args
+     * @throws \BadMethodCallException when the model declares no scope $name
+     */
+    public function __call(string $name, array $args): static
+    {
+        if ($this->table()->scopes()->has($name)) {
+            $this->table()->scopes()->apply($this, $name, $args);
+
+            return $this;
+        }
+
+        throw new \BadMethodCallException(sprintf('Call to undefined method %s::%s()', self::class, $name));
+    }
+
+    /**
      * @internal Serves the legacy entries; not a supported API.
      */
     public function state(): QueryState

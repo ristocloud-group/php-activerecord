@@ -2130,6 +2130,10 @@ class Model
             return static::new_query()->$method(...$args);
         }
 
+        if (static::table()->scopes()->has($method)) {
+            return static::table()->scopes()->apply(static::new_query(), $method, $args);
+        }
+
         throw new ActiveRecordException("Call to undefined method: $method");
     }
 

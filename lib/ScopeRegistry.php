@@ -28,7 +28,7 @@ final class ScopeRegistry
      * @param class-string $model_class
      * @throws ConfigException when a scope collides with another name or a #[Scope] method is not protected static
      */
-    public function __construct(string $model_class)
+    public function __construct(private readonly string $model_class)
     {
         $reflection = new \ReflectionClass($model_class);
         $statics = $reflection->getMethods(\ReflectionMethod::IS_STATIC);
@@ -98,6 +98,45 @@ final class ScopeRegistry
     public function has(string $name): bool
     {
         return isset($this->scopes[$name]);
+    }
+
+    /**
+     * Runs the scope $name of the model on $query with $args and groups the conditions it added: they join the query
+     * as one parenthesized AND group, so an OR inside the scope cannot escape into the conditions around it. A scope
+     * returns null or the query it was given.
+     *
+     * @template TModel of Model
+     * @param Query<TModel> $query
+     * @param list<mixed> $args
+     * @return Query<TModel>
+     * @throws ActiveRecordException when the scope returns anything but null or $query
+     */
+    public function apply(Query $query, string $name, array $args): Query
+    {
+        $state = $query->state();
+        $before = count($state->wheres);
+
+        $result = (new \ReflectionMethod($this->model_class, $this->scopes[$name]))->invoke(null, $query, ...$args);
+
+        if (null !== $result && $result !== $query) {
+            throw new ActiveRecordException(sprintf(
+                'The scope %s() of %s must return null or the query it was given, %s returned',
+                $name,
+                $this->model_class,
+                get_debug_type($result),
+            ));
+        }
+
+        if (count($state->wheres) > $before) {
+            $group = new QueryState();
+            $group->wheres = array_slice($state->wheres, $before);
+            $state->wheres = [
+                ...array_slice($state->wheres, 0, $before),
+                ['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group],
+            ];
+        }
+
+        return $query;
     }
 
     private function starts_a_dynamic_finder(string $name): bool
