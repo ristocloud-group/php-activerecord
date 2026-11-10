@@ -93,6 +93,11 @@ class Table
     private array $real_column_names = [];
 
     /**
+     * The local scopes of the model, built by the first scopes() call.
+     */
+    private ?ScopeRegistry $scopes = null;
+
+    /**
      * @param string $model_class_name
      * @return self
      */
@@ -144,6 +149,21 @@ class Table
         $this->callback->register('after_save', function (Model $model) {
             $model->reset_dirty();
         }, ['prepend' => true]);
+    }
+
+    /**
+     * The local scopes of the model: reflected and validated on the first call, then kept. Not built by the
+     * constructor, which Table::load() runs before the table is cached.
+     *
+     * @internal Serves Model and Query; not a supported API.
+     * @throws ConfigException when the model declares a scope that collides with another name
+     */
+    public function scopes(): ScopeRegistry
+    {
+        /** @var class-string $class */
+        $class = $this->class->name;
+
+        return $this->scopes ??= new ScopeRegistry($class);
     }
 
     /**

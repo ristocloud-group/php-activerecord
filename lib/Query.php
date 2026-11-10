@@ -2747,6 +2747,17 @@ class Query
         return $column;
     }
 
+    /**
+     * Whether the model of this query declares a local scope reachable by the public name $name (see
+     * Model::has_scope()).
+     *
+     * @throws ConfigException when the model declares a scope that collides with another name
+     */
+    public function has_scope(string $name): bool
+    {
+        return $this->table()->scopes()->has($name);
+    }
+
     private function table(): Table
     {
         return $this->table ??= Table::load($this->model_class);

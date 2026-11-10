@@ -1011,6 +1011,21 @@ class Model
     }
 
     /**
+     * Whether this model declares a local scope reachable by the public name $name: a public static scope_$name()
+     * method, or a protected static method $name() carrying the Scope attribute.
+     *
+     * <code>
+     * Post::has_scope('popular'); // true when Post has scope_popular()
+     * </code>
+     *
+     * @throws ConfigException when the model declares a scope that collides with another name
+     */
+    public static function has_scope(string $name): bool
+    {
+        return static::table()->scopes()->has($name);
+    }
+
+    /**
      * Starts a query on this model: the entry point of the fluent builder.
      *
      * <code>
@@ -2124,10 +2139,13 @@ class Model
      */
     private static function is_dynamic_finder(string $method): bool
     {
-        return str_starts_with($method, 'find_by')
-            || str_starts_with($method, 'find_all_by')
-            || str_starts_with($method, 'count_by')
-            || str_starts_with($method, 'find_or_create_by');
+        foreach (ScopeRegistry::DYNAMIC_FINDER_PREFIXES as $prefix) {
+            if (str_starts_with($method, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
