@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Amended during implementation:** R5 (the registry is cached in `ScopeRegistry`, not on the Table; R9 extends this to `Query::__call` / `Query::has_scope`), R7 (the grouping algorithm: an earlier top-level OR is wrapped too), R8 (collisions compare case-insensitively and cover every public method of the hierarchy and the other scopes' methods). The plan below is kept as written; the lines these change are marked, and the spec (§3.1, §3.2, §4.1, §4.2) holds the amended text.
+
 **Goal:** Let models declare local scopes (`public static scope_x(Query $q, ...$args): ?Query` or `#[Scope] protected static x(...)`), reachable as `Post::x()` and `->x()` on the query builder, with collision checks, always-grouped wheres and `has_scope()`.
 
-**Architecture:** A lazily built, per-class `ScopeRegistry` (cached on the model's `Table`) discovers scope methods by reflection, validates name collisions, and applies a scope to a `Query`. The scope's wheres are regrouped into one `group` condition, the shape closure groups already compile to. Dispatch is a new step in `Model::__callStatic` and a new `Query::__call`.
+**Architecture:** A lazily built, per-class `ScopeRegistry` (cached on the model's `Table`; *amended, R5: cached in `ScopeRegistry` itself*) discovers scope methods by reflection, validates name collisions, and applies a scope to a `Query`. The scope's wheres are regrouped into one `group` condition, the shape closure groups already compile to. Dispatch is a new step in `Model::__callStatic` and a new `Query::__call`.
 
 **Tech Stack:** PHP 8.3–8.5 (attributes, reflection), PDO (MySQL/MariaDB/Postgres/SQLite), PHPUnit via `SnakeCase_PHPUnit_Framework_TestCase`, PHPStan level 8, php-cs-fixer (PER-CS 3.0).
 
@@ -46,7 +48,7 @@
 **Files:**
 - Create: `lib/Scope.php`, `lib/ScopeRegistry.php`
 - Modify:
-  - `lib/Table.php`: new `scopes()` accessor and its cached property;
+  - `lib/Table.php`: new `scopes()` accessor and its cached property; *(amended, R5: the accessor returns `ScopeRegistry::for_class()`, and the Table caches nothing)*
   - `lib/Model.php`: new static `has_scope()`; move the dynamic-finder prefixes to the shared constant below;
   - `lib/Query.php`: new `has_scope()`.
 - Create test models in `test/models/`:
@@ -121,7 +123,7 @@
   - **Validation**, in this order, one `ConfigException` per first failure:
     1. a double declaration;
     2. a public method of `Query` (`ReflectionClass(Query::class)->getMethods(IS_PUBLIC)`, magic methods `__*` excluded);
-    3. a static method of the class hierarchy, from the same `IS_STATIC` list minus the scope methods themselves;
+    3. a static method of the class hierarchy, from the same `IS_STATIC` list minus the scope methods themselves; *(amended, R8: also every public instance method of the hierarchy and the other scopes' methods, only the scope's own method excluded, and every check compares names case-insensitively)*
     4. a dynamic-finder prefix (`DYNAMIC_FINDER_PREFIXES`, matched as `Model::is_dynamic_finder()` matches);
     5. `update` or `delete`.
   - **Message:** `sprintf('%s declares the scope %s(), which %s', $class, $name, $reason)`. The reasons must contain the words the tests assert.
@@ -146,7 +148,7 @@
 - Produces:
   - `ScopeRegistry::apply(Query $query, string $name, array $args): Query`.
   - `Query::__call(string $name, array $args): static`.
-  - `Model::__callStatic` gains a step before the final throw: `if (static::table()->scopes()->has($method)) return static::table()->scopes()->apply(static::new_query(), $method, $args);`.
+  - `Model::__callStatic` gains a step before the final throw: `if (static::table()->scopes()->has($method)) return static::table()->scopes()->apply(static::new_query(), $method, $args);`. *(Amended, R5: it reads `ScopeRegistry::for_class(static::class)`, without loading the Table.)*
 
 - [ ] **Step 1: Write the failing tests** in `test/QueryScopeTest.php`. Fixtures: authors 1 Tito (parent 3), 2 George W. Bush (parent 2), 3 Bill Clinton (parent 1), 4 Uncle Bob (parent 2). Compare ids of `get()`.
   - `test_static_and_chained_with_arguments`:
@@ -182,10 +184,10 @@
   1. note `$before = count($query->state()->wheres)`;
   2. invoke the scope method through reflection (`ReflectionMethod::invoke(null, $query, ...$args)`; a protected static is invocable since PHP 8.1);
   3. a return that is neither `null` nor `$query` (identity) throws `ActiveRecordException`: `sprintf('The scope %s() of %s must return null or the query it was given, %s returned', $name, $class, get_debug_type($result))`;
-  4. if `count(wheres) > $before`, move `array_slice($wheres, $before)` into a new `QueryState` and replace them with one `['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $state]`;
+  4. if `count(wheres) > $before`, move `array_slice($wheres, $before)` into a new `QueryState` and replace them with one `['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $state]`; *(amended, R7: the scope runs on an emptied list, and a `finally` puts back the earlier wheres, grouped when they hold a top-level OR, then the scope's as one group; spec §4.2)*
   5. the `empty_where` / `skipped_when` flags stay on the query's state as the scope's calls set them;
   6. return `$query`.
-- [ ] **Step 4: Implement `Query::__call()`.** If `$this->table()->scopes()->has($name)`, apply and return `$this`; else `throw new \BadMethodCallException(sprintf('Call to undefined method %s::%s()', self::class, $name))`. Then add the `__callStatic` step.
+- [ ] **Step 4: Implement `Query::__call()`.** *(Amended, R9: through `ScopeRegistry::for_class($this->model_class)`.)* If `$this->table()->scopes()->has($name)`, apply and return `$this`; else `throw new \BadMethodCallException(sprintf('Call to undefined method %s::%s()', self::class, $name))`. Then add the `__callStatic` step.
 - [ ] **Step 5: Run** `QueryScopeTest`, `ScopeRegistryTest`, `QueryForwardingTest` and `GoldenSqlTest`. Expected: PASS. This also verifies spec §9.1–§9.3. `analyse` must accept `__call` with no baseline entry (§9.2).
 - [ ] **Step 6: Full suite on mysql, mariadb and sqlite + `analyse` + `cs`.**
 - [ ] **Step 7: Commit**

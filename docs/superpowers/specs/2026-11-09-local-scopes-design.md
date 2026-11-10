@@ -73,7 +73,8 @@ Verified on 2026-11-09 (PHP 8.3.35 in the Docker `tests` image, and the code on 
   (lib/Query.php ~3224).
 - Calling the static scope from an instance method (`static::active()`) reaches `Model::__call`, which handles only
   `build_*` / `create_*` (brief §2.4).
-- Monolith (read-only grep, `application/`, vendor excluded): 0 methods named `scope*`, 0 `#[Scope]`, 0 `has_scope`.
+- Monolith (read-only grep, `application/`, vendor excluded): 0 `scope_*` methods, 0 `#[Scope]`, 0 `has_scope`. (The one
+  method named `scope` is the private, non-static `RCHtml::scope()`, on a class that is no model.)
 
 ---
 
@@ -108,14 +109,17 @@ Post::new_query()->has_scope('nope');  // false
 
 1. **What is a scope:**
    - a `public static` method whose name starts with `scope_` (and is longer than the prefix);
-   - a `protected static` method that carries the attribute `ActiveRecord\Scope` (as Eloquent requires `protected`).
+   - a `protected static` method that carries the attribute `ActiveRecord\Scope` (Eloquent's documentation declares
+     them `protected`; its `Model::isScopeMethodWithAttribute()` accepts any method that is not private).
    - A non-static `scope_*` method is **ignored**, so an existing consumer method of that shape does not break.
    - A `#[Scope]` method that is not `protected static` is an **error**, because the attribute is an explicit
      declaration (§5). A `public static` one would be called by PHP directly, without the query (§2), and fail with
      `ArgumentCountError`. A `private` one would not be inherited as a scope by subclasses.
      *(Correction made while writing the spec: section 1 in chat said "public or protected".)*
 2. **Public name:** for `scope_popular` it is the method name without the `scope_` prefix, as written (`popular`).
-   For `#[Scope]` it is the method name. Names are case-sensitive, as every builder name is.
+   For `#[Scope]` it is the method name. Names are case-sensitive, as every builder name is: `has_scope()` and the
+   lookup of a call read the name as written. The collision checks (§3.2) compare without regard to case, as PHP
+   compares method names.
 3. **Signature:** `fn(Query $q, mixed ...$args): ?Query`, the signature 3a's global scopes reuse.
    - The call's arguments pass through unchanged. PHP's own `TypeError` / `ArgumentCountError` apply.
    - The scope may return `null` (the chain is unchanged) or the same `Query` instance.
@@ -127,8 +131,14 @@ Post::new_query()->has_scope('nope');  // false
    - A scope that adds no WHERE condition adds no group.
    - Everything else a scope adds (order, joins, select, eager loads, limit) is applied as it is.
    - A scope's group is a group even when it holds one condition: `AND (status = ?)`.
-   - The flags a where call sets when it adds nothing (`empty_where`, `skipped_when`, see `Query::add_wheres()`) are
-     handled as for a closure group.
+   - *Amended during implementation (R7):* when what the query held before holds a top-level `OR`, it is wrapped in one
+     group too, so the scope filters every row, as Eloquent's `addNewWheresWithinGroup()` does:
+     `where(a)->or_where(b)->popular()` is `(a OR b) AND (...)`. An earlier list joined only by AND, and every query when
+     the scope adds no condition, compile as before (§4.2).
+   - *Amended during implementation (R3):* the flags a where call sets when it adds nothing (`empty_where`,
+     `skipped_when`, see `Query::add_wheres()`) stay on the query's own state, not in the group. A scope that only calls
+     `where([])`, or whose `when()` skips, therefore makes a later `update()` / `delete()` refuse to run, as a closure
+     group that adds nothing does; once a scope adds a where, the flags are moot.
 6. **Reaching a scope:**
    - **statically:** `Post::popular(...)` = `Post::new_query()` with the scope applied, through `Model::__callStatic`.
      It is checked after dynamic finders, the `update`/`delete` refusal and `Query::FORWARDABLE`, and before the
@@ -145,18 +155,24 @@ Post::new_query()->has_scope('nope');  // false
    `static::new_query()->popular()`, documented next to the same note for `where`.
    - For a `scope_x` scope, `static::popular()` from an instance method is not supported (PHP routes it to
      `Model::__call`) and still throws "Call to undefined method".
-   - For a `#[Scope]` method, `static::published()` anywhere inside the model class, in a static or an instance
-     context, calls the protected method itself, without the query, and fails with PHP's `TypeError`.
+   - For a `#[Scope]` method, PHP's protected check uses the class that declares the method. So `static::published()`,
+     or `Sibling::published()` on another class of the hierarchy, called from the code of the declaring class or of any
+     class related to it by inheritance (one that extends it, or one it extends), in a static or an instance context,
+     calls the protected method itself, without the query, and fails with PHP's `TypeError` (`ArgumentCountError` when
+     it is given no argument). Write `Post::new_query()->published()` there. From code outside the hierarchy,
+     `Post::published()` reaches `__callStatic` and is the scope. *(Amended after the final review, R4.)*
 
 ### 3.2 Collisions (decision 3)
 
 When the model's scopes are first read (§4.1), each public scope name is checked. Any of these throws
-`ConfigException` naming the class, the scope and the reason:
+`ConfigException` naming the class, the scope and the reason. *Amended during implementation (R8):* the names are
+compared without regard to case (`strtolower`), as PHP calls methods (`scope_Where` collides with `where()`), and row 2
+covers every method PHP would call itself:
 
 | # | The name … | Example |
 |---|---|---|
-| 1 | is a public method of `Query` | `scope_where`, `scope_chunk`, `scope_has_scope` |
-| 2 | is a real static method of the model class or any ancestor, `Model` included (by `ReflectionClass::getMethods(IS_STATIC)` on the concrete class, the scope methods themselves excluded) | `scope_find`, `scope_create`, `scope_chunk` on a subclass of `RCModel` |
+| 1 | is a public method of `Query` | `scope_where`, `scope_Where`, `scope_chunk`, `scope_has_scope` |
+| 2 | is a real method of the model class or any ancestor, `Model` included: a static method of any visibility, a public instance method, or the method of another scope (by `ReflectionClass::getMethods()` on the concrete class; only the scope's own method is excluded) | `scope_find`, `scope_create`, `scope_chunk` on a subclass of `RCModel`; `scope_reload`, `scope_save`; `scope_scope_x` beside `scope_x` |
 | 3 | starts with a dynamic-finder prefix: `find_by_`, `find_all_by_`, `count_by_`, `find_or_create_by_` | `scope_find_by_title` |
 | 4 | is `update` or `delete` | `scope_delete` |
 | 5 | is declared twice (`scope_x` and a `#[Scope]` method `x`) | |
@@ -173,7 +189,7 @@ A `#[Scope]` method that is not `protected static` also throws `ConfigException`
 |---|---|---|
 | `Scope` (new, `lib/Scope.php`) | public | `#[\Attribute(\Attribute::TARGET_METHOD)] final class Scope {}` |
 | `ScopeRegistry` (new, `lib/ScopeRegistry.php`) | `@internal` | Built lazily for one model class and cached per class in a private static array of `ScopeRegistry` itself (`for_class()`; a failed build is not cached): reflects its scope methods, validates §3.2, holds `name → method`. `has(string $name): bool`; `apply(Query $query, string $name, array $args): Query` runs the scope, checks the return value, and regroups the wheres it added (§4.2). |
-| `Table` (changed) | `@internal` accessor | `scopes(): ScopeRegistry`, a named accessor that returns `ScopeRegistry::for_class()` for the model. *Amended during implementation (R5, maintainer decision 2026-11-10):* the registry is cached in `ScopeRegistry`, not on the Table, and `Model::__callStatic` and `Model::has_scope` read it without calling `Model::table()`. Reading the scopes is reflection only, so it never loads the Table, opens the connection or reads the schema: an unknown static name on a model whose table is missing (or when the database is down) still throws "Call to undefined method", as before. |
+| `Table` (changed) | `@internal` accessor | `scopes(): ScopeRegistry`, a named accessor that returns `ScopeRegistry::for_class()` for the model. *Amended during implementation (R5, maintainer decision 2026-11-10):* the registry is cached in `ScopeRegistry`, not on the Table, and `Model::__callStatic` and `Model::has_scope` read it without calling `Model::table()`. *Amended after the final review (R9):* `Query::__call` and `Query::has_scope` read it the same way, through `ScopeRegistry::for_class()`. Reading the scopes is reflection only, so it never loads the Table, opens the connection or reads the schema: an unknown static name on a model whose table is missing (or when the database is down) still throws "Call to undefined method", as before. |
 | `Model` (changed) | public | `__callStatic` gains the scope step (§3.1 item 6). New static `has_scope(string $name): bool`. |
 | `Query` (changed) | public | New `__call(string $name, array $args): static` (scope or `\BadMethodCallException`) and `has_scope(string $name): bool`. |
 
@@ -186,21 +202,27 @@ called.
 
 ### 4.2 Grouping
 
-`ScopeRegistry::apply()`:
+*Amended during implementation (R7, R3).* `ScopeRegistry::apply()`:
 
-1. Notes `$before = count($query->state()->wheres)`, and the `empty_where` / `skipped_when` flags.
+1. Takes the query's wheres aside and empties them: `$earlier = $state->wheres; $state->wheres = [];`.
 2. Calls the scope with `($query, ...$args)`, then refuses a return that is not `null` and not `$query`.
-3. If the scope added wheres:
-   - it moves `array_slice($wheres, $before)` into a new `QueryState` (the flags it set go with them);
-   - it replaces them with one `['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $state]`.
-   The compiled form is the existing closure-group form, so no new compilation code is needed.
+3. In a `finally`, so that a scope that throws leaves the query grouped too, takes `$added = $state->wheres` and puts
+   the two back:
+   - when `$added` is empty, `$state->wheres = $earlier`, unchanged (a scope that adds no condition changes no SQL);
+   - otherwise `$state->wheres = [...(has_top_level_or($earlier) ? [group($earlier)] : $earlier), group($added)]`, where
+     a top-level OR is a where of `$earlier` after the first whose `boolean` is `'OR'` (the first one's is dropped), and
+     `group($w)` is `['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $state]` whose `QueryState`
+     holds only the wheres `$w`.
+   - The `empty_where` / `skipped_when` flags stay on the query's own state (R3, §3.1 item 5).
+   The compiled form is the existing closure-group form, so no new compilation code is needed. Nested scopes need no
+   slice arithmetic: an inner scope sees only the wheres its caller's scope added so far, and groups them the same way.
 
 ### 4.3 Flow
 
 ```
 Post::where('published', 1)->popular(50)->get()
   Model::__callStatic('where')       → FORWARDABLE → Query::where
-  Query::__call('popular', [50])     → Table::scopes() (built + validated on first use)
+  Query::__call('popular', [50])     → ScopeRegistry::for_class(Post) (built + validated on first use)
                                      → ScopeRegistry::apply: Post::scope_popular($q, 50), regroup its wheres
   Query::get()                       → QueryCompiler (unchanged)
 ```
