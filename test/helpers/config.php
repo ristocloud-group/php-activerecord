@@ -31,6 +31,7 @@ require_once 'DatabaseTest.php';
 require_once 'AdapterTest.php';
 require_once 'UpsertTest.php';
 require_once __DIR__ . '/GoldenStatements.php';
+require_once __DIR__ . '/CapturesStatements.php';
 
 // whether or not to show warnings when Log or Memcache is missing
 $GLOBALS['show_warnings'] = true;

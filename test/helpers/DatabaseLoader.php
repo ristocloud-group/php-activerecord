@@ -24,8 +24,19 @@ class DatabaseLoader
 
     public function reset_table_data()
     {
-        foreach ($this->get_fixture_tables() as $table) {
-            $this->db->query('DELETE FROM ' . $this->quote_name($table));
+        $tables = $this->get_fixture_tables();
+
+        // Postgres reuses the space freed by earlier tests' updates, so rows reloaded after a
+        // DELETE can come back out of insertion order from a SELECT without ORDER BY (and the
+        // golden IN lists with them). TRUNCATE gives each table a fresh heap.
+        if ('pgsql' === $this->db->protocol) {
+            $this->db->query('TRUNCATE ' . implode(', ', array_map($this->quote_name(...), $tables)));
+        }
+
+        foreach ($tables as $table) {
+            if ('pgsql' !== $this->db->protocol) {
+                $this->db->query('DELETE FROM ' . $this->quote_name($table));
+            }
             $this->load_fixture_data($table);
         }
 

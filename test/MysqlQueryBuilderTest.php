@@ -184,6 +184,22 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same('18446744073709551615', BigId::where('note', 'max')->value('id'));
     }
 
+    // Spec §4.3: keyset paging binds the last key exactly, so a BIGINT UNSIGNED key beyond PHP_INT_MAX, which the
+    // attribute keeps as its digits, pages up to 2^64-1 without skipping or repeating a row
+    public function test_chunk_by_id_exact_beyond_signed_bigint(): void
+    {
+        BigId::create(['id' => '18446744073709551614', 'note' => 'max-1']);
+        BigId::create(['id' => '18446744073709551615', 'note' => 'max']);
+        $ids = [];
+        BigId::chunk_by_id(1, function (array $models) use (&$ids) {
+            foreach ($models as $model) {
+                $ids[] = $model->id;
+            }
+        });
+
+        $this->assert_same([1, PHP_INT_MAX, '18446744073709551614', '18446744073709551615'], $ids);
+    }
+
     // MySQL and MariaDB read an alias of the select in a HAVING, so count() and exists() keep the select of a query
     // that has a HAVING (spec §5.3). Postgres refuses the alias there (42703), get() included. Parent 2 is the one of
     // more than one author.
