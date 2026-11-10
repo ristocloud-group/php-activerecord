@@ -142,6 +142,7 @@ class Query
         'average',
         'chunk',
         'lazy',
+        'cursor',
         'chunk_by_id',
         'chunk_by_id_desc',
         'lazy_by_id',
@@ -2130,6 +2131,47 @@ class Query
         $pager = new QueryPager($this->clone(), $this->table());
 
         return $pager->models($pager->offset_pages($chunk_size));
+    }
+
+    /**
+     * The models of the rows the query selects, one at a time, hydrated as the rows are read from a single SELECT and
+     * keyed from 0. The query is compiled at the call, so a later change to it does not reach the cursor, and no
+     * statement runs until the first model is asked for. On MySQL, MariaDB and Postgres the rows are read in full
+     * before the first model is yielded; SQLite steps through them, so the cursor is live there and may read rows
+     * written ahead of it. Other statements may run while iterating. It cannot eager load relationships: use lazy()
+     * for those.
+     *
+     * With $stream, the rows are read from the database one at a time where its driver allows it, and the connection is
+     * busy from the first model until the cursor ends or is destroyed: any other query, transaction start or commit on
+     * it throws ConnectionBusy, on every adapter. A rollback closes the stream and frees the connection: the cursor then
+     * throws if read again. A foreach over the call releases it on break; a cursor held in a variable stays busy until
+     * the variable is unset or goes out of scope.
+     *
+     * <code>
+     * foreach (Author::where('active', true)->cursor() as $author) { ... }
+     * foreach (Order::new_query()->cursor(stream: true) as $order) { ... }
+     * </code>
+     *
+     * @return \Generator<int, TModel>
+     * @throws ActiveRecordException at the call, for a query that eager loads relationships (with())
+     * @throws ConnectionBusy at the first model of a stream, when the connection already streams one
+     * @throws DatabaseException when the statement fails to execute, or a row fails to be read
+     */
+    public function cursor(bool $stream = false): \Generator
+    {
+        $options = $this->state->legacy ?? [];
+
+        if ([] !== $this->state->includes || array_key_exists('include', $options)) {
+            throw new ActiveRecordException(sprintf('%s() cannot eager load relationships (with()); use lazy() instead', __FUNCTION__));
+        }
+
+        $sql = $this->compiler()->compile_select($this->state);
+        $readonly = $this->state->readonly || (array_key_exists('readonly', $options) && $options['readonly']);
+
+        /** @var Cursor<TModel> $cursor */
+        $cursor = new Cursor($this->table(), $sql, $readonly, $stream);
+
+        return $cursor->models();
     }
 
     /**

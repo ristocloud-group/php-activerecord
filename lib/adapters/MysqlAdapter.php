@@ -6,6 +6,8 @@
 
 namespace ActiveRecord;
 
+use Closure;
+
 /**
  * Adapter for MySQL.
  *
@@ -33,6 +35,43 @@ class MysqlAdapter extends Connection
     {
         // MySQL has no OFFSET without LIMIT; its documented idiom is the largest row count
         return "$sql LIMIT $offset, 18446744073709551615";
+    }
+
+    /**
+     * The PDO attribute that turns the buffering of query results on or off: Pdo\Mysql::ATTR_USE_BUFFERED_QUERY, which
+     * PHP 8.4 introduced, else its deprecated PDO::MYSQL_ATTR_USE_BUFFERED_QUERY (named through constant(), so that PHP
+     * 8.5 never touches the deprecated name).
+     *
+     * @internal Serves unbuffered() and its tests; not a supported API.
+     */
+    public static function buffered_query_attribute(): int
+    {
+        return defined('Pdo\Mysql::ATTR_USE_BUFFERED_QUERY')
+            ? constant('Pdo\Mysql::ATTR_USE_BUFFERED_QUERY')
+            : constant('PDO::MYSQL_ATTR_USE_BUFFERED_QUERY');
+    }
+
+    /**
+     * Runs $execute with the buffering of query results turned off, so that the server sends the rows as they are
+     * fetched, and puts the buffering back as it was, even when $execute throws. (The attribute of a single prepare()
+     * is ignored by the driver: only the connection's attribute at execute() counts.)
+     *
+     * @internal Serves stream_query(); not a supported API.
+     * @template T
+     * @param Closure(): T $execute
+     * @return T
+     */
+    protected function unbuffered(Closure $execute): mixed
+    {
+        $attribute = static::buffered_query_attribute();
+        $previous = $this->connection->getAttribute($attribute);
+        $this->connection->setAttribute($attribute, false);
+
+        try {
+            return $execute();
+        } finally {
+            $this->connection->setAttribute($attribute, $previous);
+        }
     }
 
     public function query_column_info($table)

@@ -416,15 +416,15 @@ The names are Eloquent's in snake_case, with the `or_` variants it has (`orWhere
 | `toSql`, `toRawSql`, `getBindings` | `to_sql`, `to_raw_sql`, `get_bindings` |
 | `get`, `first`, `firstOrFail`, `firstOr`, `sole`, `find`, `findOrFail`, `findMany`, `findOr`, `value`, `soleValue`, `pluck`, `exists`, `doesntExist` | `get`, `first`, `first_or_fail`, `first_or`, `sole`, `find`, `find_or_fail`, `find_many`, `find_or`, `value`, `sole_value`, `pluck`, `exists`, `doesnt_exist` |
 | `count`, `min`, `max`, `sum`, `avg`, `average` | `count`, `min`, `max`, `sum`, `avg`, `average` |
-| `chunk`, `chunkById`, `chunkByIdDesc`, `lazy`, `lazyById`, `lazyByIdDesc` | `chunk`, `chunk_by_id`, `chunk_by_id_desc`, `lazy`, `lazy_by_id`, `lazy_by_id_desc` |
+| `chunk`, `chunkById`, `chunkByIdDesc`, `lazy`, `lazyById`, `lazyByIdDesc`, `cursor` | `chunk`, `chunk_by_id`, `chunk_by_id_desc`, `lazy`, `lazy_by_id`, `lazy_by_id_desc`, `cursor` |
 | `insert`, `update`, `delete`, `upsert` | `insert`, `update`, `delete`, `upsert` |
 
 Added here: `joins()` and `left_joins()` join by relationship name, `readonly()` flags the models a query finds as
 readonly, and `Model::without_timestamps()` suspends the timestamps of a model for a closure.
 
 Eloquent's other builder features are not part of it: relationship queries (`whereHas`, `withCount`, ...), subqueries and
-unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, cursors, query
-scopes, and the date, JSON and full-text wheres.
+unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, query scopes,
+and the date, JSON and full-text wheres.
 
 ### Legacy and builder side by side ###
 
@@ -704,7 +704,7 @@ Invoice::where('status', 'open')->count();                  // 3
 `get()` loads every row at once. To walk a big table, read it in pages: `chunk()` and `chunk_by_id()` pass each page to a
 callback, and `lazy()` and `lazy_by_id()` give the models one at a time as a generator. Each page is one statement (an
 ascending `chunk_by_id()` or `lazy_by_id()` without `include_new_rows` runs one `max()` probe first), and the `with()`
-relationships are loaded for each page, not for each row.
+relationships are loaded for each page, not for each row. `cursor()` reads the whole query as one statement, below.
 
 ```php
 Customer::where('active', 1)->chunk(100, function (array $customers, int $page): void {
@@ -737,8 +737,8 @@ Invoice::new_query()->lazy_by_id_desc(500);               // the same, as a gene
 - `lazy*()` run no statement until the first model is asked for, and read the next page only when the models of the one
   before are used. They hold one page of models in memory: a page is let go before the next is read. A model with a
   non-null date attribute is the exception: it references itself through its `ActiveRecord\DateTime`, so PHP frees it
-  at its next cycle collection, not at the page switch. They read the query as it was at the call: a later change to the
-  builder does not reach them.
+  at its next cycle collection, not at the page switch. Like `cursor()`, they read the query as it was at the call: a
+  later change to the builder does not reach them.
 - A query without an order is read in the order of its primary key, so pages do not repeat or skip rows by chance. Give
   an `order_by()` to `chunk()` or `lazy()` to read in another order. On a `distinct()` or grouped query that does not
   select (or group by) the primary key, MySQL and Postgres reject the implicit primary-key order (MySQL errors 3065 and
@@ -779,8 +779,63 @@ Invoice::new_query()->chunk_by_id(500, $callback, include_new_rows: true);
   is replaced.
 - The `*_by_id*()` methods on a query with an `offset()`, any offset: `offset(0)` and `for_page()` too.
 - The `*_by_id*()` methods on a model with a composite primary key, without `$column`.
+- `cursor()` on a query with `with()` (Eloquent silently ignores the eager loads): use `lazy()`.
 
-The other difference is not a refusal: `include_new_rows` is opt-in here, where Eloquent always reads new rows.
+The other differences are not refusals: `include_new_rows` is opt-in here, where Eloquent always reads new rows, and a
+stream (`cursor(stream: true)`) locks its connection on every adapter (see the busy rule below).
+
+**One statement: `cursor()`.** `cursor()` runs the query once and gives the models one at a time as a generator, keyed
+from 0, hydrating each row only when it is reached.
+
+```php
+foreach (Customer::where('active', 1)->cursor() as $customer) {
+    // ...
+}
+
+foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {   // rows read from the server one at a time
+    // no other statement on this connection in here
+}
+```
+
+- **Buffered (default).** On MySQL, MariaDB and Postgres the driver reads every row before the first model is yielded,
+  so the rows are in PHP memory but only one model is hydrated at a time, and other statements may run inside the loop.
+  `get()`, by comparison, hydrates every row.
+- **`stream: true`.** On MySQL and MariaDB the rows really are read one at a time (unbuffered). On 100,000 rows the
+  PHP-side growth measured about 1.3 MB for a stream against about 18 MB buffered. On Postgres a stream saves no memory
+  (the driver still fetches the whole result).
+- **SQLite** steps through the rows natively, buffered or streamed: the cursor is live, and rows written ahead of it
+  while it is read may be read.
+- The query is compiled at the call: a later change to the builder does not reach a cursor already made. No statement
+  runs until the first model is asked for.
+- `cursor()` cannot eager load: with `with()` it throws at the call. Use `lazy()` for those.
+
+**The busy rule.** While a stream is open its connection is busy, on every adapter. `query()`, a transaction start,
+`commit()` and a second stream on that connection throw `ActiveRecord\ConnectionBusy`. That includes what
+looks like a read: a lazy relationship load (`$invoice->customer`) and the first-use schema introspection of a model
+not yet used, both inside the loop. Load what the loop needs beforehand, or use the buffered cursor or `lazy()`. Other
+connections are not affected.
+
+```php
+foreach (Invoice::new_query()->cursor(stream: true) as $invoice) {
+    $invoice->customer;       // throws ConnectionBusy if not loaded yet
+}
+```
+
+- The connection is released when the foreach ends, or on `break`. On MySQL and MariaDB a `break` still reads the rest
+  of the result from the server, to free the connection: memory stays flat, but the transfer happens (about 1.3 s for
+  300,000 small rows on the test stack). A cursor held in a variable is not released: after
+  `$cursor = Invoice::new_query()->cursor(stream: true); foreach ($cursor as $i) { break; }` the connection stays busy
+  until `unset($cursor)`.
+- A stream may be read inside a transaction, but `commit()` throws while it is open. `rollback()` does not: it closes
+  the stream, frees the connection and rolls back (a savepoint too), and reading that cursor again throws
+  `ActiveRecord\ActiveRecordException`. So an exception out of a `Model::transaction()` closure rolls back and comes out
+  as it was, even when it still holds the cursor (an exception keeps the arguments of the calls in its trace). A closure
+  that returns while a stream cursor made in it is still held outside it fails its commit: the transaction is rolled
+  back and `ConnectionBusy` is thrown. Finish or `unset()` the cursor first.
+- MySQL: the server writes rows as the client reads them, and drops the connection after `net_write_timeout` (60 s by
+  default) when the client is slower. The loop's next read then fails with error 2006 "server has gone away" or 2013
+  "lost connection", as an `ActiveRecord\DatabaseException`. Raise `net_write_timeout` for a slow loop, or use the
+  buffered cursor.
 
 **Shadowing.** A model's own static method wins over the forwarded name (see Entry points), so a model that defines its
 own `chunk()` keeps it: call the builder's as `Invoice::new_query()->chunk(...)`.

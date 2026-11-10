@@ -439,4 +439,74 @@ class MysqlQueryBuilderTest extends DatabaseTest
         $this->assert_same('SELECT * FROM `authors` LIMIT 0', Author::limit(0)->to_sql());
         $this->assert_same('SELECT * FROM `authors` LIMIT 9223372036854775806,1', Author::for_page(PHP_INT_MAX, 1)->to_sql());
     }
+
+    // Spec §4.5: a streamed cursor leaves the rows on the server, so a raw query on the same connection (bypassing the
+    // guard) fails with error 2014; a buffered cursor has read them all
+    public function test_stream_is_unbuffered(): void
+    {
+        $raw = $this->conn->connection;
+
+        $seen = 0;
+        foreach (Author::new_query()->cursor(stream: true) as $author) {
+            try {
+                $raw->query('SELECT 1');
+                $this->fail('the raw query should fail while rows are pending');
+            } catch (PDOException $e) {
+                $this->assert_string_contains_string('2014', $e->getMessage());
+            }
+            ++$seen;
+        }
+        $this->assert_same(4, $seen);
+
+        foreach (Author::new_query()->cursor() as $author) {
+            $this->assert_same(1, (int) $raw->query('SELECT 1')->fetchColumn());
+        }
+    }
+
+    // Final review F3, spec §5: a database error while fetching a stream is a DatabaseException, as one at execute is,
+    // and the connection is released. The subquery returns two rows from author 2 on, so MySQL and MariaDB send row 1
+    // and then fail the next fetch with error 1242 (a buffered cursor fails the same query at execute)
+    public function test_stream_fetch_error_is_a_database_exception(): void
+    {
+        $cursor = Author::select('*')
+            ->select_raw('IF(author_id > 1, (SELECT 1 UNION SELECT 2), 1) AS boom')
+            ->order_by('author_id')
+            ->cursor(stream: true);
+        $ids = [];
+
+        try {
+            foreach ($cursor as $author) {
+                $ids[] = $author->author_id;
+            }
+            $this->fail('DatabaseException expected');
+        } catch (ActiveRecord\DatabaseException $e) {
+            $this->assert_string_contains_string('SQLSTATE[21000]', $e->getMessage());
+            $this->assert_string_contains_string('1242', $e->getMessage());
+        }
+
+        $this->assert_same([1], $ids);
+        $this->assert_same('Tito', Author::find(1)->name);
+    }
+
+    public function test_buffered_attribute_restored(): void
+    {
+        foreach (Author::new_query()->cursor(stream: true) as $author) {
+        }
+
+        $this->assert_true((bool) $this->conn->connection->getAttribute(ActiveRecord\MysqlAdapter::buffered_query_attribute()));
+    }
+
+    // The error is raised at execute, not at prepare, because the library uses PDO's emulated prepares: the server sees
+    // the statement only when it is executed, inside the unbuffered() window
+    public function test_buffered_attribute_restored_after_failing_execute(): void
+    {
+        try {
+            $this->conn->stream_query('SELECT * FROM no_such_table');
+            $this->fail('the statement should fail');
+        } catch (ActiveRecord\DatabaseException) {
+        }
+
+        $this->assert_true((bool) $this->conn->connection->getAttribute(ActiveRecord\MysqlAdapter::buffered_query_attribute()));
+        $this->assert_same('Tito', Author::find(1)->name);
+    }
 }
