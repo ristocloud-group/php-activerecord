@@ -1,16 +1,16 @@
 # Local scopes — `scope_x` / `#[Scope]` on models, reachable statically and on the query builder
 
 **Date:** 2026-11-09
-**Status:** Design approved section by section in chat (sections 1–3, 2026-11-09) — awaiting review of this written spec.
+**Status:** Approved (2026-11-09); implemented on `feat/local-scopes`.
 **Author:** Claude (paired with maintainer)
 **Program:** sub-project 3 ("Scopes") of the "Eloquent fluent query builder" program (builder core spec
 `2026-10-21-query-builder-core-design.md` §1.2), split on 2026-11-09 into **3b local scopes (this spec, first)** and
 **3a global scopes + soft delete (next)**.
 **Research input:** `.superpowers/scopes/2026-11-09-scopes-brainstorm-brief.md` and notes 01–05 (git-ignored, primary
 checkout) — a read-only, critic-verified survey of the library, the monolith, Eloquent and Rails.
-**Branches:** this document lives on `spec/local-scopes`, cut from `origin/master` 3316cbf. Implementation starts after
-sub-project 1 (iteration: `feat/query-iteration-paging` / `feat/query-iteration-cursor`) merges: both touch
-`lib/Query.php` and `lib/Model.php`.
+**Branches:** this document was written on `spec/local-scopes`, cut from `origin/master` 3316cbf. Sub-project 1 (iteration:
+`feat/query-iteration-paging` / `feat/query-iteration-cursor`) has merged (#197, #198), and the implementation lives on
+`feat/local-scopes`, cut from `master` after that merge.
 
 ---
 
@@ -141,9 +141,12 @@ Post::new_query()->has_scope('nope');  // false
    - statically, `ActiveRecordException` "Call to undefined method", as today.
 8. **`has_scope(string $name): bool`:** a real static on `Model` and a method on `Query`. Both answer whether the model
    declares a scope reachable by that public name.
-9. **Instance context:** `static::popular()` from an instance method of the model is not supported (PHP routes it to
-   `Model::__call`), and still throws "Call to undefined method". Write `static::new_query()->popular()`. This is
-   documented next to the same note for `where`.
+9. **Instance context** *(amended during implementation, R4)*: inside the model's own code a scope is reached as
+   `static::new_query()->popular()`, documented next to the same note for `where`.
+   - For a `scope_x` scope, `static::popular()` from an instance method is not supported (PHP routes it to
+     `Model::__call`) and still throws "Call to undefined method".
+   - For a `#[Scope]` method, `static::published()` anywhere inside the model class, in a static or an instance
+     context, calls the protected method itself, without the query, and fails with PHP's `TypeError`.
 
 ### 3.2 Collisions (decision 3)
 
