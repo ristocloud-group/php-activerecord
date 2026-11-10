@@ -380,7 +380,8 @@ What a static call such as `Invoice::something()` reaches:
   `Invoice::new_query()->first()` or `Invoice::where(...)->first()` is the builder's.
 - Otherwise `__callStatic` answers, in this order: the dynamic finders (`find_by_*`, `find_all_by_*`, `count_by_*`,
   `find_or_create_by_*`), as before; then the refusal of `update` and `delete` below; then the forwarding of the names on
-  `Query::FORWARDABLE`; and for any other name `ActiveRecordException: Call to undefined method: ...`, as before.
+  `Query::FORWARDABLE`; then the model's [local scopes](#local-scopes); and for any other name
+  `ActiveRecordException: Call to undefined method: ...`, as before.
 - **A static `update` or `delete` is refused**, because forwarded it would write every row. `Invoice::update([...])`
   throws an `ActiveRecordException` that points to `where(...)->update(...)`, and `Invoice::delete()` is PHP's own `Error`
   ("Non-static method ... cannot be called statically"), because `Model` has an instance `delete()`. To write every row,
@@ -393,6 +394,7 @@ What a static call such as `Invoice::something()` reaches:
   method of the model (`static::where(...)`, `self::where(...)`, `Invoice::where(...)`) goes to `Model::__call`, not to
   `__callStatic`, and answers `Call to undefined method: where`. Write `static::new_query()->where(...)` there. From a
   static method, or on another model's class, the forwarding works.
+  The same goes for a scope (`static::new_query()->popular()`, see [Local scopes](#local-scopes)).
 
 The builder does not go through a model's overrides of the legacy finders. A base class whose `all()` or `find()` adds a
 condition (a soft-delete filter, say) does not affect `new_query()` or the forwarded calls.
@@ -418,13 +420,14 @@ The names are Eloquent's in snake_case, with the `or_` variants it has (`orWhere
 | `count`, `min`, `max`, `sum`, `avg`, `average` | `count`, `min`, `max`, `sum`, `avg`, `average` |
 | `chunk`, `chunkById`, `chunkByIdDesc`, `lazy`, `lazyById`, `lazyByIdDesc`, `cursor` | `chunk`, `chunk_by_id`, `chunk_by_id_desc`, `lazy`, `lazy_by_id`, `lazy_by_id_desc`, `cursor` |
 | `insert`, `update`, `delete`, `upsert` | `insert`, `update`, `delete`, `upsert` |
+| `scopeX` methods, `#[Scope]` | `public static scope_x` methods, `#[Scope] protected static` methods ([Local scopes](#local-scopes)): static here, so a ported instance `scope_x` is ignored and a non-static `#[Scope]` throws; a scope whose first condition is `or_where` is still ANDed in |
 
 Added here: `joins()` and `left_joins()` join by relationship name, `readonly()` flags the models a query finds as
 readonly, and `Model::without_timestamps()` suspends the timestamps of a model for a closure.
 
 Eloquent's other builder features are not part of it: relationship queries (`whereHas`, `withCount`, ...), subqueries and
-unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, query scopes,
-and the date, JSON and full-text wheres.
+unions, locks, `increment` / `decrement`, `firstOrCreate` and the other `*OrCreate` methods, pagination, global scopes,
+scopes with relationship queries, and the date, JSON and full-text wheres.
 
 ### Legacy and builder side by side ###
 
@@ -844,6 +847,112 @@ own `chunk()` keeps it: call the builder's as `Invoice::new_query()->chunk(...)`
 model whose `all()` or `find()` hides soft-deleted rows, they return those rows too unless the query says so:
 `Invoice::where_null('deleted_at')->chunk_by_id(...)`.
 
+### Local scopes ###
+
+A scope is a named, reusable piece of a query, declared on the model. There are two forms: a `public static` method whose
+name starts with `scope_`, and a `protected static` method marked `#[Scope]`. The public name is the method name without
+the `scope_` prefix (`scope_popular` is `popular`), or the method name for `#[Scope]`.
+
+```php
+use ActiveRecord\Model;
+use ActiveRecord\Query;
+use ActiveRecord\Scope;
+
+class Post extends Model
+{
+    public static function scope_popular(Query $q, int $min = 100): ?Query
+    {
+        return $q->where('votes', '>', $min)->or_where('featured', 1);
+    }
+
+    #[Scope]
+    protected static function published(Query $q): ?Query
+    {
+        return $q->where('published', 1);
+    }
+}
+
+Post::popular()->get();                                        // on the class
+Post::where('author_id', 3)->published()->popular(50)->get();  // on a query, in any order
+Post::has_scope('popular');                                    // true
+Post::new_query()->has_scope('nope');                          // false
+```
+
+- **Arguments.** A scope is `fn(Query $q, ...$args): ?Query`. The call's arguments follow the query unchanged, and PHP's
+  own `TypeError` and `ArgumentCountError` apply. The scope may return `null` or the query it was given; anything else,
+  another `Query` included, throws an `ActiveRecordException` after the scope ran. A scope may do anything the builder
+  does (`where*`, `order_by`, `join`, `with`, `limit`, ...).
+- **A scope's wheres are always grouped.** The conditions a scope adds to the WHERE are wrapped in one pair of
+  parentheses and ANDed with what the query held before, so an `or_where` inside a scope cannot escape into the
+  conditions around it:
+
+  ```php
+  Post::where('published', 1)->popular(50)->to_sql();
+  // SELECT * FROM `posts` WHERE `published` = ? AND (`votes` > ? OR `featured` = ?)
+  ```
+
+  A scope that adds no where adds no group, and a scope with a single condition is still grouped, `AND (status = ?)`.
+  What the scope adds besides wheres (order, joins, select, eager loads, limit) is applied as it is. **When the query's
+  earlier conditions hold an `or`, they are grouped too**, so that the scope filters every row, as in Eloquent:
+  `where('a', 1)->or_where('b', 2)->popular()` is `(a = ? OR b = ?) AND (...)`. Earlier conditions joined only by AND
+  keep their shape (`a = ? AND b = ? AND (...)`), and so do all of them when the scope adds no where. A scope is ANDed in
+  even when its first condition is an `or_where`. A scope that throws leaves the query's conditions grouped the same way.
+  While it runs, a scope sees only the conditions it adds (unlike Eloquent): a `to_sql()`, `count()` or `exists()` called
+  inside the scope leaves out the query's earlier wheres.
+- **Inside a closure group**, `where(fn (Query $q) => $q->popular())` works while the scope adds only wheres; one that
+  adds an order, a join or the like throws the group's usual `ActiveRecordException`.
+- **`has_scope($name)`** is on the model (`Post::has_scope('popular')`) and on a query, and says whether the model
+  declares a scope with that public name, as written (`has_scope('Popular')` is false). Subclasses inherit the scopes of
+  their parents. A subclass that overrides a `#[Scope]` method must mark it `#[Scope]` again: PHP does not inherit
+  attributes, so the override is a plain method and the scope is gone (`has_scope()` is false, and the call is an
+  undefined method).
+- **Collisions are errors.** When a model's scopes are first read, each scope name is checked, and one that cannot be
+  reached as a scope throws a `ConfigException` naming the class, the scope and the reason. The check runs at the first
+  scope interaction with the model (the first static call that is no finder or forwarded builder method, the first
+  unknown-method call on one of its queries, or the first `has_scope()`), even if the colliding name is never called.
+  A name collides when it:
+
+  | Name | Example |
+  |---|---|
+  | is a public method of `Query` | `scope_where`, `scope_chunk`, `scope_has_scope` |
+  | is a static method of the model or of any class it extends | `scope_find`, `scope_create`, or `scope_chunk` on a subclass of a base class that has `chunk()` |
+  | is a public instance method of the model or of any class it extends | `scope_reload`, `scope_save` |
+  | is the method of another scope | `scope_scope_x` (the scope `scope_x`) beside `scope_x` |
+  | starts like a dynamic finder (`find_by`, `find_all_by`, `count_by`, `find_or_create_by`) | `scope_find_by_title` |
+  | is `update` or `delete` | `scope_delete` |
+  | is declared twice, as `scope_x` and as a `#[Scope]` method `x` | |
+
+  The names are compared as PHP compares method names, without regard to case: `scope_Where` collides with `where()`,
+  since `$query->Where()` runs `where()`. A `#[Scope]` method that is not `protected static` throws too, since the
+  attribute is an explicit declaration: a public static one would be run by PHP directly, without the query. A
+  non-static `scope_*` method is not a scope and is ignored.
+- **An unknown method on a query throws `\BadMethodCallException`** (`Call to undefined method
+  ActiveRecord\Query::<name>()`), not PHP's `\Error`, and so does a private or protected method of `Query` called from
+  outside. A misspelled static name on a model is still the `ActiveRecordException` `Call to undefined method`.
+- **In the model's own code, reach a scope through a query**, as for `where` (see [the builder](#query-builder)): write
+  `static::new_query()->popular()`. From an instance method, `static::popular()` goes to `Model::__call`, not to
+  `__callStatic`, and answers `Call to undefined method`. A `#[Scope]` method is a protected method of the class that
+  declares it, so PHP calls it itself, without the query, wherever it may: `static::published()`, or
+  `Sibling::published()` on another class of the hierarchy, from the code of the declaring class or of any class that
+  extends it (or that it extends), static methods included, fails with PHP's `TypeError` (an `ArgumentCountError` when
+  it is given no argument). Write `Post::new_query()->published()` there; from code outside the hierarchy,
+  `Post::published()` is the scope.
+- **Static analysis.** PHPStan does not see scopes: it reports `Post::popular()` as an undefined static method from
+  level 1, and `$query->popular()` as an undefined method of `Query` from level 2. A tag on the model,
+  `@method static Query<Post> popular(int $min = 100)`, covers the static call. No tag on the model covers a chained
+  call, which is a method of `Query`: start the chain with the scope, or ignore that line
+  (`// @phpstan-ignore method.notFound`).
+
+```php
+class Post extends Model
+{
+    public function summary(): array
+    {
+        return static::new_query()->published()->popular()->pluck('title');
+    }
+}
+```
+
 ### Aggregates ###
 
 ```php
@@ -1027,6 +1136,19 @@ Code ported from the Laravel documentation works by changing the method case, ex
 - **SQL written by hand that holds a statement terminator or leaves a block comment open is refused** at the call (a `;`
   outside its strings and comments, or a `/*` with no `*/` after it, see [Conditions](#conditions)), where Eloquent sends
   it.
+- **A scope's wheres are always grouped**, `AND (...)`, where Eloquent groups them only when they hold an `or`. Both
+  group the query's earlier wheres when those hold an `or` and the scope adds a where, so
+  `where('a', 1)->or_where('b', 2)->popular()` is `(a OR b) AND (...)` in both. **A scope whose first condition is an
+  `or_where` is still ANDed in**, where Eloquent joins its group with that `or`.
+- **Scopes are static.** Eloquent's `scopePopular()` and `#[Scope]` methods are instance methods. Ported by changing the
+  case only, a non-static `scope_popular()` is not a scope and is ignored (`Post::popular()` is an undefined method),
+  and a non-static `#[Scope]` method throws a `ConfigException`. Declare `public static function scope_popular(Query $q)`
+  or `#[Scope] protected static function popular(Query $q)`.
+- **A scope name that collides** with a `Query` method, a method of the model or its ancestors (static, or public),
+  another scope's method, a dynamic-finder prefix or `update` / `delete`, in any case, **is a `ConfigException`**, where
+  Eloquent lets a real method of its own builder or model win (and a scope beats a method it merely forwards to the
+  query builder). **An unknown method on a query throws `\BadMethodCallException`**, as Eloquent's does (where Eloquent
+  takes a name that starts with `where` for a dynamic where).
 - The exceptions are this library's: `RecordNotFound` for `first_or_fail()`, `find_or_fail()` and `sole()` (Eloquent's
   `ModelNotFoundException`) and `MultipleRecordsFound` for `sole()`. The terminals return arrays, where Eloquent returns
   Collections.

@@ -1011,6 +1011,21 @@ class Model
     }
 
     /**
+     * Whether this model declares a local scope reachable by the public name $name: a public static scope_$name()
+     * method, or a protected static method $name() carrying the Scope attribute.
+     *
+     * <code>
+     * Post::has_scope('popular'); // true when Post has scope_popular()
+     * </code>
+     *
+     * @throws ConfigException when the model declares a scope that collides with another name
+     */
+    public static function has_scope(string $name): bool
+    {
+        return ScopeRegistry::for_class(static::class)->has($name);
+    }
+
+    /**
      * Starts a query on this model: the entry point of the fluent builder.
      *
      * <code>
@@ -2041,6 +2056,11 @@ class Model
      * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
      * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
      *
+     * A name that is none of these is one of the model's local scopes, when it declares one by that name
+     * (a public static scope_x() method, or a protected static method marked #[Scope]): Person::popular(...)
+     * is Person::new_query()->popular(...), and returns that query (see {@link has_scope()}). The scopes are
+     * read by reflection, without loading the Table. Any other name is an undefined method.
+     *
      * The forwarding answers a call made where no instance of the class is at hand: from outside, or from
      * a static method. Inside an instance method, static::where(...) (or self::where(...), or the class's
      * own name) reaches {@link __call()} instead, which answers "Call to undefined method: where": use
@@ -2050,9 +2070,11 @@ class Model
      * @param mixed $args Method args
      * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
      *   find-or-create-by-attributes), a list of Model (find-all-by-attributes) or an int|string
-     *   (count-by-attributes). For a builder method, what that method returns.
-     * @throws ActiveRecordException if invalid query, for a static update() or delete(), or if there
-     *   is no such method
+     *   (count-by-attributes). For a builder method, what that method returns. For a scope, the query.
+     * @throws ActiveRecordException if invalid query, for a static update() or delete(), when a scope
+     *   returns anything but null or the query it was given, or if there is no such method
+     * @throws ConfigException when the model declares a scope that collides with another name, or a
+     *   #[Scope] method that is not protected static
      * @see find
      */
     public static function __callStatic($method, $args)
@@ -2115,6 +2137,13 @@ class Model
             return static::new_query()->$method(...$args);
         }
 
+        // the registry is built by reflection: an unknown name does not load the Table (or open the connection)
+        $scopes = ScopeRegistry::for_class(static::class);
+
+        if ($scopes->has($method)) {
+            return $scopes->apply(static::new_query(), $method, $args);
+        }
+
         throw new ActiveRecordException("Call to undefined method: $method");
     }
 
@@ -2124,10 +2153,13 @@ class Model
      */
     private static function is_dynamic_finder(string $method): bool
     {
-        return str_starts_with($method, 'find_by')
-            || str_starts_with($method, 'find_all_by')
-            || str_starts_with($method, 'count_by')
-            || str_starts_with($method, 'find_or_create_by');
+        foreach (ScopeRegistry::DYNAMIC_FINDER_PREFIXES as $prefix) {
+            if (str_starts_with($method, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

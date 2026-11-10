@@ -147,6 +147,21 @@ class Table
     }
 
     /**
+     * The local scopes of the model: the registry ScopeRegistry::for_class() keeps for its class, reflected and
+     * validated on the first call. Reading it never touches the database.
+     *
+     * @internal Serves Model and Query; not a supported API.
+     * @throws ConfigException when the model declares a scope that collides with another name
+     */
+    public function scopes(): ScopeRegistry
+    {
+        /** @var class-string $class */
+        $class = $this->class->name;
+
+        return ScopeRegistry::for_class($class);
+    }
+
+    /**
      * @param bool $close
      * @return Connection
      */
