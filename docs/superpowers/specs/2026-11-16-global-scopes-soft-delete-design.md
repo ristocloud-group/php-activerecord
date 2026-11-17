@@ -1,119 +1,158 @@
 # Global scopes and soft delete — `#[GlobalScope]`, `SoftDeletable` / `SoftDeletes`
 
-**Date:** 2026-11-16
+**Date:** 2026-11-16 (revised 2026-11-17 after a five-reviewer Goldfish review, round 1)
 **Status:** Draft, awaiting the maintainer's written-spec review.
 **Author:** Claude (paired with maintainer)
-**Program:** sub-project 3 ("Scopes") of the "Eloquent fluent query builder" program (builder core spec
-`2026-10-21-query-builder-core-design.md` §1.2), part **3a**. Part 3b (local scopes, spec
-`2026-11-09-local-scopes-design.md`) merged as #201 (8170a20).
-**Research input:** `.superpowers/scopes/2026-11-09-scopes-brainstorm-brief.md` and notes 01–05 (git-ignored, primary
-checkout). Its facts were re-checked on `master` 8170a20 for this spec.
+**Program:** sub-project 3 ("Scopes") of the "Eloquent fluent query builder" program
+([builder core spec](2026-10-21-query-builder-core-design.md) §1.2), part **3a**. Part 3b (local scopes,
+[spec](2026-11-09-local-scopes-design.md)) merged as [#201](https://github.com/ristocloud-group/php-activerecord/pull/201)
+(8170a20).
 **Branch:** written on `spec/global-scopes`, cut from `origin/master` 8170a20.
-**Follow-ups filed with this design:** #202 (delete cascade/restrict), #203 (sub-project 4, relationship querying), #204
-(possible future extensions), a comment on #186 (joins by relationship name). #194 (`constraints` key) is a separate,
-independent PR.
+**Related issues:** follow-ups filed with this design:
+[#202](https://github.com/ristocloud-group/php-activerecord/issues/202) (delete cascade/restrict),
+[#203](https://github.com/ristocloud-group/php-activerecord/issues/203) (sub-project 4, relationship querying),
+[#204](https://github.com/ristocloud-group/php-activerecord/issues/204) (possible future extensions), and a comment on
+[#186](https://github.com/ristocloud-group/php-activerecord/issues/186) (joins by relationship name). Independent PRs:
+[#194](https://github.com/ristocloud-group/php-activerecord/issues/194) (`constraints` relationship key) and
+[#150](https://github.com/ristocloud-group/php-activerecord/issues/150) (a `'0'` condition acts on every row).
+**Research input:** a local working brief (`.superpowers/scopes/`, not in the repository). Every fact the decisions rely
+on is restated in §2.
 
 ---
 
 ## 1. Context
 
-### 1.1 Where this started
+### 1.1 Problem
 
-On 2026-11-09 the maintainer asked for soft delete "inspired by Eloquent and Ruby". The research split sub-project 3
-into 3b (local scopes, done) and 3a (this spec). Two needs drive 3a:
+The library has no way to declare a filter that every query of a model applies, and no soft delete. Its main consumer,
+the RistoCloud application that vendors this library (called "the monolith" below; base model `RCModel`, still on
+`zamzar/php-activerecord` v1.7.1, see the builder core spec §8.4), implements both by hand:
 
-- the builder is unsafe on soft-delete models: the builder-core spec says not to use it on them until scopes ship;
-- the monolith's base model (`RCModel`) implements soft delete and one default condition by overriding
-  `all/first/last/count/exists/find_by_id` and appending `AND deleted_at IS NULL` **without parentheses**. A top-level
-  `OR` therefore leaks trashed rows, and `find()`, `find_by_*`, `has_many`/`has_one` and every eager load are not
-  filtered at all.
+- it overrides `all/first/last/count/exists/find_by_id` and appends `AND deleted_at IS NULL` **without parentheses**, so
+  a top-level `OR` in the caller's conditions leaks soft-deleted ("trashed") rows;
+- `find()`, `find_by_*`, `has_many`/`has_one` loads and every eager load are not filtered at all;
+- the query builder bypasses those overrides, so the builder core spec tells users not to use it on soft-delete models.
 
-### 1.2 Decisions (maintainer, 2026-11-16)
+The maintainer asked (2026-11-09) for soft delete "inspired by Eloquent and Rails" (the `paranoia`/`discard` gems).
+3a delivers global scopes and soft delete in the library, so that the filter is applied once, correctly grouped, on
+every path.
 
-| # | Question | Decision |
+### 1.2 Decisions (design session with the maintainer, 2026-11-16/17)
+
+| # | Question | Decision and reason |
 |---|---|---|
-| Q1 | Where global scopes apply | **Everywhere**: the builder, the legacy finders (`find`, `first`, `last`, `all`, `find_by_*`, `count`, `exists`) and lazy/eager relationship loads. The maintainer confirmed that the builder-core spec §1.4 ("not changing the existing statics' semantics") does not cover models that **opt in**. `save()`, instance `delete()` and `reload()` are never scoped. |
-| Q2 | Soft-delete opt-in | **Trait `SoftDeletes` + interface `SoftDeletable`** (chosen over a static property after the maintainer asked why not a trait). The instance methods then exist only on opted-in models. The column is customised by overriding the method `soft_delete_column()`, never a static property. |
-| Q3 | Declaring a global scope | **`#[GlobalScope]` on a `protected static` method** `fn(Query $q): ?Query`, named by the method. **WHERE-only.** No scope classes, no boot lifecycle (both in #204). |
-| Q4 | Removing scopes | Builder methods `without_global_scope()`, `without_global_scopes()`, `with_trashed()`, `only_trashed()`, `without_trashed()`. Legacy: a block form **`Model::unscoped(callable, ?array $names)`**, per exact class. No new `$VALID_OPTIONS` keys. |
-| Q5 | Relationships | Filtered by the target's scopes by default. A per-relationship option **`'unscoped' => true \| list<string>`** on `belongs_to` / `has_many` / `has_one`. Per-load constraints stay in sub-project 4 (#203). |
-| Q6 | `:through` middle model | **Only the middle model's soft delete**, as Eloquent's `SoftDeletableHasManyThrough`. Not its other global scopes. |
-| Q7 | Bulk writes | **Scoped everywhere**: legacy `update_all`/`delete_all` and builder `update()`/`delete()`. On a soft-delete model `delete_all`/`delete()` become an `UPDATE` of the column. The escape hatch is `unscoped()`. |
-| Q8 | Hard bulk delete | **`force_delete()` (builder) and `force_delete_all()` (legacy, on the trait) drop only the soft-delete scope** and keep the others. A deliberate deviation from Eloquent, whose `forceDelete()` drops every scope. |
-| Q9 | Instance soft delete | Direct by-PK `UPDATE`, no validations, no save callbacks, destroy callbacks fire, the object stays live. `restore()` with new `before_restore`/`after_restore` callbacks. `reload()` drops every global scope. **Deviation:** a `Model::transaction()` rollback restores the in-memory `deleted_at`. |
-| Q10 | `validates_uniqueness_of` | **Counts trashed rows** (drops only the soft-delete scope, keeps the others). No `without_trashed` option until asked (#204). |
-| Q11 | Smaller points | Approved as a package; see §3.6, §4 and §6. Deviations from Eloquent: an unknown scope name throws; `trashed()` without the column loaded throws. |
-| — | Engine approach | **A meta field on `QueryState`**, applied in the compiler's two WHERE sites, guarded by reflection tests over every entry (§4). |
-| — | Scope name | **`soft_deletes`**, as Eloquent names it after the trait, exposed as `SoftDeletable::SCOPE`. |
+| Q1 | Where global scopes apply | **Everywhere**: the builder, the legacy finders (`find`, `first`, `last`, `all`, `find_by_*`, `count`, `exists`), bulk writes and lazy/eager relationship loads. One rule on every path; relationships are covered because they load through the legacy finders. The builder core spec §1.4 ("not changing the existing statics' semantics") is not affected, because only models that **opt in** change. `save()`, instance `delete()` and `reload()` are never scoped. |
+| Q2 | Soft-delete opt-in | **Trait `SoftDeletes` + interface `SoftDeletable`, both required.** The instance methods then exist only on opted-in models. The column is customised by overriding the method `soft_delete_column()`, because a trait's static property cannot be redeclared with another default (fatal, §2). |
+| Q3 | Declaring a global scope | **`#[GlobalScope]` on a `protected static` method** `fn(Query $q): ?Query`, named by the method, **WHERE-only**, same signature as 3b's local scopes. |
+| Q4 | Removing scopes | Builder methods `without_global_scope()`, `without_global_scopes()`, `with_trashed()`, `only_trashed()`, `without_trashed()`, and the relationship option `'unscoped'`. **No public block form and no option key** (D3). |
+| Q5 | Relationships | Filtered by the target's scopes by default. Per-relationship option **`'unscoped' => true \| list<string>`**. Per-load opt-out is sub-project 4 ([#203](https://github.com/ristocloud-group/php-activerecord/issues/203)). |
+| Q6 | `:through` middle model | **Only the middle model's soft delete**, as Eloquent's `SoftDeletableHasManyThrough` scope does inside `HasManyThrough`. Not its other global scopes. |
+| Q7 | Bulk writes | **Scoped everywhere** (legacy `update_all`/`delete_all`, builder `update()`/`delete()`). On a soft-delete model `delete_all`/`delete()` become an `UPDATE` of the column. Removing a scope never makes a delete hard: that is `force_delete()`/`force_delete_all()`. |
+| Q8 | Hard bulk delete | **`force_delete()` and `force_delete_all()` drop only the soft-delete scope** and keep the others: a real `DELETE` must never reach rows another scope hides, because it cannot be undone. Deliberate deviation from Eloquent, whose `forceDelete()` drops every scope. |
+| Q9 | Instance soft delete | Direct by-PK `UPDATE`, no validations, no save callbacks, destroy callbacks fire, the object stays live. `restore()` is a direct UPDATE too (§5.4, deviation). `reload()` drops every global scope. No in-memory rollback of the column (as Eloquent). |
+| Q10 | `validates_uniqueness_of` | **Drops every global scope**: a database unique index sees every row, so the validation must too (Eloquent's `unique` rule does the same). A per-tenant rule uses the validation's column list. |
+| Q11 | Smaller points | `to_sql()` shows scopes; aggregates/count/exists/iteration are scoped; the unscoped paths of §3.6; qualification of §3.6; non-WHERE clause in a scope throws; `ConfigException` rules of §6; the soft-delete column is checked lazily and must be `DATE`/`DATETIME`/`TIMESTAMP`; an unknown scope name throws (deviation: Eloquent ignores it); `trashed()` without the column loaded throws (deviation: Eloquent returns false). |
+| D1 | Engine approach | **A meta field on `QueryState`**, set by the scoped entries and applied at the compiler's two WHERE sites, guarded by reflection tests over every entry (§4.2, §9.3). |
+| D2 | Scope name | **`soft_deletes`**, as Eloquent names it after the trait, exposed as `SoftDeletable::SCOPE`. |
+| D3 | No public `unscoped()` block | A block form would only serve paths that expose no `Query`: the legacy statics (the builder covers them) and relationship loads (a gap that sub-project 4 closes). It would add public implicit state shared by every caller of the process. The library keeps an internal suspension for its own synchronous calls (§4.5). |
+| D4 | `find_or_create_by_*` and a trashed match | Throws a clear `ActiveRecordException` instead of a silent unsaved model or a unique-index error (§3.8). A `restore_or_create` is in #204. |
+| D5 | Migration aid | An optional, off-by-default warning in `Config` for hand-written conditions on the soft-delete column (§3.7). |
+| D6 | `'0'` condition | Out of 3a: [#150](https://github.com/ristocloud-group/php-activerecord/issues/150), approved as a separate BREAKING PR. 3a follows `SQLBuilder`'s rule for empty conditions, whatever it is. |
+| D7 | Static `force_delete` | Refused by `Model::__callStatic` with the whole-table-write error of `update`/`delete` (§3.3). |
 
 ### 1.3 Goals
 
-1. A model can declare filters that every read, bulk write and relationship load of it applies, and that can be removed
-   by name.
-2. Soft delete with Eloquent's API and semantics in snake_case, opt-in per model.
+1. A model can declare filters that every read, bulk write and relationship load of it applies, and that a query can
+   remove by name.
+2. Soft delete with Eloquent's API and semantics in snake_case, opt-in per model; deviations are listed (§9.4).
 3. A scope can never let an `OR` leak, in the builder or in legacy conditions.
-4. No SQL change for a model that declares no global scope and is not an active `SoftDeletable`: the golden corpus stays
-   byte-identical.
-5. The monolith's base model can drop its overrides (Appendix A).
+4. No SQL change for a model that declares no global scope and has no active soft delete: the golden corpus (the
+   `GoldenSqlTest` cases that pin SQL and binds byte for byte) stays identical.
+5. The monolith can drop its overrides and migrate table by table (Appendix A).
 
 ### 1.4 Non-goals
 
-- Delete cascade/restrict (#202). The monolith keeps its own cascade.
-- Relationship querying, per-load eager constraints, `$order->lines()->with_trashed()` (#203).
-- Scopes on joins by relationship name, which belong in the `ON` clause (#186). Documented as a known limit.
-- A boot lifecycle and runtime registration, `GlobalScope` classes, a boolean soft-delete sentinel, a `without_trashed`
-  uniqueness option (#204).
-- The `constraints` relationship key (#194).
-- **A bulk `restore()` on the builder** (`Order::only_trashed()->where(...)->restore()`; Eloquent has it). Not discussed
-  in the brainstorming: see §10, item 1.
+- Delete cascade/restrict ([#202](https://github.com/ristocloud-group/php-activerecord/issues/202)).
+- Relationship querying, per-load eager constraints and per-load opt-out such as `$order->lines()->with_trashed()`
+  ([#203](https://github.com/ristocloud-group/php-activerecord/issues/203)).
+- Scopes on joins by relationship name, which belong in the `ON` clause
+  ([#186](https://github.com/ristocloud-group/php-activerecord/issues/186)); documented as a known limit.
+- In [#204](https://github.com/ristocloud-group/php-activerecord/issues/204): a boot lifecycle and runtime registration,
+  `GlobalScope` classes, a boolean soft-delete sentinel, a `without_trashed` uniqueness option, a bulk `restore()` on the
+  builder, `restore_or_create`.
+- A public block form (D3).
+- The `constraints` relationship key (#194) and the `'0'` condition (#150).
+
+### 1.5 Alternatives considered
+
+| Topic | Rejected option | Reason |
+|---|---|---|
+| Where scopes apply (Q1) | Builder only | Legacy and builder diverge; relationships (legacy path) stay unfiltered; the monolith keeps its overrides. |
+| | Legacy only behind a per-model opt-in flag | Two modes to test forever. |
+| Opt-in (Q2) | Auto-detect a `deleted_at` column | A BC break for every consumer that has such a column. |
+| | Static property `$soft_delete` | Methods would land on every model (collision surface); a trait cannot carry an overridable static property. |
+| Declaration (Q3) | Static array of conditions | A second condition language to compile and qualify; no logic; no closures in a static initializer on PHP 8.3. |
+| | `GlobalScope` classes, closures registered in a boot hook (Eloquent) | No boot lifecycle exists; a trait with a `#[GlobalScope]` method already shares a scope (#204). |
+| Removal (Q4, D3) | New `$VALID_OPTIONS` keys | Changes how `is_options_hash()` classifies a conditions hash; relationship loads receive no caller options. |
+| | Public block `Model::unscoped(fn, names)` | See D3. A fiber-local variant was prototyped and works, but the public API is not needed. |
+| Bulk writes (Q7) | Split by API (builder scoped, legacy unchanged) | Same model, two rules; the maintainer preferred one rule. |
+| Hard delete (Q8) | Drop every scope (Eloquent) | Deletes rows another scope hides, irreversibly. |
+| Engine (D1) | Attach scopes when the query is built | `Query::from_options` is shared with `save()`'s and `delete()`'s by-PK writes, which must stay unscoped. |
+| | A flag on `Query` passed to `QueryCompiler` | Eight compiler constructions plus `window()`/`clone()` to keep in sync. |
+| | Apply in every terminal (Eloquent's `applyScopes`) | Dozens of terminals and every legacy entry; a new terminal is unscoped until someone adds the call. |
+| Group position | After the user's conditions | Before matches `and_pk_conditions`, whose `X AND (own)` shape and bind order the legacy wrap reuses (§4.4). |
+| Uniqueness (Q10) | Drop only `soft_deletes` | A row hidden by another scope would pass validation and then fail on the index. |
+| Rollback (Q9) | Restore the in-memory column on rollback | The destroyed flag is tracked because it blocks later writes; a soft-deleted object blocks nothing, and `save()` restores nothing in memory either. |
 
 ---
 
 ## 2. Facts the design relies on
 
-Verified on 2026-11-16 (PHP 8.5.12 locally for the language checks; the trait/attribute/constant rules have not changed
-since 8.3; `lib/` on `master` 8170a20):
+Verified on 2026-11-16/17 (PHP 8.5.12 locally for the language checks, rules unchanged since 8.3; `lib/` on `master`
+8170a20):
 
-- **Traits.** A class that redeclares a static property of its trait with a different default is a fatal composition
-  error ("define the same property … the definition differs and is considered incompatible"). A method of the class
-  wins over the trait's (`Base::soft_delete_column()` returned `null` over the trait's `'deleted_at'`). A subclass can
-  override a trait method it inherits with a compatible signature (`restore($is_cron_job = false)` over `restore()`).
-  The attributes of a trait method are visible through reflection on the using class and its subclasses.
-- **Trait constants** cannot be read through the trait name ("Cannot access trait constant SoftDeletes::TSCOPE
-  directly"). Interface constants can, also through the class (`Base::SCOPE`).
+- **Traits.** A class that redeclares a static property of its trait with another default is a fatal composition error.
+  A class method wins over the trait's. A subclass can override an inherited trait method with a compatible signature.
+  The attributes of a trait method are visible through reflection on the using class and its subclasses. **Attributes
+  are not inherited** by an overriding method.
+- **Trait constants** cannot be read through the trait name; interface constants can, also through the class.
+- **Trait methods run in the using class**: they cannot reach `Model`'s private members (`invoke_callback`,
+  `verify_not_readonly`, `verify_not_destroyed`, `$__dirty`, `bulk_write_query`, …).
+- **Fibers.** Per-fiber state through a `WeakMap` keyed by `Fiber::getCurrent()` works (prototype: a block opened in a
+  suspended fiber is not seen by another fiber; entries are freed when fibers end). Not used (D3), recorded for #204.
 - **Compiler WHERE sites.** Every SELECT, COUNT, EXISTS and aggregate goes through `QueryCompiler::compile_select()`
-  (`lib/QueryCompiler.php:189`), which compiles either the legacy options (`compile_legacy()`, :1067 →
-  `apply_conditions()`, :1479) or the builder clauses (`compile_clauses()`, :1125, whose `$conditions` argument is
-  the engine's own conditions, compiled first). Every UPDATE and DELETE goes through `apply_write_clauses()` (:1521),
-  with a legacy branch and a builder branch.
-- **Held fields.** `held_fields()` (:1353), `holds_no_builder_clause()` (:1378) and `refuse_unwritable_clauses()`
-  (:604) treat every `QueryState` field as a clause. `QueryEngineTest::test_held_fields_reports_every_field_of_query_state`
-  pins that invariant.
-- **Entries.** `Model::new_query()` (`lib/Model.php:1046`, `Query::for_table`); `Table::find()` (`lib/Table.php:293`) and
-  `Table::exists()` (:304) through `Query::from_options`; `Model::count()` (:2437); `bulk_write_query()` (:1372) for
-  `update_all`/`delete_all`. `Table::options_to_sql()` (:282), `Table::update()` (:626) and `Table::delete()` (:659) also
-  use `from_options` and must stay unscoped. `Query::from_options` itself is shared by all of them, so a scope cannot be
-  attached at construction.
-- **`and_pk_conditions`** (`lib/Model.php:2385`) renders a fragment with `options_to_sql()` and feeds it back to `find()`.
-  With `options_to_sql()` unscoped, the scope is applied once.
-- **Relationship loads** call the target's legacy statics: `BelongsTo.php:86` (`$class::first()`), `HasMany.php:226`
-  (`$class_name::find()`), `AbstractRelationship.php:281` (`$class::find('all')`, eager). A `:through` join string is
-  built once and kept on the relationship object (`HasMany.php:150-206`).
+  (`lib/QueryCompiler.php:189`): legacy options through `compile_legacy()` (:1067) → `apply_conditions()` (:1479);
+  builder clauses through `compile_clauses()` (:1125), whose `$conditions` are the engine's own conditions, compiled
+  first. Every UPDATE/DELETE goes through `apply_write_clauses()` (:1521). Aggregate subqueries compile the inner state
+  only (:320).
+- **Qualification.** `column_reference()` qualifies a model column only when the builder's `$state->joins` is non-empty
+  and there is no `from_raw` (:1720). Legacy joins live in `$state->legacy['joins']`; only hash-condition keys get
+  qualified there (`qualify_hash_keys`, :1072-1080).
+- **Held fields.** `held_fields()` (:1353), `holds_no_builder_clause()` (:1378) and `refuse_unwritable_clauses()` (:604)
+  treat every `QueryState` field as a clause; `QueryEngineTest::test_held_fields_reports_every_field_of_query_state`
+  pins it. `Query::closure_wheres()` (`lib/Query.php:3559-3574`) validates a where group through `held_fields()`.
+- **Entries.** `Model::new_query()` (`lib/Model.php:1046`), `Table::find()` (`lib/Table.php:293`), `Table::exists()`
+  (:304), `Model::count()` (:2437), `bulk_write_query()` (:1372). `Table::options_to_sql()` (:282), `Table::update()`
+  (:626) and `Table::delete()` (:659) also use `Query::from_options` and must stay unscoped.
+- **`and_pk_conditions`** (`lib/Model.php:2385-2410`) builds `key AND (own)` with `SQLBuilder::get_where()`,
+  `get_where_values()` and `where_condition()`, and keeps `SQLBuilder`'s rule that a falsy WHERE (`'0'` included) is no
+  WHERE.
+- **Relationship loads** call the target's legacy statics: `BelongsTo.php:86`, `HasMany.php:226` (lazy),
+  `AbstractRelationship.php:281` (eager). The lazy `:through` join string is built once and kept on the relationship
+  (`HasMany.php:150-206`); the eager path rebuilds it on every call (`AbstractRelationship.php:190-238`).
+- **Timestamps.** `Timestamps::now()` is a fixed `Y-m-d H:i:s` string, freezable in tests (`lib/Timestamps.php:48-51`).
+  Formatting by column type happens only for `DateTimeInterface` values (`Table::process_data()`, `Query::update()`).
 - **Uniqueness** calls `$this->model->exists(...)` (`lib/Validations.php:671`).
-- **Instance delete** (`lib/Model.php:1441`) and the rollback bookkeeping (`$__deleted_in_transaction`,
-  `close_transaction_scope()`, :3058) only flip `__destroyed` back on rollback.
-- **Static dispatch.** `Model::__callStatic` (:2080) refuses `update` and `delete` (whole-table writes) and forwards
-  `Query::FORWARDABLE`. `QueryForwardingTest` checks `FORWARDABLE` against the `@method` tags of `Model`.
-- **Per-class suspension precedent:** `Model::without_timestamps()` → `Timestamps::suspend()` (counter per exact class,
-  restored in `finally`).
-- **3b's registry.** `ScopeRegistry` (`lib/ScopeRegistry.php`) reflects the local scopes without loading the Table and
-  already refuses a local scope named like a static method of the model's hierarchy. That rule therefore also covers
-  the new statics (`unscoped`, `force_delete_all`, `soft_delete_column`) and every `#[GlobalScope]` method.
-- **CI** runs the suite on MySQL, MariaDB, SQLite and Postgres (`.github/workflows/ci.yml:101-110`).
-- **Monolith** (grep of `application/`): no method named `unscoped`, `with_trashed`, `only_trashed`, `without_trashed`,
-  `without_global_scope(s)`, `force_delete(_all)`, `soft_delete_column`, `trashed`, `before_restore`, `after_restore`,
-  `perform_delete_on_model`, `boot*`. `restore()` exists twice: `Variazioni_menu::restore($is_cron_job = false)` and
-  `Variazioni_menu_tipi_menu::restore()`.
+- **Static dispatch.** `Model::__callStatic` (:2080) refuses `update`/`delete` and forwards `Query::FORWARDABLE`;
+  `QueryForwardingTest` checks `FORWARDABLE` against `Model`'s `@method` tags.
+- **3b's registry.** `ScopeRegistry` reflects local scopes without loading the Table, validates them in its constructor
+  (`lib/ScopeRegistry.php:92-110`), and today runs only when a scope is used, on `has_scope()` or on an unknown static.
+- **CI** runs MySQL, MariaDB, SQLite and Postgres on PHP 8.3–8.5 (`.github/workflows/ci.yml`).
+- **Monolith** (grep of the monolith's `application/`, 2026-11-09 and 2026-11-17): about 100 models on soft-delete
+  tables; dozens of hand-written conditions on `deleted_at`, a few of them with `IS NOT NULL`; dozens of `delete_all`
+  on soft-delete models, including a retention purge; one model with default conditions; two `restore()` methods with
+  signatures compatible with an untyped `restore()`; no method named like the other new names. The detailed inventory
+  is in the monolith's internal migration ticket.
 
 ---
 
@@ -129,19 +168,22 @@ class Booking extends Model
     #[GlobalScope]
     protected static function real(Query $q): ?Query
     {
-        return $q->where('fittizia', 0);
+        return $q->where('dummy', 0);
     }
 }
 ```
 
 - `ActiveRecord\GlobalScope` is a method attribute, twin of 3b's `ActiveRecord\Scope`.
-- The method must be `protected static`, take the query as its only required parameter, and return `null` or the query
-  it was given (3b's signature).
-- Its name is the scope's name, used for removal.
-- It may only add WHERE conditions (any `where*` method, closure groups, a local scope that only adds wheres). Any
-  other clause throws when the query is compiled (§6).
-- Scopes are inherited: a scope declared on a base class applies to every subclass. A subclass can redeclare the
-  method to replace it. A trait can carry a scope for unrelated models.
+- The method is `protected static`, takes the query as its only required parameter, and returns `null` or that query.
+- Its name is the scope's name. It follows 3b's name rules: not a public `Query` method, not a dynamic-finder prefix,
+  not `update`/`delete`.
+- It may only add WHERE conditions: `where*` methods, where groups, `when()`/`unless()`, an empty `where([])`, a local
+  scope that only adds wheres. A scope that ends up adding no condition produces no group. Any other clause throws when
+  the query is compiled.
+- Scopes are inherited. A subclass that redeclares a scope method must repeat `#[GlobalScope]`; redeclaring without it
+  is a `ConfigException` (a scope cannot vanish by accident). A trait can carry a scope for unrelated models.
+- Order: the root ancestor's scopes first, then each subclass down to the concrete class; declaration order within a
+  class; a redeclared method keeps its parent's position.
 
 ### 3.2 Opting into soft delete
 
@@ -160,63 +202,71 @@ class Order extends Model implements SoftDeletable
 }
 ```
 
-- `SoftDeletable` (interface) declares `public const string SCOPE = 'soft_deletes'` and
+- `SoftDeletable` declares `public const string SCOPE = 'soft_deletes'` and
   `public static function soft_delete_column(): ?string`.
-- `SoftDeletes` (trait) implements `soft_delete_column()` returning `'deleted_at'`. It also declares the global scope
-  `#[GlobalScope] protected static function soft_deletes(Query $q)`, the instance methods of §3.4, the static
-  `force_delete_all()`, and the override of the protected delete hook (§5.3).
-- **Soft delete is active** for a model when it is an `instanceof SoftDeletable` **and** `soft_delete_column()` returns
-  a non-null name. When it returns `null`, the `soft_deletes` scope adds nothing, and the model behaves exactly as one
-  without the trait (byte-identical SQL).
-- The library reads `soft_delete_column()` lazily, when a query is compiled or an instance verb runs, never in
-  `Table::__construct`. An override may therefore call `static::table()` (the monolith's per-table detection).
-- The column must be a `DATE`, `DATETIME` or `TIMESTAMP` column of the table (§6).
+- `SoftDeletes` implements `soft_delete_column()` (`'deleted_at'`), declares the scope
+  `#[GlobalScope] protected static function soft_deletes(Query $q)`, and the methods of §3.4. Its methods are thin:
+  the logic lives in `Model` (§5), which the trait cannot otherwise reach.
+- **Both are required.** The trait without the interface, or the interface without the trait, is a `ConfigException`.
+- **Soft delete is active** when the model is `SoftDeletable` and `soft_delete_column()` returns a name. With `null`,
+  the scope adds nothing and the model behaves exactly as one without the trait (byte-identical SQL).
+- `soft_delete_column()` is read lazily: at compile time, when an instance verb (`delete()`, `restore()`,
+  `force_delete()` on an object) runs, and when `*_trashed()` is called; never in `Table::__construct`. An override may
+  call `static::table()`.
+- The column must be a `DATE`, `DATETIME` or `TIMESTAMP` column of the table.
 
 ### 3.3 Builder methods
 
-All on `Query`. All but `force_delete` are added to `Query::FORWARDABLE` and to the `@method` tags of `Model`, so that
-`Order::with_trashed()->...` works.
+All on `Query`. All **new** methods but `force_delete` are added to `Query::FORWARDABLE` and to `Model`'s `@method`
+tags (`Order::with_trashed()->...`); the existing `update` and `delete` stay unforwarded.
 
 | Method | Semantics |
 |---|---|
 | `without_global_scope(string $name): static` | Removes one global scope from this query. |
 | `without_global_scopes(?array $names = null): static` | Removes the scopes named, or every global scope with `null`. |
-| `with_trashed(): static` | Removes `soft_deletes`: trashed and live rows. |
-| `only_trashed(): static` | Replaces the `soft_deletes` filter with `<column> IS NOT NULL`. It does not AND both (the Rails trap). |
-| `without_trashed(): static` | Restores the default filter, undoing `with_trashed()` / `only_trashed()` and a `without_global_scope('soft_deletes')` on the same query. An `unscoped()` block still wins. |
-| `force_delete(): int` | A real `DELETE` of the matching rows. Drops only `soft_deletes`; the other scopes stay. On a model without active soft delete it is `delete()`. |
+| `with_trashed(): static` | Trashed and live rows. |
+| `only_trashed(): static` | Replaces the soft-delete filter with `<column> IS NOT NULL`; never ANDs both (the "Rails trap": `paranoia`'s `only_deleted` ANDed with the default scope returns nothing). |
+| `without_trashed(): static` | The default filter again, whatever came before. |
+| `force_delete(): int` | A real `DELETE` of the matching rows, minus the soft-delete scope only. On a model without active soft delete, `delete()`. |
 | `update(array $values): int` (existing) | Scoped. |
-| `delete(): int` (existing) | Scoped. On an active soft-delete model, an `UPDATE` of the column (§5.1). |
+| `delete(): int` (existing) | Scoped; an `UPDATE` of the column on an active soft-delete model (§5.1). |
 
-`force_delete` is **not** forwardable: like `update` and `delete`, a static call would be a whole-table write, and
-`Model::__callStatic` refuses it with the same error. (On a `SoftDeletable` model PHP refuses it even earlier, because
-the trait's instance `force_delete()` exists.)
+The five removal methods throw on a query that is not a query of the model: inside a `where(fn …)` group or a global
+scope's own query (§6).
+
+A static `force_delete` call would be a whole-table write. On a model without the trait, `Model::__callStatic` refuses
+it with the error it gives `update`/`delete` (D7). On a `SoftDeletable` model PHP refuses it first ("Non-static method …
+cannot be called statically"), because the trait's instance `force_delete()` exists.
 
 ### 3.4 Model methods
 
 | Method | Kind | Semantics |
 |---|---|---|
-| `Model::unscoped(callable $fn, ?array $names = null): mixed` | static, every model | Runs `$fn` with the named global scopes of **exactly this class** removed (all with `null`), and returns what `$fn` returns. Nests; restored in `finally`. It covers legacy finders, `count`/`exists`, bulk writes, relationship loads of this class and builder queries compiled inside `$fn`. |
-| `force_delete_all($options = []): int` | static, trait | `delete_all()`'s options and checks, as a real `DELETE`. Drops only `soft_deletes`. |
+| `force_delete_all($options = []): int` | static, trait | `delete_all()`'s options and checks, as a real `DELETE`, minus the soft-delete scope only. |
 | `delete()` (existing) | instance | Soft on an active soft-delete model (§5.3). |
 | `restore()` | instance, trait, untyped | §5.4. |
-| `trashed()` | instance, trait, untyped | `true` when the column holds a value. `false` on a model without active soft delete. |
+| `trashed()` | instance, trait, untyped | `true` when the column holds a value; `false` without active soft delete. |
 | `force_delete()` | instance, trait, untyped | Today's hard delete (§5.5). |
-| `reload()` (existing) | instance | Now reads inside `unscoped()` with every global scope removed. |
+| `is_force_deleting(): bool` | instance, trait | `true` while `force_delete()` runs, callbacks included (Eloquent's `isForceDeleting()`), so that a `delete()` override or a destroy callback can tell a hard delete from a soft one. |
+| `reload()` (existing) | instance | Reads with every global scope removed. |
 
 The instance methods are untyped like `delete()`, so that existing untyped overrides stay compatible.
 
 ### 3.5 Callbacks and relationship option
 
-- `before_restore` and `after_restore` join `CallBack::$VALID_CALLBACKS`. `before_restore` returning `false` cancels the
-  restore, as `before_destroy` cancels a delete.
-- Relationship option `'unscoped' => true | list<string>` on `belongs_to`, `has_many` and `has_one`: the loads of the
-  relationship run inside `$class::unscoped(fn () => …, $names)` (`true` = every scope). It joins the valid options and
-  the typed option shapes of the `AbstractRelationship` docblock (PHPStan level 8).
+- `before_restore` and `after_restore` join `CallBack::$VALID_CALLBACKS`. As for every callback name, an existing
+  method of that name is registered automatically. `before_restore` returning `false` cancels the restore.
+- `'unscoped' => true | list<string>` on `belongs_to`, `has_many` and `has_one` removes those global scopes of the
+  relationship's **own target class** from its loads (`true` = all; names checked against the target). On a
+  `:through` relationship it does not touch the middle model: the middle hop follows the `'unscoped'` of the
+  relationship named in `'through'` (the owner→middle declaration, which loads the middle model).
 
 ```php
-static $belongs_to = [
-    ['customer', 'unscoped' => [SoftDeletable::SCOPE]],   // a trashed customer still loads
+static $belongs_to = [['customer', 'unscoped' => [SoftDeletable::SCOPE]]];   // a trashed customer still loads
+
+static $has_many = [
+    ['taggings', 'unscoped' => [SoftDeletable::SCOPE]],   // trashed taggings: also lifts the middle filter below
+    ['tags', 'through' => 'taggings'],
 ];
 ```
 
@@ -226,25 +276,45 @@ Scoped:
 - every builder read: `get`, `first`, `sole`, `find*`, `value`, `pluck`, `count`, aggregates, `exists`/`doesnt_exist`,
   `chunk`, `chunk_by_id` (including its initial `MAX(key)` probe), `lazy*`, `cursor`, and `to_sql()`/`to_raw_sql()`/
   `get_bindings()`, which show the scopes;
-- builder `update()`/`delete()`/`force_delete()` (minus `soft_deletes` for the last);
+- builder `update()`, `delete()`, `force_delete()` (minus the soft-delete scope);
 - legacy `find` (all forms), `first`, `last`, `all`, `find_by_*`/`find_all_by_*`/`count_by_*`, `count`, `exists`,
-  `update_all`, `delete_all`;
-- lazy and eager relationship loads (target's scopes), and the middle model's soft delete on `:through` loads.
+  `update_all`, `delete_all`, `force_delete_all` (minus the soft-delete scope);
+- lazy and eager relationship loads (the target's scopes), and the middle model's soft delete on `:through` loads.
 
-In an aggregate or count subquery, the scope appears once, in the inner query.
+In an aggregate or count subquery the scope appears once, in the inner query.
 
 Not scoped, by construction:
 - hand-written SQL: `find_by_sql`, `Model::query`, `Connection::query*`;
-- `Table::options_to_sql()` and the public `Table::update()` / `Table::delete()`, the by-PK writes of `save()` and
-  `delete()`;
-- `insert` and `upsert` (no WHERE). An `upsert` that hits the unique key of a trashed row updates that row and leaves it
-  trashed (documented);
-- `join('table', …)`, raw join strings, and joins by relationship name (#186);
-- closure where-groups: a global scope is never applied to the group's own query.
+- `Table::options_to_sql()` and the public `Table::update()`/`Table::delete()` (the by-PK writes of `save()`/`delete()`);
+- `insert` and `upsert` (no WHERE). An `upsert` that hits the unique key of a trashed row updates it and leaves it
+  trashed;
+- `join('table', …)`, raw join strings and joins by relationship name (#186);
+- where groups and a global scope's own query.
 
-Qualification: a scope's column names follow the builder's single rule (`QueryCompiler::rows_name()`): unqualified
-without joins; with joins, qualified with the name the model's rows are read under (`from()` alias, else the table).
-Under `from_raw()` and the legacy `'from'` option, the table name, as today.
+**Qualification.** A scope's model columns are qualified as follows.
+- Builder query: as `column_reference()` does, with the name the model's rows are read under (the `from()` alias, else
+  the table) when the query has joins; unqualified under `from_raw()`.
+- Legacy query with a `'joins'` option and no `'from'`: with the model's table, as `qualify_hash_keys` qualifies hash
+  keys today. With `'from'`: unqualified, as hash keys today.
+- The `:through` middle predicate: always qualified with the middle table.
+
+### 3.7 Migration warning (optional)
+
+`Config::set_warn_soft_delete_conditions(bool $enabled = true): void` and its getter (names final in the plan), off by
+default, as `set_tinyint_as_boolean()`. When on, a query on a model with active soft delete raises an `E_USER_WARNING`
+when:
+- hand-written conditions (legacy string or positional conditions, builder `where_raw`) name the soft-delete column;
+- an `update_all` `set` or a builder `update()` writes the soft-delete column.
+
+The message names the model, the fragment and the ways out (`only_trashed()`, `with_trashed()`, `restore()`). It is a
+textual check, so a redundant `deleted_at IS NULL` is reported too (documented).
+
+### 3.8 `find_or_create_by_*` on a soft-delete model
+
+When the scoped find misses and soft delete is active, the finder looks for a trashed match. If there is one, it throws
+an `ActiveRecordException` that names the ways out (`restore()`, or a read with `with_trashed()`), instead of creating
+a record that fails uniqueness or hits the unique index. Without a trashed match it creates as today. Eloquent's
+`firstOrCreate` has the silent behaviour; its `restoreOrCreate` is in #204, and the check can be relaxed once it ships.
 
 ---
 
@@ -256,153 +326,161 @@ Under `from_raw()` and the legacy `'from'` option, the table name, as today.
 |---|---|---|
 | `lib/GlobalScope.php` | new | The method attribute. |
 | `lib/SoftDeletable.php` | new | Interface: `SCOPE`, `soft_delete_column()`. |
-| `lib/SoftDeletes.php` | new | Trait: §3.2–§3.4 and the delete hook. |
-| `lib/ScopeSuspension.php` | new, `@internal` | The `unscoped()` blocks: a stack per exact class of "all" or a set of names. Name to confirm in the plan. |
-| `ScopeRegistry` | changed | Also reflects `#[GlobalScope]` methods (top class first, declaration order), validates them (§6), and answers "the global scopes of class X". |
+| `lib/SoftDeletes.php` | new | Trait: the scope, the methods of §3.4 as thin calls into `Model`. |
+| `ScopeRegistry` | changed | A cached per-class index of global scopes (one attribute scan per class, invokers cached), which does **not** trigger the validation of local scopes (that stays lazy, as in 3b). Their validation (§6). The internal suspension (§4.5). |
 | `QueryState` | changed | Meta field `?array $scopes` (§4.2). |
-| `QueryCompiler` | changed | Applies the scopes in `compile_select()` and `apply_write_clauses()`; excludes meta fields from the three held-field checks. |
-| `SQLBuilder` | changed, additive | A method that puts a condition before the WHERE already set and parenthesizes the latter. |
-| `Query` | changed | §3.3 methods; `FORWARDABLE`. |
-| `Model` | changed | `unscoped()`, `perform_delete_on_model()` hook, `reload()`, the scoped entries, `@method` tags, rollback entries. |
+| `QueryCompiler` | changed | Applies the scopes in `compile_select()` and `apply_write_clauses()`; the meta fields are skipped by the three held-field checks. |
+| `Query` | changed | §3.3 methods; `FORWARDABLE`; the throw on group/scope queries. |
+| `Model` | changed | Scoped entries; the soft-delete logic (private) behind `delete()`, `delete_all()`; protected entry points for the trait; `reload()`; the static `force_delete` refusal; `find_or_create_by_*` check; `@method` tags. |
 | `Table` | changed | `find()`/`exists()` mark their query scoped. |
-| `relationships/*` | changed | `'unscoped'` option; middle soft delete on `:through` loads. |
-| `Validations` | changed | Uniqueness inside `unscoped(…, [SCOPE])` on active soft-delete models. |
-| `CallBack` | changed | Two callback names. |
+| `relationships/*` | changed | `'unscoped'`; the middle soft delete on lazy and eager `:through` loads. |
+| `Validations` | changed | Uniqueness with every scope removed. |
+| `CallBack`, `Config` | changed | Two callback names; the optional warning. |
 
-All new classes are in `lib/` (PSR-4 base dir), one per file; `LibraryLoadingTest` covers them.
+`SQLBuilder` is not changed. All new classes are in `lib/`, one per file; `LibraryLoadingTest` covers them.
 
 ### 4.2 State
 
 `QueryState` gets `public ?array $scopes = null`, with the shape
-`array{removed: true|list<string>, trashed: 'without'|'with'|'only'}`.
+`array{all: bool, removed: list<string>, trashed: 'without'|'with'|'only'}`.
 
-- `null` means "no scopes". It is the default, so `Query::for_table()`, `from_options()`, the closure groups and every
-  write by PK carry no scopes **without any code change**.
-- The scoped entries (§4.3) set it to `['removed' => [], 'trashed' => 'without']`.
-- `without_global_scope(s)` adds to `removed`; `with_trashed`/`only_trashed`/`without_trashed` set `trashed`. Called on a
-  query whose `scopes` is `null` (impossible through the public API, which always starts from a scoped entry), they set
-  it first.
-- It is a **meta field**: `held_fields()`, `holds_no_builder_clause()` and `refuse_unwritable_clauses()` skip it, so a
-  legacy query with scopes is not "a query holding both legacy options and builder clauses", and `insert`/`upsert`
-  never trip on it. The field list is one private constant of the compiler. The invariant test becomes "every field of
-  `QueryState` but the declared meta fields is a clause".
-- `clone()`, `window()`, the pager and the cursor copy the state, so they copy the field.
+- `null` means "no scopes". It is the default, so `Query::for_table()`, `from_options()`, where groups, a scope's own
+  query and every write by PK carry none without any code change.
+- A scoped entry (§4.3) sets `['all' => false, 'removed' => [], 'trashed' => 'without']`, then applies the internal
+  suspension active for its class (§4.5).
+- The soft-delete scope is governed **only** by `trashed`: `without_global_scope('soft_deletes')` sets `trashed` to
+  `with`; `without_global_scopes()` sets `all` and `trashed` to `with`; `with_trashed()`/`only_trashed()`/
+  `without_trashed()` set `with`/`only`/`without`. The last call wins, so `without_trashed()` restores the filter even
+  after `without_global_scopes()`. The other names go in `removed` (or `all`).
+- It is a **meta field**: the three held-field checks skip the declared meta fields, and the invariant test becomes
+  "every field of `QueryState` but the declared meta fields is a clause". The removal methods throw on a `null` field
+  (§3.3), so a meta field is never written where it would be ignored.
+- `clone()`, `window()`, the pager (`QueryPager`, behind `chunk`/`lazy`) and the cursor copy the state, so they copy the
+  field.
 
 ### 4.3 Scoped entries
 
 `Model::new_query()`, `Table::find()`, `Table::exists()`, `Model::count()` and `bulk_write_query()` set the field. Every
-other legacy static reaches one of them. `reload()` calls `find()` inside `unscoped()`, and the uniqueness check calls
-`exists()` inside `unscoped(…, [SCOPE])`.
+other legacy static reaches one of them.
 
 ### 4.4 Application in the compiler
 
 At each of the two WHERE sites, when `$state->scopes` is not `null`:
 
-1. Read the model's global scopes from `ScopeRegistry` (top class first, declaration order).
-2. Drop the names in `removed`, the names an active `unscoped()` block removes for **exactly** the query's model class,
-   and `soft_deletes` when `trashed` is `with` or `only`.
-3. Run each remaining scope on a fresh where-only query of the same model (the shape of a closure group). A scope that
-   adds anything but wheres throws. A scope that adds no condition (the `soft_deletes` scope when the column is `null`)
-   produces no group.
+1. Read the model's global scopes from the cached index (order of §3.1). A class with none and no active soft delete
+   costs one cached lookup.
+2. Drop `soft_deletes` unless `trashed` is `without`, and drop every other scope in `removed` (all with `all`).
+3. Run each remaining scope on a fresh where-only query of the same model (the shape of a where group). A scope that adds
+   anything but wheres throws. A re-entrancy guard throws when a scope's own body runs a query of the same model.
 4. With `trashed` = `only`, add a group `<column> IS NOT NULL`.
 5. Combine: one parenthesized AND group per scope, **before** the user's conditions, which are parenthesized as a
-   whole: `(scope1) AND (scope2) AND (<user conditions>)`. Builder: the groups go in through the `$conditions`
-   channel of `compile_clauses()` and the builder branch of `apply_write_clauses()`. Legacy: `apply_conditions()`
-   writes the user's WHERE as today, then the new `SQLBuilder` method puts the scope SQL and binds in front of it.
+   whole: `(scope1) AND (scope2) AND (<user conditions>)`. Builder: through the `$conditions` channel of
+   `compile_clauses()` and the builder branch of `apply_write_clauses()`. Legacy: `apply_conditions()` writes the user's
+   WHERE as today, then the compiler reads it back with `get_where()`/`get_where_values()` and writes
+   `(<scopes>) AND (<user>)` with `where_condition()`, as `and_pk_conditions` does, keeping `SQLBuilder`'s rule for an
+   empty or falsy user WHERE (D6).
 6. No group means no change: the SQL is byte-identical.
 
-The model's soft-delete column is validated (§6) the first time step 3 or an instance verb reads it.
+### 4.5 Internal suspension
 
-### 4.5 `unscoped()` blocks
+`ScopeRegistry` keeps a private per-class stack of "all" or a list of names, with two `@internal` methods: one runs a
+callable with the scopes of exactly one class suspended (pushed, run, popped in `finally`), one returns what is
+suspended for a class. A scoped entry copies the suspended names into `scopes` **when it creates the query**, so the
+compiler only reads the state. It is used only around synchronous library calls:
+- `reload()` (every scope of the model's class);
+- uniqueness (every scope of the validated model's class);
+- relationship loads with `'unscoped'` (the listed scopes of the target class, or of the middle class for the middle
+  hop).
 
-`ScopeSuspension` keeps, per exact class, a stack of entries (`true` = all, or a list of names). `Model::unscoped()`
-validates the names against the registry **before** running `$fn`, pushes, runs `$fn`, and pops in `finally`. The
-compiler asks it for the names removed for a class: the union of the stack. Nesting and exceptions are therefore safe,
-and a block on `RCModel` does not affect `Articoli`, nor the reverse.
+Nothing else can push onto the stack. PDO is blocking, so a fiber cannot switch inside those calls unless a consumer's
+own override of `find`/`first` performs asynchronous work (documented in §8).
 
 ### 4.6 Relationships
 
 - `'unscoped'`: the three load calls (`BelongsTo.php:86`, `HasMany.php:226`, `AbstractRelationship.php:281`) run inside
-  `$class::unscoped(fn () => …, $names)`. The user's overrides of `first`/`find` keep being called.
-- `:through` middle soft delete: on every lazy and eager `:through` load (both shapes: the join-table one and the #22
-  reverse-FK chain), when the middle model has active soft delete, the relationship appends
-  `<middle table>.<column> IS NULL` to the conditions it already builds for that load, not to the frozen join string.
-  It skips it when the `:through` relationship declares `'unscoped'` with `true` or with `SoftDeletable::SCOPE`, or
-  when an `unscoped()` block on the middle class removes `soft_deletes`. The middle model's other global scopes are not
-  applied (Q6).
+  the internal suspension of the target class. The user's overrides of `first`/`find` keep being called.
+- `:through` middle soft delete: when the middle model has active soft delete and the relationship named in `'through'`
+  does not lift it, the load adds `<middle table>.<column> IS NULL` to the conditions it builds for that load: in
+  `HasMany::load()` per lazy load (the join string itself stays frozen), and in the eager path, which rebuilds its
+  options on every call. Both `:through` shapes are covered: the join-table one and the has_many→has_many reverse-FK
+  chain (#22, [spec](2026-08-05-has-many-through-chain-design.md)). The decision "is the middle soft delete lifted"
+  reads the same registry and suspension state as the compiler. #186 will move joined-model scopes into `ON`; this
+  path stays for loads.
 
 ### 4.7 Interaction with other work
 
-- 3b local scopes: unchanged; 3a reuses its signature, grouping and registry.
-- Sub-project 1 (iteration): pager and cursor copy the state, so they are scoped. The keyset condition and the scope
+- 3b local scopes: 3a reuses their signature, grouping and registry. Their validation stays lazy (§4.1).
+- Sub-project 1 (iteration): pager and cursor copy the state, so they are scoped; the keyset condition and the scope
   groups are both parenthesized.
-- #186 / #203: they apply the joined or related model's scopes when they land (comment on #186, body of #203).
+- #186 / #203 apply the joined or related model's scopes when they land.
+- #150 changes what an empty or `'0'` legacy WHERE means; §4.4 step 5 follows it.
 
 ---
 
 ## 5. Soft-delete writes
 
-"Active", "column" and "now" below: soft delete active (§3.2), its column, and the PHP clock formatted for the column's
-type as `Timestamps` formats (`DATE` → date; `DATETIME`/`TIMESTAMP` → date and time).
+"Active" and "column": §3.2. "Now": a `DateTime` built from `Timestamps::now()` (the single, freezable source). The
+engine binds a `DateTime` in the format of its column, so a `DATE` column gets a date. An instance attribute receives
+the same `DateTime` type a find produces.
 
 ### 5.1 Bulk soft delete
 
-On an active model, `delete_all($options)` and `Query::delete()` compile as the UPDATE of `update_all`, with the same
-WHERE, order and limit (the Postgres primary-key subquery included):
+The switch from DELETE to UPDATE lives only in `Model::delete_all()` and `Query::delete()`, keyed on active soft
+delete. `Table::delete()` (by PK) is untouched. On an active model both run the engine's `update([<column> => now])` on
+the same query, so the WHERE, order and limit (the Postgres primary-key subquery included) are those of the delete, and
+`updated_at` is added by the engine's existing rule unless `without_timestamps()` runs for the class:
 
 ```sql
 UPDATE t SET <column> = ?, <updated_at> = ? WHERE (<scopes>) AND (<conditions>) [ORDER BY …] [LIMIT …]
 ```
 
-- `<updated_at>` gets the same value, only when the table has the column and `without_timestamps()` is not running for
-  the class.
-- They return the number of rows the statement reports.
-- With `with_trashed()` they re-stamp trashed rows too (Eloquent).
+They return the number of rows the statement reports. With `with_trashed()` they re-stamp trashed rows too (Eloquent).
 
 ### 5.2 Bulk hard delete
 
-`force_delete_all($options)` and `Query::force_delete()` run a `DELETE` with `soft_deletes` removed and every other
-scope kept. On a model without active soft delete they are `delete_all()`/`delete()`.
+`force_delete_all($options)` and `Query::force_delete()` run a `DELETE` with the soft-delete scope removed and every
+other scope kept. On a model without active soft delete they are `delete_all()`/`delete()`.
 
 ### 5.3 Instance `delete()`
 
-`Model::delete()` keeps its checks (readonly, destroyed, primary key) and its `before_destroy` /
-`after_destroy` callbacks, and delegates the write to a new protected hook, `perform_delete_on_model()` (Eloquent's
-name):
-
-- `Model`'s version is today's hard delete: `Table::delete($pk)`, `__destroyed = true`, the rollback entry.
-- `SoftDeletes` overrides it. On an active model, unless `force_delete()` is running, it runs
-  `UPDATE … SET <column> = ?, <updated_at> = ? WHERE <pk>` through the unscoped by-PK path, writes the values into the
-  object's attributes without marking them dirty, and records a rollback entry (§5.6). The object is not marked
-  destroyed. Otherwise it calls the parent hook.
-- No validation and no save callback run. `delete()` returns `true`, `false` when `before_destroy` returns `false`.
-  Whether the row still existed is not checked, as today.
+`Model::delete()` keeps its checks (readonly, destroyed, primary key) and `before_destroy`/`after_destroy`. Between
+them, on an active model and unless `force_delete()` runs, it performs the soft delete itself (private Model code):
+`UPDATE … SET <column> = ?, <updated_at> = ? WHERE <pk>` through the unscoped by-PK path, then writes the values into
+the object's attributes without marking them dirty and without touching the user's other pending changes. The object is
+not marked destroyed. Otherwise it performs today's hard delete. No validation and no save callback run. It returns
+`true`, or `false` when `before_destroy` returns `false`; whether the row still existed is not checked, as today.
 
 Because the branch is inside `Model::delete()`, an override of `delete()` that calls `parent::delete()` stays soft.
+The trait reaches Model through a few `protected` entry points (`perform_restore_on_model()`,
+`perform_force_delete_on_model()`, static `perform_force_delete_all()`; names final in the plan).
 
 ### 5.4 `restore()`
 
 Checks readonly and destroyed. `before_restore` (`false` → returns `false`). `UPDATE … SET <column> = NULL,
-<updated_at> = ? WHERE <pk>`, the attributes updated and clean, a rollback entry, `after_restore`, `true`. It runs on a
-record that is not trashed too (Eloquent). On a model without active soft delete it throws (§6).
+<updated_at> = ? WHERE <pk>`, the attributes written clean as in §5.3, `after_restore`, `true`. It runs on a record that
+is not trashed too (Eloquent). Without active soft delete it throws (§6).
+
+**Deviation from Eloquent**, whose `restore()` goes through `save()`: here `save()` also runs **validations**, so a
+record that no longer satisfies today's rules could never be restored, and `save()` would also write the object's other
+dirty attributes. The direct UPDATE mirrors the soft `delete()`, which skips `save()` as well.
 
 ### 5.5 `force_delete()`
 
-Sets an internal flag and calls `delete()`, so that the hook takes the hard path with the same callbacks. On a model
-without active soft delete it is `delete()`.
+Sets the force flag, calls `delete()` (hard path, same callbacks, `is_force_deleting()` is `true` meanwhile), and
+clears the flag in `finally`, so that a throwing callback or statement never leaves a later plain `delete()` hard.
+Without active soft delete it is `delete()`.
 
 ### 5.6 Transactions
 
-Inside `Model::transaction()`, a soft `delete()` and a `restore()` record the previous values of the column and of
-`<updated_at>`. A rollback puts them back in the object, newest entry first, so that two changes in one scope return to
-the original. An inner scope that commits hands its entries to the enclosing one, as the destroyed flag does today. The
-`$__deleted_in_transaction` bookkeeping is generalised to entries that know how to undo themselves; the hard delete's
-entry undoes `__destroyed` as today.
+Nothing new: a `Model::transaction()` rollback undoes the hard delete's destroyed flag as today. A soft delete or a
+restore changes no in-memory state on rollback (as `save()` and as Eloquent); a caller that needs fresh state calls
+`reload()`.
 
 ### 5.7 Uniqueness
 
-On an active model, `validates_uniqueness_of` runs its `exists()` inside `static::unscoped(…, [SoftDeletable::SCOPE])`:
-trashed rows count, other scopes stay.
+`validates_uniqueness_of` runs its `exists()` on the validated model (`$this->model`) inside the internal suspension
+with every global scope removed, on every model that has global scopes or active soft delete: trashed rows and rows
+hidden by any scope count, as the database's unique index counts them.
 
 ---
 
@@ -410,149 +488,178 @@ trashed rows count, other scopes stay.
 
 Every error is thrown before any SQL. A builder method that throws leaves the query as it was.
 
-`ConfigException` — from `ScopeRegistry`, the first time the model's scopes are read (message shape as in 3b:
+`ConfigException`, from `ScopeRegistry` the first time the model's global scopes are read (3b's message shape:
 `<Class> declares the scope x(), which …`):
+
 1. `#[GlobalScope]` on a method that is not `protected static`;
 2. a method marked both `#[Scope]` and `#[GlobalScope]`;
-3. a global scope named like a local scope of the same hierarchy;
+3. a global scope named like a local scope of the same hierarchy, or breaking 3b's name rules (§3.1);
 4. a global scope with a required parameter besides the query;
+5. a subclass method that redeclares a `#[GlobalScope]` method without the attribute;
+6. the `SoftDeletes` trait without the `SoftDeletable` interface, or the interface without the trait.
 
-and the first time the soft-delete column is read:
-5. `soft_delete_column()` names no column of the table;
-6. the column's type is not `DATE`, `DATETIME` or `TIMESTAMP`.
+`ConfigException`, the first time the soft-delete column is read:
+
+7. `soft_delete_column()` names no column of the table;
+8. the column's type is not `DATE`, `DATETIME` or `TIMESTAMP`.
 
 `ActiveRecordException`:
-7. a global scope adds a clause other than WHERE (message names the scope and the clause), at compile time;
-8. a global scope returns something other than `null` or its query (3b's message);
-9. an unknown name in `without_global_scope(s)` (at the call) or `unscoped()` (before `$fn` runs); the message lists the
-   class's global scopes;
-10. `with_trashed()`, `only_trashed()`, `without_trashed()` on a model without active soft delete. One rule for both
-    cases, with a message saying which: the model is not `SoftDeletable`, or its `soft_delete_column()` is `null`.
-    `unscoped(…, [SoftDeletable::SCOPE])` does **not** throw on a `SoftDeletable` model with a `null` column, since the
-    scope is declared (it just adds nothing): it is the path for generic base-model code;
-11. `restore()` on a model without active soft delete;
-12. `force_delete` called statically (§3.3), with the message of `update`/`delete`.
+
+9. a global scope adds a clause other than WHERE (the message names the scope and the clause), at compile time;
+10. a global scope returns something other than `null` or its query (3b's message);
+11. a global scope's body runs a query of its own model (re-entrancy);
+12. an unknown name in `without_global_scope(s)` or in a relationship's `'unscoped'` (at the call, or at the
+    relationship's first load); the message lists the class's global scopes;
+13. a removal method (`without_global_scope(s)`, `*_trashed`) on a where group's query or a global scope's query;
+14. `with_trashed()`, `only_trashed()`, `without_trashed()` on a model without active soft delete; the message says
+    whether the model is not `SoftDeletable` or its `soft_delete_column()` is `null`;
+15. `restore()` on a model without active soft delete;
+16. `find_or_create_by_*` meeting a trashed match (§3.8);
+17. `force_delete` called statically on a model without the trait, with the message of `update`/`delete`. With the
+    trait, PHP's own `Error` comes first.
 
 `RelationshipException`:
-13. `'unscoped'` with a value that is neither `true` nor a list of strings, when the relationship is built. Its names
-    are checked at the first load, with error 9 (checking them while the Table loads would need the target's registry
-    inside `set_associations()`, a recursion risk).
 
-Unchanged: `trashed()` without the column loaded throws the existing `UndefinedPropertyException`; writes on a readonly or
-destroyed record throw today's errors.
+18. `'unscoped'` with a value that is neither `true` nor a list of strings, when the relationship is built. Its names are
+    checked at the first load (error 12): checking them while the Table loads would need the target's registry inside
+    `set_associations()`, a recursion risk.
+
+Unchanged: `trashed()` without the column loaded throws the existing `UndefinedPropertyException`; writes on a readonly
+or destroyed record throw today's errors.
 
 ---
 
 ## 7. Backward compatibility
 
-Per the changelog policy, every observable change is listed as **BREAKING** in the release notes.
+Every change is listed. In the release notes, per the changelog policy, the observable ones are marked **BREAKING**;
+the column "Who sees it" says who is actually affected, and pure additions are marked as such.
 
 | # | Change | Who sees it |
 |---|---|---|
-| 1 | Legacy finders, `count`/`exists`, relationship loads and bulk writes are scoped; `delete_all`/builder `delete()` turn soft; `reload()` unscoped | Only models that declare a `#[GlobalScope]` or are `SoftDeletable` (Q1, approved). |
-| 2 | New public `Query` methods and `FORWARDABLE` names (§3.3) | Everyone: a consumer static of the same name shadows the forwarded one; a local scope of that name becomes a `ConfigException` (3b's rule). 3b ships in the same draft (3.2.0), so no published release has local scopes yet. |
-| 3 | `Model::unscoped()` (static) and `Model::perform_delete_on_model()` (protected) | Everyone: a consumer method of that name with an incompatible signature is a fatal error. |
-| 4 | `before_restore`/`after_restore` in `$VALID_CALLBACKS` | Methods of that name are registered; they only fire on `restore()`. |
-| 5 | `'unscoped'` relationship option | Additive (an unknown key throws today). |
-| 6 | `force_delete` refused statically | Additive (today it is "undefined method"); same error family as `update`/`delete`. |
-| 7 | `QueryState` meta field, held-field invariant | `@internal`, no consumer. |
+| 1 | Legacy finders, `count`/`exists`, relationship loads and bulk writes are scoped; `delete_all`/builder `delete()` turn soft; `reload()` and uniqueness drop every scope | Only models that declare a `#[GlobalScope]` or are `SoftDeletable`. For them, **hand-written conditions on the soft-delete column** are ANDed with the filter: `<column> IS NOT NULL` silently returns no row, and a restore written as `update_all` with `<column> = null` touches no row (§3.7 helps find them). |
+| 2 | New public `Query` methods and `FORWARDABLE` names (§3.3) | Everyone: a consumer static of the same name shadows the forwarded one; a local scope of that name becomes a `ConfigException` at its first use (3b's rule; 3b ships in the same draft, 3.2.0). |
+| 3 | New protected `Model` methods (`perform_restore_on_model()`, `perform_force_delete_on_model()`, `perform_force_delete_all()`, names final in the plan) | Everyone: a consumer method of that name with an incompatible signature is a fatal error. The monolith is checked when the names are fixed. |
+| 4 | `before_restore`/`after_restore` in `$VALID_CALLBACKS` | Existing methods of those names are registered automatically; they fire only on `restore()`. |
+| 5 | `'unscoped'` relationship option | Addition (an unknown key throws today). |
+| 6 | `force_delete` refused statically | Addition on models without the trait (today "undefined method"). |
+| 7 | `Config::set_warn_soft_delete_conditions()` | Addition, off by default. |
+| 8 | `find_or_create_by_*` throws on a trashed match | Only `SoftDeletable` models. |
+| 9 | `QueryState` meta field, held-field invariant | `@internal`, no consumer. |
 
 Golden SQL: unchanged for every model that is not opted in.
 
 ---
 
-## 8. Testing, documentation, release
+## 8. Risks and mitigations
 
-### 8.1 Gates (every PR)
+1. **A global scope is not a security boundary.** Raw SQL, `Table::options_to_sql()`, `Table::update`/`Table::delete`,
+   joins, `insert`/`upsert` and the removal methods all bypass it (§3.6). Mitigation: the README says so plainly; tenant
+   isolation must not rely on a scope alone.
+2. **Shared state.** The internal suspension is per process. It only wraps synchronous library calls; a consumer
+   override of `find`/`first` that suspends a fiber inside a relationship load with `'unscoped'` could expose the
+   suspension to another fiber. Accepted and documented; per-fiber state is proven feasible (§2) if needed.
+3. **Per-statement cost.** One cached lookup per compile for models without scopes; per scope, one cached invoker call
+   and a where-group compile. Mitigation: the index and invokers are cached per class; the plan benchmarks the legacy
+   find and the builder `get` with the project's recipe (as for #185), on a model without scopes and with two.
+4. **Recursion.** A scope that queries its own model would recurse: error 11.
+5. **Silent empty results** from hand-written conditions on the soft-delete column (BC row 1): the optional warning
+   (§3.7), the README, and table-by-table adoption (`soft_delete_column()` returning `null` per table keeps today's SQL).
+6. **Trashed rows and unique keys:** `upsert` updates a trashed row (documented); `find_or_create_by_*` throws (§3.8).
+7. **Indexing:** the soft-delete predicate benefits from an index on the column; the adopter's job (README).
+
+---
+
+## 9. Testing, documentation, release
+
+### 9.1 Gates (every PR)
 
 The full suite on MySQL, MariaDB, SQLite and Postgres with nothing skipped; PHPStan level 8 with no new baseline entry;
-`composer run cs`; the suite on PHP 8.5 too (rebuild with `PHP_VERSION=8.5`).
+`composer run cs`; the suite on PHP 8.5 locally too (rebuild with `PHP_VERSION=8.5`), since local runs default to 8.3.
 
-### 8.2 Schema and fixtures
+### 9.2 Schema and fixtures
 
 New tables only, in `test/sql/mysql.sql` (also MariaDB), `pgsql.sql`, `sqlite.sql` (+ `pgsql-after-fixtures.sql` for
 sequences), fixtures in `test/fixtures/`:
-
 - `trash_posts`: `deleted_at DATETIME NULL`, `updated_at`, a UNIQUE `code`, a `draft` flag (a non-soft-delete scope);
 - `trash_comments`: has_many target with soft delete;
-- `trash_tags`, `trash_taggings`: `:through` with a soft-delete middle model, in both shapes;
-- a `DATE` soft-delete column, and a column of a wrong type for the `ConfigException`.
+- `trash_tags`, `trash_taggings`: `:through` with a soft-delete middle **and** target (both with `deleted_at`), in both
+  shapes;
+- a `DATE` soft-delete column, and a column of a wrong type.
 
 Test models in `test/models/`, including a model on an existing table with only a global scope (PR 1).
 
-### 8.3 Tests
+### 9.3 Tests
 
 1. **Byte-identity:** `GoldenSqlTest` unchanged and green on the four databases.
-2. **Guards by reflection:** every public `Query` terminal and every scoped legacy entry → the scope is in the SQL; every
-   unscoped path (`save()`, instance `delete()`/`reload()`, `Table::update`/`delete`, `insert`, `upsert`,
-   `options_to_sql`, closure groups) → it is not; aggregate and count subqueries → exactly once.
-3. **`QueryEngineTest`** invariant: every field but the meta fields; meta fields skipped by the three checks.
-4. **Global scopes:** order; grouping with an `OR` in the user's conditions in the builder (`or_where`) and in legacy
-   (`'a OR b'` string); removal by name and all; `unscoped()` nested, throwing inside `$fn`, exact class (not parent, not
-   child); qualification with joins and `from()`; every error of §6.
-5. **Relationships:** lazy/eager parity with scopes (extend `RelationshipEagerLazyParityTest`); belongs_to to a trashed
-   parent, with and without `'unscoped'`; `:through` with a trashed middle row, both shapes, lazy and eager, both
-   opt-outs.
+2. **Guards by reflection:** every public `Query` terminal and every scoped legacy entry → the scope is in the SQL;
+   every unscoped path (`save()`, instance `delete()`/`reload()`, `Table::update`/`delete`, `insert`, `upsert`,
+   `options_to_sql`, where groups) → it is not; aggregate and count subqueries → exactly once.
+3. **`QueryEngineTest`** invariant with the meta fields.
+4. **Global scopes:** order (root first, redeclared position); grouping with an `OR` in the user's conditions in the
+   builder (`or_where`) and in legacy (`'a OR b'`); removal by name, all, last call wins; `when(false, …)` in a scope;
+   qualification with builder joins, `from()`, legacy `'joins'` and `:through` where target and middle both have
+   `deleted_at`; every error of §6.
+5. **Relationships:** lazy/eager parity with scopes (`RelationshipEagerLazyParityTest`); belongs_to to a trashed parent
+   with and without `'unscoped'`; `:through` with a trashed middle row, both shapes, lazy and eager, lifted by the
+   through relationship's option; target-only `'unscoped'` leaves the middle filter.
 6. **Soft delete:** legacy and builder bulk writes, `force_*`, `with_trashed()->delete()` re-stamping, limit on
-   Postgres; instance verbs and callback order, including cancellation by `before_*`; nested rollbacks; uniqueness
-   counting trashed rows; `updated_at` and `without_timestamps()`; the `DATE` column; a `SoftDeletable` model with a
-   `null` column (byte-identical SQL, the three `*_trashed` methods throw, `unscoped([SCOPE])` does not).
+   Postgres; instance verbs and callback order, cancellation by `before_*`; `force_delete()` throwing then a plain
+   `delete()` staying soft; `is_force_deleting()`; uniqueness counting trashed and scope-hidden rows;
+   `find_or_create_by_*` with a trashed, a live and no match; `updated_at` and `without_timestamps()`; the `DATE`
+   column; attribute types after delete/restore; a `SoftDeletable` model with a `null` column (byte-identical SQL,
+   the three `*_trashed` methods throw); the optional warning on and off.
 7. **Iteration:** `chunk`, `lazy`, `chunk_by_id` (with its `MAX` probe), `cursor`, keyset paging with an `or_where`.
-8. **Forwarding:** `QueryForwardingTest` with the new tags; `force_delete` refused statically.
+8. **Forwarding:** `QueryForwardingTest` with the new tags; static `force_delete` with and without the trait.
 
-### 8.4 Documentation and release
+### 9.4 Documentation and release
 
-- README: a "Global scopes and soft delete" section, Eloquent-style examples, the known limits (§3.6) and the deviations
-  from Eloquent (Q8, Q9 rollback, Q11).
+- README: a "Global scopes and soft delete" section with Eloquent-style examples; the known limits (§3.6); "a scope is
+  not a security boundary"; the deviations from Eloquent: Q8 (`force_*` keep other scopes), `restore()` without
+  `save()` (§5.4), unknown names throw, `trashed()` without the column throws, `find_or_create_by_*` throws on a trashed
+  match; the optional warning; indexing.
 - PHPDoc on every new public method.
 - Release notes added to the 3.2.0 draft when each PR merges, never before.
 
 ---
 
-## 9. Delivery
+## 10. Delivery
 
 One spec, two stacked PRs:
 
-1. **PR 1 — engine and global scopes:** `GlobalScope`, registry, meta field, compiler application, `SQLBuilder`
-   method, removal methods, `unscoped()`, relationship `'unscoped'`, `reload()`, guard tests. Tested with a
-   non-soft-delete scope; useful on its own.
+1. **PR 1 — engine and global scopes:** `GlobalScope`, the cached index and validation, the meta field, compiler
+   application, removal methods, internal suspension, relationship `'unscoped'`, `reload()`, uniqueness, guard tests,
+   benchmark. Tested with a non-soft-delete scope; useful on its own.
 2. **PR 2 — soft delete:** `SoftDeletable`, `SoftDeletes`, `*_trashed`, bulk soft delete, `force_*`, instance verbs,
-   callbacks, rollback, uniqueness, `:through` middle soft delete, schema and fixtures.
+   `is_force_deleting()`, callbacks, `find_or_create_by_*` check, the `:through` middle soft delete, the optional
+   warning, schema and fixtures.
+
+#150 and #194 are separate PRs, independent of these two.
 
 ---
 
-## 10. Open points and verifications for the plan
+## 11. Verifications for the plan
 
-1. **Bulk `restore()` on the builder** (non-goal so far): Eloquent has `Order::only_trashed()->where(...)->restore()`.
-   To confirm with the maintainer during the spec review: add it to PR 2 (a scoped `UPDATE … SET <column> = NULL`, with
-   the `restore` name refused statically like `force_delete`), or file it in #204.
-2. Verify on the four databases that the legacy wrap `(<scope>) AND (<legacy>)` keeps positional binds in order,
-   including the Postgres limited-write subquery.
-3. Verify that `and_pk_conditions` + `find()` emit the scope once.
-4. Verify MySQL's `rowCount()` for a bulk soft delete (changed rows; a re-stamp in the same second changes nothing on
+1. The legacy wrap keeps positional binds in order on the four databases, including the Postgres limited-write
+   subquery.
+2. `and_pk_conditions` + `find()` emit the scope once.
+3. MySQL's `rowCount()` for a bulk soft delete (changed rows; a re-stamp in the same second changes nothing on a
    `DATETIME` without fractions).
-5. Confirm the internal class name (`ScopeSuspension`) and where the meta-field list lives.
+4. The final names of the protected Model entry points and of the `Config` warning, checked against the monolith.
+5. The benchmark of §8.3.
 
 ---
 
-## Appendix A — Monolith migration (for the monolith's own ticket)
+## Appendix A — Monolith migration
 
-These are the monolith's decisions; they are listed so that the adoption is planned.
+The monolith's own migration is tracked in its internal ticket, which holds the inventory (sites, counts, the commands
+that produce them). In short:
 
-1. **RCModel:** `implements SoftDeletable; use SoftDeletes;`, and `soft_delete_column()` returns `'deleted_at'` when the
-   table has the column, else `null`. Its `deleted_at` injection and the `all/first/last/count/exists/find_by_id`
-   overrides can go where they exist only for soft delete or default conditions. `$defaultConditions` on
-   `Prenotazioni_tavoli` becomes `#[GlobalScope] protected static function real(...)`. `'deleted' => true` (5 sites) →
-   `unscoped(…, [SoftDeletable::SCOPE])`; `'no_default_conditions'` (4 sites) → `unscoped(…, ['real'])`.
-2. **About 122 hand-written conditions name `deleted_at`.** Today they switch RCModel's filter off. Under the library
-   they are ANDed with `deleted_at IS NULL`: `deleted_at IS NOT NULL` or `deleted_at > ?` return **no rows**, silently.
-   Each must be reviewed and moved to `only_trashed()` or `unscoped()` (the tautology at `ArticoliPadre.php:88` is one).
-3. **About 21 `delete_all` calls on soft-delete models turn soft.** The `DataCleaner` purge and every delete meant to be
-   real move to `force_delete_all`. RCModel's cascade (`update_all` on children) becomes scoped and stops re-stamping
-   already-trashed children.
-4. **Observable changes:** `find`/`find_by_*` start filtering (about 62 sites; the `ArticoliPadre` resurrect path needs
-   `unscoped`); `has_many`/`has_one` and eager loads filter; eager `belongs_to` to a trashed parent becomes `null`;
-   `:through` relationships filter a trashed middle row; the `OR` leak is closed; soft delete no longer runs
-   validations or `before_save`/`after_save`; `Variazioni_menu::restore()` and `Variazioni_menu_tipi_menu::restore()`
-   shadow the library's `restore()` and must be renamed.
-5. **Prerequisites:** #194; the cascade stays in RCModel (#202).
+1. `RCModel` implements `SoftDeletable`, uses `SoftDeletes`, and overrides `soft_delete_column()` to return
+   `'deleted_at'` only for the tables already migrated (`null` for the others keeps today's SQL), so adoption goes
+   table by table. Its own injection and finder overrides go when every table is migrated.
+2. Its `'deleted' => true` and `'no_default_conditions'` options are rewritten with the builder (`with_trashed()`,
+   `without_global_scope('real')`); the default conditions become a `#[GlobalScope]`.
+3. Hand-written conditions with `deleted_at IS NOT NULL` and restores written with `update_all` move to
+   `only_trashed()`/`with_trashed()`/`restore()` (§3.7 can find them).
+4. `delete_all` on soft-delete models turns soft: purges that must delete use `force_delete_all`.
+5. Its cascade stays in `RCModel` (#202), using `is_force_deleting()`; #194 is a prerequisite.
