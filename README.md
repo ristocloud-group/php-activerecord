@@ -988,14 +988,18 @@ Booking::new_query()->without_global_scope('real')->get();   // every row
   scope that adds no condition adds no group; the conditions it adds are ANDed in one group, as for local scopes.
 - **Inheritance.** Scopes are inherited. A subclass that redeclares a scope method **must repeat `#[GlobalScope]`**: PHP
   does not inherit attributes, and the redeclaration without it throws a `ConfigException` (a scope cannot vanish by
-  accident). A trait can carry a scope for unrelated models.
+  accident). A trait can carry a scope for unrelated models. Inside an inherited scope, or one a trait brings,
+  `static::` is the model being queried, as in a local scope: `static::class`, `static::$x` and `static::method()` read
+  the subclass, not the class or the trait that declares the scope.
 - **Order.** The root ancestor's scopes come first, then each subclass down to the concrete class; within a class, its
   own methods in declaration order, then its traits' in `use` order. A redeclared method keeps its parent's position.
   The groups are ANDed, so the order changes only the SQL text and the order of the bind values.
 - **Errors.** A badly declared scope (a collision, a method that is not `protected static`, a redeclaration without the
   attribute) throws a `ConfigException` at the model's first query. A scope that returns anything but `null` or its
   query, that adds a clause other than a where, or that applies itself again through a query of its own model throws an
-  `ActiveRecordException`.
+  `ActiveRecordException`. That last check is kept per fiber: a coroutine system that switches without fibers (Swoole's
+  hooks, for one) while a scope's body runs a query can see this error, wrongly, in another coroutine that applies the
+  same scope.
 
 #### Removing scopes ####
 
@@ -1014,15 +1018,16 @@ or a global scope's own query.
 
 ```php
 static $belongs_to = [['customer', 'unscoped' => true]];                  // no global scope of Customer
-static $has_many = [['bookings', 'unscoped' => ['real']]];                // all but the named ones removed
+static $has_many = [['bookings', 'unscoped' => ['real']]];                // only the named scopes removed
 ```
 
 `'unscoped'` (`true`, or a list of scope names) on `belongs_to`, `has_many` and `has_one` removes those global scopes
 of the relationship's **target** class from its loads, lazy and eager. It is the only opt-out of a relationship load,
-and it is per relationship, not per load. Names are checked against the target when the relationship first loads, so a
-typo throws then, not when the model is declared. A load with `'unscoped'` does not call the target's `find` / `first`
-overrides (see [Overrides that are skipped](#overrides-that-are-skipped)). `has_and_belongs_to_many` does not take the
-option. On a `:through` relationship it concerns the target only.
+and it is per relationship, not per load. Names are checked against the target by the relationship's first load that
+runs a query, so a typo throws then, not when the model is declared (a load that runs none, as for a `null` foreign key,
+does not check them). An empty list removes nothing: the load is the one without the option. A load with `'unscoped'`
+does not call the target's `find` / `first` overrides (see [Overrides that are skipped](#overrides-that-are-skipped)).
+`has_and_belongs_to_many` does not take the option. On a `:through` relationship it concerns the target only.
 
 #### Where scopes apply, and where they do not ####
 
@@ -1059,7 +1064,8 @@ in a scope, which is never rewritten.
 
 The limit: where the columns stay unqualified (`'from'` or `from_raw()` together with joins, a join written inside the
 `'from'` text, or `where_raw`) and a joined table has a column of the same name, the statement fails as ambiguous. Nothing
-is checked ahead of time, because most such statements are not ambiguous. **Qualify the columns of a scope's raw SQL**:
+is checked ahead of time, because most such statements are not ambiguous. **Qualify the columns of a scope's raw SQL**
+with the name the rows are read under (the table, or the alias of a query that reads them with `from()` under one):
 
 ```php
 #[GlobalScope]
@@ -1091,9 +1097,10 @@ exists in another tenant. Models that are not opted in are unchanged.
 
 #### Overrides that are skipped ####
 
-`reload()`, the uniqueness check and `'unscoped'` loads read through the table, not through your `find`, `first` or
-`exists` overrides, on an opted-in model (one that declares a global scope, its own, inherited or from a trait): a condition an override adds is not applied there. These
-calls exist to see rows that scopes hide, and an override that filters by hand would hide them again.
+`reload()` and the uniqueness check on an opted-in model (one that declares a global scope, its own, inherited or from
+a trait), and the loads of a relationship with `'unscoped'` whatever its target, read through the table, not through
+your `find`, `first` or `exists` overrides: a condition an override adds is not applied there. These calls exist to see
+rows that scopes hide, and an override that filters by hand would hide them again.
 
 #### Differences from Eloquent ####
 
