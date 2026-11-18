@@ -1445,6 +1445,11 @@ class QueryEngineTest extends DatabaseTest
 
                 $this->assert_same($expected, ActiveRecord\QueryCompiler::held_fields($state, []), $field);
                 $this->assert_same('legacy' === $field ? [] : [$field], ActiveRecord\QueryCompiler::held_fields($state, ['legacy']), $field);
+
+                // the where fields excepted, as for a global scope's query, with a where held besides the field
+                $where_fields = ['wheres', 'empty_where', 'skipped_when'];
+                $state->wheres = ['held'];
+                $this->assert_same(array_values(array_diff($expected, $where_fields)), ActiveRecord\QueryCompiler::held_fields($state, $where_fields), $field);
             }
         }
 
@@ -1452,6 +1457,47 @@ class QueryEngineTest extends DatabaseTest
         $empty = new ActiveRecord\QueryState();
         $empty->legacy = [];
         $this->assert_same([], ActiveRecord\QueryCompiler::held_fields($empty, []));
+    }
+
+    // the columns by key are kept per Table across compilers, and built again when the table's columns change
+    public function test_model_column_follows_a_change_of_the_table_columns(): void
+    {
+        $table = Author::table();
+        $saved = $table->columns;
+
+        try {
+            $this->assert_same($saved['name'], (new ActiveRecord\QueryCompiler($table))->model_column('name'));
+            $this->assert_same($saved['name'], (new ActiveRecord\QueryCompiler($table))->model_column('name'));
+
+            $replacement = clone $saved['name'];
+            $table->columns['name'] = $replacement;
+            $this->assert_same($replacement, (new ActiveRecord\QueryCompiler($table))->model_column('name'));
+
+            unset($table->columns['name']);
+            $this->assert_null((new ActiveRecord\QueryCompiler($table))->model_column('name'));
+        } finally {
+            $table->columns = $saved;
+        }
+
+        $this->assert_same($saved['name'], (new ActiveRecord\QueryCompiler($table))->model_column('name'));
+    }
+
+    // a name with neither the quote character nor a dot takes split_name_parts()'s path without the regular expressions:
+    // one bare part, whatever its characters; the other names are read by the grammar
+    public function test_split_name_parts_reads_a_plain_name_as_one_bare_part(): void
+    {
+        foreach (['`', '"'] as $q) {
+            foreach (['name', 'a b', "x\ny", 'é', '*', '--', ' ', '0'] as $name) {
+                $this->assert_same([[$name, false]], ActiveRecord\Connection::split_name_parts($name, $q), $name);
+            }
+
+            $this->assert_null(ActiveRecord\Connection::split_name_parts('', $q));
+            $this->assert_null(ActiveRecord\Connection::split_name_parts('a.', $q));
+            $this->assert_same([['a', false], ['b', false]], ActiveRecord\Connection::split_name_parts('a.b', $q));
+            $this->assert_same([["{$q}a.b{$q}", true]], ActiveRecord\Connection::split_name_parts("{$q}a.b{$q}", $q));
+        }
+
+        $this->assert_same([['"a"', false]], ActiveRecord\Connection::split_name_parts('"a"', '`'));
     }
 
     public function test_meta_fields_are_never_held(): void

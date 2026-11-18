@@ -22,6 +22,9 @@ final class ScopeRegistry
      */
     public const array DYNAMIC_FINDER_PREFIXES = ['find_by', 'find_all_by', 'count_by', 'find_or_create_by'];
 
+    /** The fields of a QueryState that hold its where clauses: all a global scope may add. */
+    private const array WHERE_FIELDS = ['wheres', 'empty_where', 'skipped_when'];
+
     /** @var array<class-string, self> the registries built so far, by model class; a failed build is not kept */
     private static array $registries = [];
 
@@ -32,16 +35,15 @@ final class ScopeRegistry
     private array $scopes = [];
 
     /**
-     * The global scopes whose bodies are running, "<class>::<scope>" => true, by the fiber that runs them (the main
-     * flow under self::$main): a scope applied again inside its own body is refused (see global_wheres()). Built on
-     * first use.
+     * The global scopes whose bodies are running in a fiber, "<class>::<scope>" => true, by the fiber that runs them:
+     * a scope applied again inside its own body is refused (see global_wheres()). Built on first use.
      *
      * @var \WeakMap<object, array<string, true>>|null
      */
     private static ?\WeakMap $running = null;
 
-    /** The key of self::$running outside any fiber. */
-    private static ?object $main = null;
+    /** @var array<string, true> the global scopes whose bodies are running outside any fiber, as self::$running has them */
+    private static array $running_main = [];
 
     /**
      * Reflects the scopes of $model_class and validates them. The names are compared as PHP compares method names,
@@ -190,27 +192,33 @@ final class ScopeRegistry
     {
         $groups = [];
 
-        foreach (self::global_scopes($model_class) as $name => $scope) {
+        // read as global_scopes() reads it, without the call: a model that is not opted in costs this lookup only
+        foreach (self::$globals[$model_class] ??= self::build_global_scopes($model_class) as $name => $scope) {
             if ($scopes['all'] || in_array($name, $scopes['removed'], true)) {
                 continue;
             }
 
             $query = Query::for_table($table);
-            $query->state()->scopes = null;
+            $state = $query->state();
+            $state->scopes = null;
             $result = self::run_global_scope($model_class, $name, $scope, $query);
 
             if (null !== $result && $result !== $query) {
                 throw self::return_error($name, $model_class, $result);
             }
 
-            $held = QueryCompiler::held_clauses($query->state(), ['wheres', 'empty_where', 'skipped_when']);
-
-            if (null !== $held) {
-                throw new ActiveRecordException(sprintf('The global scope %s() of %s can only add where clauses: it also adds %s', $name, $model_class, $held));
+            // told by held_fields(), the clauses named only for the error
+            if ([] !== QueryCompiler::held_fields($state, self::WHERE_FIELDS)) {
+                throw new ActiveRecordException(sprintf(
+                    'The global scope %s() of %s can only add where clauses: it also adds %s',
+                    $name,
+                    $model_class,
+                    QueryCompiler::held_clauses($state, self::WHERE_FIELDS),
+                ));
             }
 
-            if ([] !== $query->state()->wheres) {
-                $groups[] = self::group($query->state()->wheres);
+            if ([] !== $state->wheres) {
+                $groups[] = self::group($state->wheres);
             }
         }
 
@@ -226,18 +234,28 @@ final class ScopeRegistry
      */
     private static function run_global_scope(string $model_class, string $name, \Closure $scope, Query $query): mixed
     {
-        self::$running ??= new \WeakMap();
-        $fiber = \Fiber::getCurrent() ?? (self::$main ??= new \stdClass());
         $key = "$model_class::$name";
+        $fiber = \Fiber::getCurrent();
+
+        // outside any fiber, the common case, the marks are a plain array
+        if (null === $fiber) {
+            if (isset(self::$running_main[$key])) {
+                throw self::reentry_error($model_class, $name);
+            }
+
+            self::$running_main[$key] = true;
+
+            try {
+                return $scope($query);
+            } finally {
+                unset(self::$running_main[$key]);
+            }
+        }
+
+        self::$running ??= new \WeakMap();
 
         if (isset(self::$running[$fiber][$key])) {
-            throw new ActiveRecordException(sprintf(
-                "The global scope %s() of %s is applied again inside its own body: a query of %s run there must remove it with without_global_scope('%s')",
-                $name,
-                $model_class,
-                $model_class,
-                $name,
-            ));
+            throw self::reentry_error($model_class, $name);
         }
 
         $running = self::$running[$fiber] ?? [];
@@ -256,6 +274,20 @@ final class ScopeRegistry
                 self::$running[$fiber] = $running;
             }
         }
+    }
+
+    /**
+     * The error of the global scope $name of $model_class applied again inside its own body (spec §6, error 11).
+     */
+    private static function reentry_error(string $model_class, string $name): ActiveRecordException
+    {
+        return new ActiveRecordException(sprintf(
+            "The global scope %s() of %s is applied again inside its own body: a query of %s run there must remove it with without_global_scope('%s')",
+            $name,
+            $model_class,
+            $model_class,
+            $name,
+        ));
     }
 
     /**

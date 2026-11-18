@@ -16,6 +16,7 @@ use Closure;
  * @phpstan-import-type Where from QueryState
  * @phpstan-import-type GroupBy from QueryState
  * @phpstan-import-type OrderBy from QueryState
+ * @phpstan-import-type ScopeState from QueryState
  */
 final class QueryCompiler
 {
@@ -72,6 +73,15 @@ final class QueryCompiler
      * @var array<string, Column>|null
      */
     private ?array $columns_by_key = null;
+
+    /**
+     * The columns by key (see $columns_by_key) built so far, by Table: with the columns of the table and the class of
+     * the connection they were built from, so that a compiler of the same Table reuses them while both are the same.
+     * The columns are compared by ===, which tells an unchanged array at once.
+     *
+     * @var \WeakMap<Table, array{0: array<string, Column>, 1: class-string<Connection>, 2: array<string, Column>}>|null
+     */
+    private static ?\WeakMap $columns_by_table = null;
 
     /**
      * The legacy options aggregated_clauses() read last, and the clauses it read of them.
@@ -950,17 +960,47 @@ final class QueryCompiler
             return null;
         }
 
+        return $this->column_named($parts[0][1] ? $name : $this->named_column($name));
+    }
+
+    /**
+     * The column of the model's table that $column names, as model_column() finds it: $column is a pre-quoted name, or
+     * the column an unqualified, unquoted name stands for (see named_column()).
+     */
+    private function column_named(string $column): ?Column
+    {
         $connection = $this->connection();
+        $this->columns_by_key ??= $this->columns_by_key($connection);
 
-        if (null === $this->columns_by_key) {
-            $this->columns_by_key = [];
+        return $this->columns_by_key[$connection->column_reference_key($column)] ?? null;
+    }
 
-            foreach ($this->table->columns as $column_name => $column) {
-                $this->columns_by_key[$connection->column_name_key((string) $column_name)] ??= $column;
-            }
+    /**
+     * The columns of the model's table by the keys $connection gives their names (see Connection::column_name_key()):
+     * the first column of a key wins. Built once per Table and connection class, and again when the table's columns
+     * are not those it was built from.
+     *
+     * @return array<string, Column>
+     */
+    private function columns_by_key(Connection $connection): array
+    {
+        $columns = $this->table->columns;
+        self::$columns_by_table ??= new \WeakMap();
+        $built = self::$columns_by_table[$this->table] ?? null;
+
+        if (null !== $built && $built[0] === $columns && $built[1] === $connection::class) {
+            return $built[2];
         }
 
-        return $this->columns_by_key[$connection->column_reference_key($parts[0][1] ? $name : $this->named_column($name))] ?? null;
+        $by_key = [];
+
+        foreach ($columns as $column_name => $column) {
+            $by_key[$connection->column_name_key((string) $column_name)] ??= $column;
+        }
+
+        self::$columns_by_table[$this->table] = [$columns, $connection::class, $by_key];
+
+        return $by_key;
     }
 
     /**
@@ -1125,7 +1165,10 @@ final class QueryCompiler
         }
 
         $this->apply_conditions($sql, $options);
-        $this->wrap_legacy_where($sql, $options, $state);
+
+        if (null !== $state->scopes) {
+            $this->wrap_legacy_where($sql, $options, $state->scopes);
+        }
 
         if (array_key_exists('order', $options)) {
             $sql->order($options['order']);
@@ -1380,7 +1423,9 @@ final class QueryCompiler
      * state are read once: they are scalars, arrays and null, which no state shares by reference.
      *
      * A state that holds no clause of the builder, the state of every legacy entry, is told first, field by field
-     * (see holds_no_builder_clause()): get_object_vars() cost each statement half a microsecond (#185).
+     * (see holds_no_clause_but_wheres()): get_object_vars() cost each statement half a microsecond (#185). So is a
+     * state that holds where clauses only when $except lists the three fields of the where clauses, as the query of a
+     * global scope is checked for every statement it applies to.
      *
      * @internal Serves QueryCompiler and Query (the clauses a closure group holds); not a supported API.
      * @param list<string> $except
@@ -1388,7 +1433,10 @@ final class QueryCompiler
      */
     public static function held_fields(QueryState $state, array $except): array
     {
-        if (self::holds_no_builder_clause($state)) {
+        $no_where = [] === $state->wheres && !$state->empty_where && !$state->skipped_when;
+
+        if (self::holds_no_clause_but_wheres($state)
+            && ($no_where || (in_array('wheres', $except, true) && in_array('empty_where', $except, true) && in_array('skipped_when', $except, true)))) {
             $legacy = null !== $state->legacy && [] !== $state->legacy && !in_array('legacy', $except, true);
 
             return $legacy ? ['legacy'] : [];
@@ -1426,17 +1474,17 @@ final class QueryCompiler
     }
 
     /**
-     * Whether every field of a state but the legacy options is as in a new state. It names each field: a field added to
+     * Whether every field of a state but the legacy options and the three of the where clauses (wheres, empty_where,
+     * skipped_when, which held_fields() reads apart) is as in a new state. It names each field: a field added to
      * QueryState must be added here too, which QueryEngineTest checks for every field of the class. The meta fields
      * (QueryState::META_FIELDS) are not clauses: they are left out, and held_fields() ignores them too.
      */
-    private static function holds_no_builder_clause(QueryState $state): bool
+    private static function holds_no_clause_but_wheres(QueryState $state): bool
     {
         return [] === $state->selects && !$state->distinct && null === $state->from && null === $state->from_alias
-            && null === $state->from_raw && [] === $state->from_bindings && [] === $state->joins && [] === $state->wheres
-            && !$state->empty_where && !$state->skipped_when && [] === $state->groups && [] === $state->havings
-            && [] === $state->orders && null === $state->limit && null === $state->offset && [] === $state->includes
-            && !$state->readonly;
+            && null === $state->from_raw && [] === $state->from_bindings && [] === $state->joins && [] === $state->groups
+            && [] === $state->havings && [] === $state->orders && null === $state->limit && null === $state->offset
+            && [] === $state->includes && !$state->readonly;
     }
 
     /**
@@ -1560,27 +1608,25 @@ final class QueryCompiler
 
     /**
      * Puts the groups of the model's global scopes before the WHERE that the legacy $options gave $sql (see
-     * apply_conditions()), when $state applies them (spec §4.4 step 6): "(scope1) AND (scope2) AND (<user WHERE>)", with
-     * the values in that order. The user's WHERE is taken back from $sql as SQLBuilder rendered it, its values already
-     * expanded, and is written again as it is, followed by a newline when it holds -- or # (see raw_fragment()), so that
-     * a line comment in it cannot swallow the parenthesis that closes it. A user's WHERE SQLBuilder writes no WHERE for
-     * (empty, or falsy as '0') leaves the scopes alone. Nothing changes when $state applies no scope (a legacy write of
-     * Table, options_to_sql()) or no scope adds a condition.
+     * apply_conditions()), by the scope state $scopes of a query that applies them (spec §4.4 step 6; the callers skip
+     * a state that applies none: a legacy write of Table, options_to_sql()): "(scope1) AND (scope2) AND (<user
+     * WHERE>)", with the values in that order. The user's WHERE is taken back from $sql as SQLBuilder rendered it, its
+     * values already expanded, and is written again as it is, followed by a newline when it holds -- or # (see
+     * raw_fragment()), so that a line comment in it cannot swallow the parenthesis that closes it. A user's WHERE
+     * SQLBuilder writes no WHERE for (empty, or falsy as '0') leaves the scopes alone. Nothing changes when no scope adds
+     * a condition.
      *
      * The columns of the scopes are named as column() names the builder's (spec §3.6): with a 'joins' option and no
      * 'from', qualified with the model's table; otherwise, a 'from' replacing the table by one whose columns are not
      * known here, as written.
      *
      * @param array<string, mixed> $options
+     * @param ScopeState $scopes
      * @throws ActiveRecordException|ConfigException as ScopeRegistry::global_wheres() does
      */
-    private function wrap_legacy_where(SQLBuilder $sql, array $options, QueryState $state): void
+    private function wrap_legacy_where(SQLBuilder $sql, array $options, array $scopes): void
     {
-        if (null === $state->scopes) {
-            return;
-        }
-
-        $groups = ScopeRegistry::global_wheres($this->table->class->name, $this->table, $state->scopes);
+        $groups = ScopeRegistry::global_wheres($this->table->class->name, $this->table, $scopes);
 
         if ([] === $groups) {
             return;
@@ -1594,17 +1640,17 @@ final class QueryCompiler
             $context->joins = ["the legacy 'joins' option"];
         }
 
-        $scopes = $this->conditions($context)->compile($groups);
+        $rendered = $this->conditions($context)->compile($groups);
         $own = $sql->get_where();
 
         // as SQLBuilder, which renders no WHERE for a falsy one ('0' included)
         if (!$own) {
-            $sql->where_condition($scopes['sql'], $scopes['values']);
+            $sql->where_condition($rendered['sql'], $rendered['values']);
 
             return;
         }
 
-        $sql->where_condition($scopes['sql'] . ' AND (' . self::raw_fragment($own) . ')', [...$scopes['values'], ...$sql->get_where_values()]);
+        $sql->where_condition($rendered['sql'] . ' AND (' . self::raw_fragment($own) . ')', [...$rendered['values'], ...$sql->get_where_values()]);
     }
 
     /**
@@ -1631,7 +1677,10 @@ final class QueryCompiler
 
             $options = $state->legacy;
             $this->apply_conditions($sql, $options);
-            $this->wrap_legacy_where($sql, $options, $state);
+
+            if (null !== $state->scopes) {
+                $this->wrap_legacy_where($sql, $options, $state->scopes);
+            }
 
             if (isset($options['limit'])) {
                 $sql->limit($options['limit']);
@@ -1820,7 +1869,8 @@ final class QueryCompiler
         // that differs from it by case only (Table::real_column_name()). Else by the name, the text of a
         // pre-quoted identifier, in which a doubled quote character is one
         $q = $connection::$QUOTE_CHARACTER;
-        $data = $this->model_column($name)->name ?? ($quoted ? str_replace($q . $q, $q, substr($name, 1, -1)) : $column);
+        // model_column($name), whose name parts and column are those read above
+        $data = $this->column_named($column)->name ?? ($quoted ? str_replace($q . $q, $q, substr($name, 1, -1)) : $column);
 
         if ([] === $state->joins || null !== $state->from_raw || !$this->names_model_column($column)) {
             return ['sql' => $sql, 'column' => $data];
