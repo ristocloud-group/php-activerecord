@@ -1030,17 +1030,18 @@ final class QueryCompiler
 
     /**
      * The DELETE of a state, for delete() and the legacy writes, whose WHERE, ORDER BY and LIMIT are the state's (see
-     * apply_write_clauses()). A state without conditions deletes every row.
+     * apply_write_clauses()). A state without conditions deletes every row. $method is the write the caller runs, which
+     * the refusals name: delete(), or force_delete() / force_delete_all() for the real DELETE of a soft-delete model.
      *
      * @throws ActiveRecordException as compile_update() does
      */
-    public function compile_delete(QueryState $state): SQLBuilder
+    public function compile_delete(QueryState $state, string $method = 'delete'): SQLBuilder
     {
-        $this->refuse_unwritable_clauses($state, 'delete', self::UPDATE_DELETE_FIELDS);
-        $this->refuse_empty_where($state, 'delete');
+        $this->refuse_unwritable_clauses($state, $method, self::UPDATE_DELETE_FIELDS);
+        $this->refuse_empty_where($state, $method);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
-        $this->apply_write_clauses($sql, $state, 'delete');
+        $this->apply_write_clauses($sql, $state, $method);
 
         return $sql;
     }

@@ -119,6 +119,30 @@ class SoftDeleteWriteTest extends DatabaseTest
         $this->assert_equals([3, 4], $this->all_ids());
     }
 
+    public function test_force_delete_leaves_the_query_unchanged(): void
+    {
+        $q = TrashPost::where_in('code', ['A', 'B']);
+        $sql = $q->to_sql();
+        $this->assert_same(2, $q->force_delete());   // A live, B trashed
+        $this->assert_same('default', $q->state()->scopes['trashed']);
+        $this->assert_same($sql, $q->to_sql());
+        $this->assert_sql_has('deleted_at IS NULL', str_replace(['`', '"'], '', $q->to_sql()));
+
+        // a trashed row back in the query's reach: the query still hides it
+        TrashPost::create(['code' => 'A', 'title' => 'again', 'draft' => 0, 'deleted_at' => '2026-01-01 00:00:00']);
+        $this->assert_equals([], $q->get());
+        $this->assert_same(1, $q->clone()->with_trashed()->count());
+    }
+
+    public function test_force_delete_refusals_name_force_delete(): void
+    {
+        $this->assert_exception_message_contains('force_delete() cannot use group_by', fn() => TrashPost::new_query()->group_by('id')->force_delete(), ActiveRecordException::class);
+        $this->assert_exception_message_contains('force_delete() on TrashPost has where() calls', fn() => TrashPost::where([])->force_delete(), ActiveRecordException::class);
+        $this->assert_exception_message_contains('TrashPost::new_query()->force_delete()', fn() => TrashPost::where([])->force_delete(), ActiveRecordException::class);
+        $this->assert_exception_message_contains('delete() cannot use group_by', fn() => Author::new_query()->group_by('author_id')->force_delete(), ActiveRecordException::class);
+        $this->assert_equals([1, 2, 3, 4], $this->all_ids());
+    }
+
     public function test_force_delete_on_a_model_without_soft_delete_is_delete(): void
     {
         $this->assert_same(1, Author::where('author_id', 4)->force_delete());

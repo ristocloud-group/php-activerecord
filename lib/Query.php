@@ -2454,8 +2454,7 @@ class Query
      * DELETEs the rows the query selects, as delete() does on a model without soft delete, and returns how many the
      * driver counts. On a SoftDeletable model it is a real DELETE (spec §3.3, §4.2): the soft-delete filter of the
      * default is lifted, so trashed and live rows go, but an explicit only_trashed() or without_trashed() still applies,
-     * and every other global scope is kept unless the query removed it. The query's own trashed state is changed from
-     * the default to with_trashed().
+     * and every other global scope is kept unless the query removed it. The query itself is left as it was.
      *
      * Not forwarded by Model: Author::force_delete() would write every row and is refused (see Model::__callStatic()).
      *
@@ -2471,11 +2470,14 @@ class Query
             return $this->delete();
         }
 
-        if (null !== $this->state->scopes && 'default' === $this->state->scopes['trashed']) {
-            $this->state->scopes['trashed'] = 'with';
+        // on a copy, so that the caller's query keeps its default filter
+        $query = clone $this;
+
+        if (null !== $query->state->scopes && 'default' === $query->state->scopes['trashed']) {
+            $query->state->scopes['trashed'] = 'with';
         }
 
-        return $this->execute_delete()->rowCount();
+        return $query->execute_delete(method: 'force_delete')->rowCount();
     }
 
     /**
@@ -2597,12 +2599,15 @@ class Query
      * $refuse_terminator false, the WHERE that Table::delete() is given is sent as it always was, as in
      * execute_update().
      *
+     * $method is the write the refusals name: force_delete or force_delete_all for the real DELETE of a soft-delete
+     * model (see QueryCompiler::compile_delete()).
+     *
      * @internal Serves delete(), force_delete(), Model::delete_all(), Model::perform_force_delete_all() and
      *   Table::delete(); not a supported API.
      */
-    public function execute_delete(bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
+    public function execute_delete(bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true, string $method = 'delete'): \PDOStatement
     {
-        $sql = (new QueryCompiler($this->table(), $connection, $refuse_terminator))->compile_delete($this->state);
+        $sql = (new QueryCompiler($this->table(), $connection, $refuse_terminator))->compile_delete($this->state, $method);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }

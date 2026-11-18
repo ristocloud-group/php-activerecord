@@ -1340,7 +1340,7 @@ class Model
         $options = self::bulk_write_options($options, 'force_delete_all');
 
         // on the connection delete_all() takes
-        return self::bulk_write_query($options)->with_trashed()->execute_delete(connection: static::connection())->rowCount();
+        return self::bulk_write_query($options)->with_trashed()->execute_delete(connection: static::connection(), method: 'force_delete_all')->rowCount();
     }
 
     /**
