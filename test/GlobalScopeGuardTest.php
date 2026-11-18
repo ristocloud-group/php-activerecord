@@ -14,9 +14,36 @@ class GlobalScopeGuardTest extends DatabaseTest
     use CapturesStatements;
 
     /**
-     * Methods of Query::FORWARDABLE that build or inspect a query without sending a statement of rows.
+     * Public methods that only build the query (clauses, eager loading, flags): no statement of their own.
      */
-    private const array NOT_TERMINAL = ['without_global_scope', 'without_global_scopes', 'clone', 'tap', 'when', 'unless'];
+    private const array BUILDER_ONLY = [
+        'select', 'add_select', 'select_raw', 'distinct', 'from', 'from_raw',
+        'where', 'or_where', 'where_not', 'or_where_not', 'where_column', 'or_where_column', 'where_raw', 'or_where_raw',
+        'where_in', 'or_where_in', 'where_not_in', 'or_where_not_in', 'where_null', 'or_where_null',
+        'where_not_null', 'or_where_not_null', 'where_between', 'or_where_between', 'where_not_between', 'or_where_not_between',
+        'where_between_columns', 'or_where_between_columns', 'where_not_between_columns', 'or_where_not_between_columns',
+        'where_like', 'or_where_like', 'where_not_like', 'or_where_not_like', 'where_all', 'or_where_all',
+        'where_any', 'or_where_any', 'where_none', 'or_where_none', 'where_key', 'where_key_not',
+        'join', 'left_join', 'right_join', 'cross_join', 'joins', 'left_joins',
+        'order_by', 'order_by_desc', 'order_by_raw', 'latest', 'oldest', 'reorder', 'in_random_order',
+        'group_by', 'group_by_raw', 'having', 'or_having', 'having_raw', 'or_having_raw', 'having_null', 'having_not_null', 'having_between',
+        'limit', 'take', 'offset', 'skip', 'for_page', 'with', 'without', 'with_only', 'readonly',
+        'when', 'unless', 'tap', 'clone', 'without_global_scope', 'without_global_scopes',
+    ];
+
+    /**
+     * Public methods that return the SQL or the bindings, or inspect the query, without sending a statement.
+     */
+    private const array SQL_TEXT = ['to_sql', 'to_raw_sql', 'get_bindings', 'has_scope'];
+
+    /**
+     * Public methods that are unscoped by spec §3.6 / §4.3 (INSERT and UPSERT), or engine internals the legacy and
+     * write entries call (their own guards are the legacy entries and the unscoped tests below).
+     */
+    private const array UNSCOPED_OR_INTERNAL = [
+        'insert', 'upsert', 'execute_insert', 'execute_update', 'execute_delete',
+        'from_options', 'for_table', 'to_sql_builder', 'state',
+    ];
 
     /**
      * The statements $run sends, with the identifier quotes of every adapter stripped.
@@ -91,8 +118,10 @@ class GlobalScopeGuardTest extends DatabaseTest
             'delete' => fn() => $q()->delete(),
             'chunk' => fn() => $q()->chunk(2, fn() => null),
             'lazy' => fn() => iterator_to_array($q()->lazy(2), false),
-            'cursor' => fn() => iterator_to_array($q()->cursor(), false),
-            'cursor_stream' => fn() => iterator_to_array($q()->cursor(true), false),
+            'cursor' => function () use ($q): void {
+                iterator_to_array($q()->cursor(), false);
+                iterator_to_array($q()->cursor(true), false);
+            },
             'chunk_by_id' => fn() => $q()->chunk_by_id(2, fn() => null),
             'chunk_by_id_desc' => fn() => $q()->chunk_by_id_desc(2, fn() => null),
             'lazy_by_id' => fn() => iterator_to_array($q()->lazy_by_id(2), false),
@@ -100,33 +129,26 @@ class GlobalScopeGuardTest extends DatabaseTest
         ];
     }
 
-    /**
-     * The forwardable methods that send no statement: they return a string or an array that is not rows.
-     *
-     * @return list<string>
-     */
-    private function sql_text_methods(): array
+    public function test_every_public_query_method_is_classified_exactly_once(): void
     {
-        return ['to_sql', 'to_raw_sql', 'get_bindings'];
-    }
+        $public = [];
 
-    public function test_every_terminal_forwardable_method_has_a_sample(): void
-    {
-        $samples = $this->samples();
-        $terminal = [];
-
-        foreach (Query::FORWARDABLE as $name) {
-            $type = (string) (new ReflectionMethod(Query::class, $name))->getReturnType();
-
-            if (in_array($name, self::NOT_TERMINAL, true) || in_array($name, $this->sql_text_methods(), true) || 'static' === $type) {
-                continue;
+        foreach ((new ReflectionClass(Query::class))->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if (!str_starts_with($method->name, '__')) {
+                $public[] = $method->name;
             }
-
-            $terminal[] = $name;
         }
 
-        $this->assert_true([] !== $terminal);
-        $this->assert_equals([], array_values(array_diff($terminal, array_keys($samples))), 'a terminal Query method has no guard sample');
+        $samples = array_keys($this->samples());
+        $classes = ['builder-only' => self::BUILDER_ONLY, 'sql-text' => self::SQL_TEXT, 'unscoped-or-internal' => self::UNSCOPED_OR_INTERNAL, 'scoped terminal' => $samples];
+        $count = array_count_values([...self::BUILDER_ONLY, ...self::SQL_TEXT, ...self::UNSCOPED_OR_INTERNAL, ...$samples]);
+
+        $this->assert_equals([], array_keys(array_filter($count, static fn(int $n): bool => $n > 1)), 'a method is in two classes');
+        $this->assert_equals([], array_values(array_diff($public, ...array_values($classes))), 'a public Query method is not classified: add it to a class, with a scoped sample if it is a terminal');
+
+        foreach ($classes as $label => $names) {
+            $this->assert_equals([], array_values(array_diff($names, $public)), "stale name in $label (no such public method)");
+        }
     }
 
     public function test_every_terminal_query_method_is_scoped(): void
