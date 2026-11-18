@@ -98,6 +98,15 @@ class GlobalScopeRelationshipTest extends DatabaseTest
         );
     }
 
+    public function test_has_one_options_include_every_has_many_option(): void
+    {
+        // HasOne repeats HasMany's list instead of inheriting it: an option added to HasMany alone would be refused by
+        // has_one, which took every HasMany option before
+        $options = static fn(string $class): array => (new ReflectionProperty($class, 'valid_association_options'))->getValue();
+
+        $this->assert_same([], array_values(array_diff($options(HasMany::class), $options(HasOne::class))));
+    }
+
     public function test_unscoped_load_skips_find_override_and_plain_load_calls_it(): void
     {
         $owner = GlobalScopedRecordingAuthor::without_global_scope('not_bush')->find(4);   // parent 2
