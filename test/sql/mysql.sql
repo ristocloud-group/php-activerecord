@@ -214,3 +214,57 @@ CREATE TABLE measurements (
   `single` FLOAT,
   `label` VARCHAR(20)
 ) ENGINE=InnoDB;
+
+-- soft delete (sub-project 3a), trash_* tables: trash_pkless has no primary key, trash_dated keeps its flag in a DATE, trash_wrongs in a VARCHAR
+CREATE TABLE trash_posts (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(10) NOT NULL UNIQUE,
+  title VARCHAR(50),
+  draft INT NOT NULL DEFAULT 0,
+  deleted_at DATETIME NULL,
+  updated_at DATETIME NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_comments (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  trash_post_id INT,
+  body VARCHAR(50),
+  deleted_at DATETIME NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_tags (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(20),
+  deleted_at DATETIME NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_taggings (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  trash_post_id INT,
+  trash_tag_id INT,
+  deleted_at DATETIME NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_votes (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  trash_comment_id INT,
+  value INT,
+  deleted_at DATETIME NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_dated (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(20),
+  removed_on DATE NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_wrongs (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(20),
+  deleted_at VARCHAR(20) NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE trash_pkless (
+  code INT NOT NULL,
+  deleted_at DATETIME NULL
+) ENGINE=InnoDB;
