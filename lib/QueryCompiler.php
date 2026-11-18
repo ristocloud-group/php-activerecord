@@ -1009,18 +1009,21 @@ final class QueryCompiler
      * else. The WHERE, ORDER BY and LIMIT are the state's: those of its legacy options, or of the builder (see
      * apply_write_clauses()).
      *
+     * $method is the write the caller runs, which the refusals name: update(), or delete() for the UPDATE of a bulk
+     * soft delete (spec §5.1).
+     *
      * @param array<string, mixed>|string $set
      * @throws ActiveRecordException for a state that holds a clause an UPDATE cannot use (see refuse_unwritable_clauses()),
      *   or legacy options and builder clauses both, where calls that all added no condition (see refuse_empty_where()),
      *   or a WHERE or an ORDER BY that compiles to nothing
      */
-    public function compile_update(QueryState $state, array|string $set): SQLBuilder
+    public function compile_update(QueryState $state, array|string $set, string $method = 'update'): SQLBuilder
     {
-        $this->refuse_unwritable_clauses($state, 'update', self::UPDATE_DELETE_FIELDS);
-        $this->refuse_empty_where($state, 'update');
+        $this->refuse_unwritable_clauses($state, $method, self::UPDATE_DELETE_FIELDS);
+        $this->refuse_empty_where($state, $method);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
-        $this->apply_write_clauses($sql, $state, 'update');
+        $this->apply_write_clauses($sql, $state, $method);
 
         return $sql;
     }

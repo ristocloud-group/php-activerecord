@@ -1286,19 +1286,61 @@ class Model
      * limit it picks the records to delete; on Postgres an order without a limit is ignored</li>
      * </ul>
      *
+     * On a SoftDeletable model the records are trashed instead (spec §5.1): an UPDATE of the same
+     * conditions, order and limit sets the soft-delete column, and updated_at as update_all() sets
+     * it, to one time (Timestamps::now(), read once), and the trashed records are not touched.
+     * force_delete_all() is the real DELETE.
+     *
      * @param mixed $options
      * @return int Number of rows affected
      * @throws ActiveRecordException before any SQL for an argument that could be misread: a positional
      *   list (pass it as ['conditions' => [...]]), a hash mixing option keys with other keys
      *   ("Unknown key(s): ..."), or an int, float or bool; and for conditions whose SQL holds a statement
      *   terminator
+     * @throws ConfigException on a SoftDeletable model whose soft delete is declared wrongly (spec §6,
+     *   errors 6 to 8)
      */
     public static function delete_all($options = [])
     {
         $options = self::bulk_write_options($options, 'delete_all');
+        $query = self::bulk_write_query($options);
 
         // on the connection it always took, the hook a subclass can override
-        return self::bulk_write_query($options)->execute_delete(connection: static::connection())->rowCount();
+        if (is_a(static::class, SoftDeletable::class, true)) {
+            // the registry first, so that a broken declaration is reported before the column is checked
+            ScopeRegistry::global_scopes(static::class);
+            $column = ScopeRegistry::soft_delete_column(static::table());
+            $now = Timestamps::now();
+
+            return $query->execute_update([$column => new DateTime($now)], connection: static::connection(), now: $now, method: 'delete')->rowCount();
+        }
+
+        return $query->execute_delete(connection: static::connection())->rowCount();
+    }
+
+    /**
+     * The body of SoftDeletes::force_delete_all(): delete_all()'s options and checks, run as a real
+     * DELETE with the soft-delete scope removed (with_trashed()) and every other global scope kept
+     * (spec §3.4, §5.2). On a model that is not SoftDeletable, delete_all(). The model's global
+     * scopes are read first, so that a broken declaration (spec §6, errors 1 to 6) is reported
+     * before anything else.
+     *
+     * @param mixed $options as delete_all() takes them
+     * @return int Number of rows deleted
+     * @throws ActiveRecordException|ConfigException as delete_all() does
+     */
+    final protected static function perform_force_delete_all(mixed $options): int
+    {
+        ScopeRegistry::global_scopes(static::class);
+
+        if (!is_a(static::class, SoftDeletable::class, true)) {
+            return static::delete_all($options);
+        }
+
+        $options = self::bulk_write_options($options, 'force_delete_all');
+
+        // on the connection delete_all() takes
+        return self::bulk_write_query($options)->with_trashed()->execute_delete(connection: static::connection())->rowCount();
     }
 
     /**
@@ -1396,7 +1438,9 @@ class Model
      * nothing, null and [] still mean every row, a string (or another non-scalar) is the
      * conditions, and a hash without any option key is the conditions, as in count() and exists().
      *
-     * @param 'delete_all'|'update_all' $method the caller, named in the messages
+     * force_delete_all() takes the options of delete_all().
+     *
+     * @param 'delete_all'|'force_delete_all'|'update_all' $method the caller, named in the messages
      * @return array<string, mixed> with 'conditions' when there is a condition, and always
      *   with 'set' for update_all()
      * @throws ActiveRecordException
@@ -2072,8 +2116,8 @@ class Model
      * Any other name is a call of the query builder: a method named in {@link Query::FORWARDABLE} is
      * called, with the arguments as given, on a new query of this class ({@link new_query()}), so
      * that Person::get() is Person::new_query()->get(). The `@method static` tags of the class
-     * describe them. A static update() or delete() is refused, since it would write every row: use
-     * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
+     * describe them. A static update(), delete() or force_delete() is refused, since it would write
+     * every row: use Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
      * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
      *
      * A name that is none of these is one of the model's local scopes, when it declares one by that name
@@ -2091,7 +2135,7 @@ class Model
      * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
      *   find-or-create-by-attributes), a list of Model (find-all-by-attributes) or an int|string
      *   (count-by-attributes). For a builder method, what that method returns. For a scope, the query.
-     * @throws ActiveRecordException if invalid query, for a static update() or delete(), when a scope
+     * @throws ActiveRecordException if invalid query, for a static update(), delete() or force_delete(), when a scope
      *   returns anything but null or the query it was given, or if there is no such method
      * @throws ConfigException when the model declares a scope that collides with another name, or a
      *   #[Scope] method that is not protected static
@@ -2147,7 +2191,7 @@ class Model
             return static::count($options);
         }
 
-        if ('update' === $method || 'delete' === $method) {
+        if ('update' === $method || 'delete' === $method || 'force_delete' === $method) {
             $class = static::class;
 
             throw new ActiveRecordException("$class::$method() would write every row: use $class::where(...)->$method(...) or $class::new_query()->$method(...)");

@@ -33,6 +33,24 @@ trait SoftDeletes
     }
 
     /**
+     * DELETEs the records of $options for real, trashed and live, and returns how many. It takes delete_all()'s options
+     * and checks (conditions, order, limit; a bare conditions hash or string; nothing for every record), and keeps every
+     * other global scope of the model. delete_all() trashes them instead.
+     *
+     * <code>
+     * Order::force_delete_all(['conditions' => ['deleted_at < ?', $cutoff]]);
+     * </code>
+     *
+     * @param mixed $options as delete_all() takes them
+     * @return int Number of rows deleted
+     * @throws ActiveRecordException|ConfigException as delete_all() does
+     */
+    public static function force_delete_all($options = []): int
+    {
+        return static::perform_force_delete_all($options);
+    }
+
+    /**
      * Whether this record is trashed: its soft-delete column holds a value. A record read without the column throws
      * UndefinedPropertyException.
      *
