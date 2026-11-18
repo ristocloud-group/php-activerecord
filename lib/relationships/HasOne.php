@@ -24,4 +24,13 @@ namespace ActiveRecord;
  * @package ActiveRecord
  * @see http://www.phpactiverecord.org/guides/associations
  */
-class HasOne extends HasMany {};
+class HasOne extends HasMany
+{
+    /**
+     * Valid options to use for a {@link HasOne} relationship, on top of the base ones of {@link AbstractRelationship}:
+     * those of {@link HasMany}, which it took through HasMany before declaring its own list.
+     *
+     * @var list<string>
+     */
+    protected static $valid_association_options = ['primary_key', 'order', 'group', 'having', 'limit', 'offset', 'through', 'source', 'unscoped'];
+};

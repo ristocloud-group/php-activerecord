@@ -361,8 +361,9 @@ class RelationshipTest extends DatabaseTest
 
     public function test_belongs_to_unknown_option_message_lists_each_valid_option_once()
     {
-        // GH-39: BelongsTo inherits the base $valid_association_options, so
-        // merging self:: with static:: used to list every option twice.
+        // GH-39: BelongsTo inherited the base $valid_association_options, so
+        // merging self:: with static:: used to list every option twice. It now
+        // declares its own list ('unscoped'), listed after the base ones.
         // 'primary_key' is the option the BelongsTo docblock used to advertise;
         // it is not a BelongsTo option.
         Event::$belongs_to[0]['primary_key'] = 'id';
@@ -376,7 +377,7 @@ class RelationshipTest extends DatabaseTest
 
         $this->assert_not_null($caught, 'An expected RelationshipException has not been raised.');
         $this->assert_same(
-            "Unknown option 'primary_key' for relationship 'venue'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace.",
+            "Unknown option 'primary_key' for relationship 'venue'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace, unscoped.",
             $caught->getMessage()
         );
     }
@@ -384,7 +385,8 @@ class RelationshipTest extends DatabaseTest
     public function test_has_many_unknown_option_message_is_unchanged()
     {
         // GH-39 guard: the de-duplication must leave the HasMany (and HasOne)
-        // message byte-identical -- base options first, then the subclass ones.
+        // message in its order -- base options first, then the subclass ones
+        // ('unscoped' last, added with global scopes).
         Venue::$has_many[0]['bogus'] = true;
         $caught = null;
 
@@ -396,7 +398,7 @@ class RelationshipTest extends DatabaseTest
 
         $this->assert_not_null($caught, 'An expected RelationshipException has not been raised.');
         $this->assert_same(
-            "Unknown option 'bogus' for relationship 'events'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace, primary_key, order, group, having, limit, offset, through, source.",
+            "Unknown option 'bogus' for relationship 'events'. Valid options: class_name, class, foreign_key, conditions, select, readonly, namespace, primary_key, order, group, having, limit, offset, through, source, unscoped.",
             $caught->getMessage()
         );
     }

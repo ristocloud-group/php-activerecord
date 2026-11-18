@@ -37,6 +37,17 @@ namespace ActiveRecord;
  */
 class BelongsTo extends AbstractRelationship
 {
+    /**
+     * Valid options to use for a {@link BelongsTo} relationship, on top of the base ones of {@link AbstractRelationship}.
+     *
+     * <ul>
+     * <li><b>unscoped:</b> true, or a list of names: the global scopes of the target left out of its loads</li>
+     * </ul>
+     *
+     * @var list<string>
+     */
+    protected static $valid_association_options = ['unscoped'];
+
     /** @var list<string>|null */
     private $primary_key_cache;
 
@@ -82,6 +93,12 @@ class BelongsTo extends AbstractRelationship
 
         $options = $this->unset_non_finder_options($this->options);
         $options['conditions'] = $conditions;
+
+        if (isset($this->options['unscoped'])) {
+            return $this->find_related('first', $options);
+        }
+
+        // without 'unscoped', first() as always: an override of it on the target still runs
         $class = $this->class_name;
         return $class::first($options);
     }
