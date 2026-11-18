@@ -621,6 +621,15 @@
             ]
         }
     ],
+    "scoped_inherited_static": [
+        {
+            "sql": "SELECT * FROM `authors` WHERE (`author_id` != ?) AND (`name` != ?)",
+            "values": [
+                3,
+                "Tito"
+            ]
+        }
+    ],
     "scoped_joins": [
         {
             "sql": "SELECT `authors`.* FROM `authors` INNER JOIN books ON books.author_id = authors.author_id WHERE (`authors`.`author_id` != ?)",

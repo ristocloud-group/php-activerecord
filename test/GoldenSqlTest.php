@@ -29,7 +29,7 @@ class GoldenSqlTest extends DatabaseTest
     private const array MODELS = [
         Author::class, Book::class, Venue::class, Host::class, Event::class, OddColumn::class, DatedCount::class, BigId::class,
         QualifiedConditionBook::class, ThroughFkAuthor::class, ThroughFkBook::class, AwesomePerson::class, MusicVenue::class,
-        GlobalScopedAuthor::class,
+        GlobalScopedAuthor::class, GlobalScopeStaticChild::class,
     ];
 
     public function set_up($connection_name = null)
@@ -333,6 +333,9 @@ class GoldenSqlTest extends DatabaseTest
             'scoped_delete_all' => [fn() => GlobalScopedAuthor::delete_all(['conditions' => ['author_id > ?', 1]]), null],
             'scoped_builder_update' => [fn() => GlobalScopedAuthor::where('author_id', '>', 1)->update(['name' => 'x']), null],
             'scoped_keyset_page' => [fn() => GlobalScopedAuthor::where('author_id', '>', 0)->or_where('name', 'x')->chunk_by_id(2, fn() => false), null],
+            // the scopes a subclass inherits from its parent and its parent's trait read the subclass through static::
+            // (GlobalScopeStaticChild hides 3 and 'Tito', its parent 2 and 'Uncle Bob')
+            'scoped_inherited_static' => [fn() => GlobalScopeStaticChild::all(), null],
         ];
     }
 }

@@ -306,8 +306,6 @@ final class ScopeRegistry
 
         /** @var array<string, string> $placed lower-case name => name, in index order */
         $placed = [];
-        /** @var array<string, \ReflectionMethod> $methods name => method, seen from $model_class */
-        $methods = [];
 
         foreach ($chain as $class) {
             foreach (self::methods_declared_by($class) as $declared) {
@@ -339,7 +337,6 @@ final class ScopeRegistry
 
                 if (!isset($placed[$lower])) {
                     $placed[$lower] = $name;
-                    $methods[$name] = $reflection->getMethod($name);
                 }
             }
         }
@@ -349,13 +346,16 @@ final class ScopeRegistry
         }
 
         $reasons = self::global_name_reasons($reflection, $placed);
+        // made in the scope of $model_class, the closure each invoker is calls the scope method with static bound to the
+        // queried class, as a local scope runs, and not to the class or the trait that declares it, as getClosure() would
+        $invoker = \Closure::bind(static fn(string $method): \Closure => static::$method(...), null, $model_class);
         $index = [];
         foreach ($placed as $name) {
             if (null !== ($reason = $reasons[strtolower($name)] ?? null)) {
                 throw self::scope_error($model_class, $name, $reason);
             }
 
-            $index[$name] = $methods[$name]->getClosure(null);
+            $index[$name] = $invoker($name);
         }
 
         return $index;

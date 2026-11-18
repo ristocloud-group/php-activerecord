@@ -62,6 +62,29 @@ class GlobalScopeTest extends DatabaseTest
         $this->assert_same(3, GlobalScopedAuthorChild::without_global_scopes(['named'])->count());
     }
 
+    public function test_inherited_and_trait_scopes_read_the_queried_model_through_static(): void
+    {
+        // the parent's own scope reads static::hidden_id(), its trait's static::$hidden_name: each is the queried class
+        GlobalScopeStaticBase::$seen = [];
+        $this->assert_equals([1, 3], $this->ids(GlobalScopeStaticBase::order_by('author_id')->get()));
+        $this->assert_equals([2, 4], $this->ids(GlobalScopeStaticChild::order_by('author_id')->get()));
+        $this->assert_same(
+            ['GlobalScopeStaticBase::not_hidden', 'GlobalScopeStaticBase::not_named', 'GlobalScopeStaticChild::not_hidden', 'GlobalScopeStaticChild::not_named'],
+            GlobalScopeStaticBase::$seen,
+        );
+
+        // the legacy path runs the same invokers
+        GlobalScopeStaticBase::$seen = [];
+        $this->assert_equals([1, 3], $this->ids(GlobalScopeStaticBase::all(['order' => 'author_id'])));
+        $this->assert_equals([2, 4], $this->ids(GlobalScopeStaticChild::all(['order' => 'author_id'])));
+        $this->assert_same(2, GlobalScopeStaticChild::count());
+        $this->assert_same(
+            ['GlobalScopeStaticBase::not_hidden', 'GlobalScopeStaticBase::not_named', 'GlobalScopeStaticChild::not_hidden', 'GlobalScopeStaticChild::not_named',
+                'GlobalScopeStaticChild::not_hidden', 'GlobalScopeStaticChild::not_named'],
+            GlobalScopeStaticBase::$seen,
+        );
+    }
+
     public function test_builder_writes_are_scoped(): void
     {
         $this->assert_same(3, GlobalScopedAuthor::new_query()->update(['name' => 'x']));
