@@ -953,6 +953,155 @@ class Post extends Model
 }
 ```
 
+### Global scopes ###
+
+A global scope is a condition added to **every** query of a model. It is a `protected static` method marked
+`#[GlobalScope]`, the twin of the local `#[Scope]` above. A model that declares none (its own, inherited or from a
+trait) is unchanged.
+
+```php
+use ActiveRecord\GlobalScope;
+use ActiveRecord\Model;
+use ActiveRecord\Query;
+
+class Booking extends Model
+{
+    #[GlobalScope]
+    protected static function real(Query $q): ?Query
+    {
+        return $q->where('dummy', 0);
+    }
+}
+
+Booking::all();                                        // WHERE `dummy` = ?
+Booking::where('room_id', 3)->get();                   // WHERE `room_id` = ? AND (`dummy` = ?)
+Booking::new_query()->without_global_scope('real')->get();   // every row
+```
+
+- **Declaring.** The method is `protected static`, takes the query as its only required parameter and returns `null`
+  or that query. Its name is the scope's name and follows the name rules of local scopes (not a public `Query` method,
+  not a dynamic-finder prefix, not `update` / `delete`). Calling it from outside (`Booking::real()`) is an undefined
+  method, not a local scope. The method receives a fresh, empty query of the model, not the caller's, and runs on every
+  compile (each `get`, `to_sql()`, chunk page, cursor).
+- **WHERE only.** A global scope may add `where*` conditions, where groups, `when()` / `unless()` and local scopes that
+  only add wheres. Any other clause (`order_by`, `join`, `limit`, `select`, ...) throws when the query is compiled. A
+  scope that adds no condition adds no group; the conditions it adds are ANDed in one group, as for local scopes.
+- **Inheritance.** Scopes are inherited. A subclass that redeclares a scope method **must repeat `#[GlobalScope]`**: PHP
+  does not inherit attributes, and the redeclaration without it throws a `ConfigException` (a scope cannot vanish by
+  accident). A trait can carry a scope for unrelated models.
+- **Order.** The root ancestor's scopes come first, then each subclass down to the concrete class; within a class, its
+  own methods in declaration order, then its traits' in `use` order. A redeclared method keeps its parent's position.
+  The groups are ANDed, so the order changes only the SQL text and the order of the bind values.
+- **Errors.** A badly declared scope (a collision, a method that is not `protected static`, a redeclaration without the
+  attribute) throws a `ConfigException` at the model's first query. A scope that returns anything but `null` or its
+  query, that adds a clause other than a where, or that applies itself again through a query of its own model throws an
+  `ActiveRecordException`.
+
+#### Removing scopes ####
+
+```php
+Booking::new_query()->without_global_scope('real')->get();          // one scope
+Booking::where('room_id', 3)->without_global_scopes(['real'])->get();   // a list
+Booking::new_query()->without_global_scopes()->get();               // all of them
+```
+
+`without_global_scope($name)` and `without_global_scopes(?array $names = null)` are on `Query` (and forwarded from the
+model, as `Booking::without_global_scopes()`). An unknown name throws an `ActiveRecordException`, so a typo never lets
+a scope stay on silently. They throw too on a query that is not a query of the model: inside a `where(fn ...)` group
+or a global scope's own query.
+
+#### Relationships: `'unscoped'` ####
+
+```php
+static $belongs_to = [['customer', 'unscoped' => true]];                  // no global scope of Customer
+static $has_many = [['bookings', 'unscoped' => ['real']]];                // all but the named ones removed
+```
+
+`'unscoped'` (`true`, or a list of scope names) on `belongs_to`, `has_many` and `has_one` removes those global scopes
+of the relationship's **target** class from its loads, lazy and eager. It is the only opt-out of a relationship load,
+and it is per relationship, not per load. Names are checked against the target when the relationship first loads, so a
+typo throws then, not when the model is declared. A load with `'unscoped'` does not call the target's `find` / `first`
+overrides (see [Overrides that are skipped](#overrides-that-are-skipped)). `has_and_belongs_to_many` does not take the
+option. On a `:through` relationship it concerns the target only.
+
+#### Where scopes apply, and where they do not ####
+
+Scoped:
+
+- every builder read: `get`, `first`, `sole`, `find*`, `value`, `pluck`, `count`, aggregates, `exists`, `chunk`,
+  `chunk_by_id`, `lazy*`, `cursor`, and `to_sql()` / `to_raw_sql()` / `get_bindings()`, which show the scopes;
+- the builder's `update()` and `delete()`;
+- the legacy finders: `find` (all forms), `first`, `last`, `all`, `find_by_*`, `find_all_by_*`, `count_by_*`, `count`,
+  `exists`, `update_all`, `delete_all`, and the public `Table::find()` / `Table::exists()`;
+- lazy and eager relationship loads (the target's scopes).
+
+In an aggregate or count subquery the scope appears once, in the inner query.
+
+Not scoped, by construction:
+
+- hand-written SQL: `find_by_sql`, `Model::query`, `Connection::query*`;
+- `Table::options_to_sql()`, and the public `Table::update()` / `Table::delete()` (the by-primary-key writes behind
+  `save()` and `delete()` on an instance);
+- `insert` and `upsert` (they have no WHERE);
+- `join('table', ...)`, raw join strings and **joins by relationship name**: the joined table's scopes are not applied;
+- the where groups of a query and a global scope's own query (their conditions join an outer query that already carries
+  the scopes);
+- the global scopes of the middle model of a `:through` relationship.
+
+`find_or_create_by_*` finds as `find_by_*` does, so it does not see a row that a scope hides.
+
+#### Qualified columns, and raw SQL in a scope ####
+
+A scope's model columns follow the builder's rule: when the statement has joins they are written with the name the
+model's rows are read under (the `from()` alias, else the table); otherwise as written. A legacy `'joins'` option counts
+as joins. With a legacy `'from'` option, or `from_raw()`, **nothing is qualified**; neither is the SQL of a `where_raw`
+in a scope, which is never rewritten.
+
+The limit: where the columns stay unqualified (`'from'` or `from_raw()` together with joins, a join written inside the
+`'from'` text, or `where_raw`) and a joined table has a column of the same name, the statement fails as ambiguous. Nothing
+is checked ahead of time, because most such statements are not ambiguous. **Qualify the columns of a scope's raw SQL**:
+
+```php
+#[GlobalScope]
+protected static function visible(Query $q): ?Query
+{
+    return $q->where_raw('bookings.status <> ?', ['draft']);   // not 'status <> ?'
+}
+```
+
+#### A global scope is not a security boundary ####
+
+Raw SQL, `Table::options_to_sql()`, `Table::update()` / `Table::delete()`, joins, `insert` / `upsert`, the removal
+methods, the scopes of a `:through` middle model and uniqueness checks all bypass a scope. Do not rely on a scope alone
+for tenant isolation.
+
+#### Uniqueness and tenants ####
+
+`validates_uniqueness_of` runs its check on every opted-in model with **every global scope removed**: a row hidden by
+any scope counts as a duplicate, as a plain unique index counts it. A scope that partitions rows, a tenant, is removed
+too, so a per-tenant rule must list the tenant column:
+
+```php
+static $validates_uniqueness_of = [[['code', 'tenant_id']]];
+```
+
+Without `tenant_id` the validation reports a false duplicate, and its "has already been taken" tells that the value
+exists in another tenant. Models that are not opted in are unchanged.
+
+#### Overrides that are skipped ####
+
+`reload()`, the uniqueness check and `'unscoped'` loads read through the table, not through your `find`, `first` or
+`exists` overrides, on a model that declares a global scope: a condition an override adds is not applied there. These
+calls exist to see rows that scopes hide, and an override that filters by hand would hide them again.
+
+#### Differences from Eloquent ####
+
+- **An unknown scope name throws** (`without_global_scope('typo')`); Eloquent ignores it.
+- **Global scopes are WHERE-only**, named static methods (not classes or closures), and receive a fresh query, not the
+  caller's (Eloquent's `apply($builder)`).
+- **A scope cannot apply itself again** inside its own body: it throws.
+- **Opting out of a relationship is per relationship** (`'unscoped'`), not per load.
+
 ### Aggregates ###
 
 ```php
