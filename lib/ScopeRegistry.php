@@ -24,6 +24,9 @@ final class ScopeRegistry
     /** @var array<class-string, self> the registries built so far, by model class; a failed build is not kept */
     private static array $registries = [];
 
+    /** @var array<class-string, array<string, \Closure>> the global-scope indexes built so far, by model class */
+    private static array $globals = [];
+
     /** @var array<string, string> public scope name => name of the method that implements it */
     private array $scopes = [];
 
@@ -48,7 +51,7 @@ final class ScopeRegistry
             $has_attribute = [] !== $method->getAttributes(Scope::class);
 
             if ($has_attribute && !$method->isProtected()) {
-                throw $this->error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
+                throw self::scope_error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
             }
 
             if ($has_attribute) {
@@ -75,7 +78,7 @@ final class ScopeRegistry
             $lower = strtolower($method->getName());
 
             if (!$method->isStatic() && [] !== $method->getAttributes(Scope::class)) {
-                throw $this->error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
+                throw self::scope_error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
             }
 
             if (isset($scope_methods[$lower])) {
@@ -103,7 +106,7 @@ final class ScopeRegistry
             };
 
             if (null !== $reason) {
-                throw $this->error($model_class, $name, $reason);
+                throw self::scope_error($model_class, $name, $reason);
             }
 
             $this->scopes[$name] = $methods[0];
@@ -121,6 +124,193 @@ final class ScopeRegistry
     public static function for_class(string $model_class): self
     {
         return self::$registries[$model_class] ??= new self($model_class);
+    }
+
+    /**
+     * The global scopes of $model_class, name => invoker, the root ancestor's first, then each subclass down to the
+     * class; within a class its own methods in declaration order, then those of its traits in use order. A redeclared
+     * method keeps the position of the first declaration. Built by reflection on the first call and kept; a build that
+     * throws is not kept. It does not build the registry of local scopes: those are validated on their own first use.
+     *
+     * @internal Serves Table, Model and Query; not a supported API.
+     * @param class-string $model_class
+     * @return array<string, \Closure>
+     * @throws ConfigException when a global scope is declared wrongly (spec §6, errors 1 to 5)
+     */
+    public static function global_scopes(string $model_class): array
+    {
+        return self::$globals[$model_class] ??= self::build_global_scopes($model_class);
+    }
+
+    /**
+     * Whether $model_class declares or inherits a global scope.
+     *
+     * @internal Serves Table, Model and Query; not a supported API.
+     * @param class-string $model_class
+     * @throws ConfigException when a global scope is declared wrongly
+     */
+    public static function has_global_scopes(string $model_class): bool
+    {
+        return [] !== self::global_scopes($model_class);
+    }
+
+    /**
+     * @param class-string $model_class
+     * @return array<string, \Closure>
+     */
+    private static function build_global_scopes(string $model_class): array
+    {
+        $reflection = new \ReflectionClass($model_class);
+
+        // the classes below Model, root first
+        $chain = [];
+        for ($class = $reflection; false !== $class && Model::class !== $class->getName(); $class = $class->getParentClass()) {
+            array_unshift($chain, $class);
+        }
+
+        /** @var array<string, string> $placed lower-case name => name, in index order */
+        $placed = [];
+        /** @var array<string, \ReflectionMethod> $methods name => method, seen from $model_class */
+        $methods = [];
+
+        foreach ($chain as $class) {
+            foreach (self::methods_declared_by($class) as $declared) {
+                $name = $declared->getName();
+                $lower = strtolower($name);
+                $is_global = [] !== $declared->getAttributes(GlobalScope::class);
+
+                if (!$is_global) {
+                    if (isset($placed[$lower])) {
+                        throw self::scope_error($model_class, $name, 'redeclares a global scope without #[GlobalScope]');
+                    }
+
+                    continue;
+                }
+
+                if (!$declared->isStatic() || !$declared->isProtected()) {
+                    throw self::scope_error($model_class, $name, 'is marked #[GlobalScope] but is not a protected static method');
+                }
+
+                if ([] !== $declared->getAttributes(Scope::class)) {
+                    throw self::scope_error($model_class, $name, 'is marked both #[Scope] and #[GlobalScope]');
+                }
+
+                foreach (array_slice($declared->getParameters(), 1) as $parameter) {
+                    if (!$parameter->isOptional()) {
+                        throw self::scope_error($model_class, $name, 'takes a required parameter besides the query');
+                    }
+                }
+
+                if (!isset($placed[$lower])) {
+                    $placed[$lower] = $name;
+                    $methods[$name] = $reflection->getMethod($name);
+                }
+            }
+        }
+
+        if ([] === $placed) {
+            return [];
+        }
+
+        $reasons = self::global_name_reasons($reflection, $placed);
+        $index = [];
+        foreach ($placed as $name) {
+            if (null !== ($reason = $reasons[strtolower($name)] ?? null)) {
+                throw self::scope_error($model_class, $name, $reason);
+            }
+
+            $index[$name] = $methods[$name]->getClosure(null);
+        }
+
+        return $index;
+    }
+
+    /**
+     * The methods $class declares itself, in declaration order, then those its traits bring, in use order.
+     *
+     * @param \ReflectionClass<object> $class
+     * @return list<\ReflectionMethod>
+     */
+    private static function methods_declared_by(\ReflectionClass $class): array
+    {
+        $own = [];
+        $own_names = [];
+        foreach ($class->getMethods() as $method) {
+            if ($method->getDeclaringClass()->getName() === $class->getName() && self::is_written_in($method, $class)) {
+                $own[] = $method;
+                $own_names[strtolower($method->getName())] = true;
+            }
+        }
+
+        foreach ($class->getTraits() as $trait) {
+            foreach ($trait->getMethods() as $trait_method) {
+                if (!isset($own_names[strtolower($trait_method->getName())])) {
+                    $own_names[strtolower($trait_method->getName())] = true;
+                    $own[] = $class->getMethod($trait_method->getName());
+                }
+            }
+        }
+
+        return $own;
+    }
+
+    /**
+     * Whether the body of $method is in the source of $class itself and not in a trait the class uses.
+     *
+     * @param \ReflectionClass<object> $class
+     */
+    private static function is_written_in(\ReflectionMethod $method, \ReflectionClass $class): bool
+    {
+        return $method->getFileName() === $class->getFileName()
+            && $method->getStartLine() >= $class->getStartLine()
+            && $method->getEndLine() <= $class->getEndLine();
+    }
+
+    /**
+     * Why each global scope name is refused, by lower-case name: it is also a local scope of the model, or breaks the
+     * name rules of local scopes, with the reason texts of those.
+     *
+     * @param \ReflectionClass<object> $reflection
+     * @param array<string, string> $placed
+     * @return array<string, string>
+     */
+    private static function global_name_reasons(\ReflectionClass $reflection, array $placed): array
+    {
+        // the local scopes, read as the registry reads them
+        $locals = [];
+        foreach ($reflection->getMethods(\ReflectionMethod::IS_STATIC) as $method) {
+            $name = $method->getName();
+
+            if ([] !== $method->getAttributes(Scope::class)) {
+                $locals[strtolower($name)] = true;
+            } elseif ($method->isPublic() && str_starts_with($name, 'scope_') && strlen($name) > 6) {
+                $locals[strtolower(substr($name, 6))] = true;
+            }
+        }
+
+        $query_methods = [];
+        foreach ((new \ReflectionClass(Query::class))->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+            if (!str_starts_with($method->getName(), '__')) {
+                $query_methods[strtolower($method->getName())] = true;
+            }
+        }
+
+        $reasons = [];
+        foreach ($placed as $lower => $name) {
+            $reason = match (true) {
+                isset($locals[$lower]) => 'is also a local scope of the model',
+                isset($query_methods[$lower]) => 'is a public method of Query',
+                self::starts_a_dynamic_finder($lower) => 'starts like a dynamic finder',
+                'update' === $lower || 'delete' === $lower => 'is update or delete, refused by a model without conditions',
+                default => null,
+            };
+
+            if (null !== $reason) {
+                $reasons[$lower] = $reason;
+            }
+        }
+
+        return $reasons;
     }
 
     /**
@@ -207,7 +397,7 @@ final class ScopeRegistry
         return ['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group];
     }
 
-    private function starts_a_dynamic_finder(string $name): bool
+    private static function starts_a_dynamic_finder(string $name): bool
     {
         foreach (self::DYNAMIC_FINDER_PREFIXES as $prefix) {
             if (str_starts_with($name, $prefix)) {
@@ -218,7 +408,7 @@ final class ScopeRegistry
         return false;
     }
 
-    private function error(string $model_class, string $name, string $reason): ConfigException
+    private static function scope_error(string $model_class, string $name, string $reason): ConfigException
     {
         return new ConfigException(sprintf('%s declares the scope %s(), which %s', $model_class, $name, $reason));
     }
