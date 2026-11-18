@@ -1,6 +1,7 @@
 <?php
 
 use ActiveRecord\ActiveRecordException;
+use ActiveRecord\DatabaseException;
 use ActiveRecord\RecordNotFound;
 
 /**
@@ -233,6 +234,66 @@ class GlobalScopeTest extends DatabaseTest
         });
         $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\)$/', $sql);
         $this->assert_same(3, count($found));
+
+        $sql = $this->sql_of(function () use (&$found) {
+            $found = GlobalScopedAuthor::find('first', ['from' => 'authors']);
+        });
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\)/', $sql);
+        $this->assert_same(1, $found->author_id);
+
+        // last() reverses the order by the primary key: the scope is ANDed, the reversed order kept
+        $sql = $this->sql_of(function () use (&$found) {
+            $found = GlobalScopedAuthor::last(['from' => 'authors']);
+        });
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\) ORDER BY .*author_id.* DESC/i', $sql);
+        $this->assert_same(4, $found->author_id);
+    }
+
+    /**
+     * The statements $run sends until it throws, and the exception it throws (null if none).
+     *
+     * @return array{list<string>, \Throwable|null}
+     */
+    private function statements_until_failure(callable $run): array
+    {
+        $logged = [];
+        $thrown = null;
+
+        try {
+            $this->statements($run, function (string $statement) use (&$logged): void {
+                $logged[] = $statement;
+            });
+        } catch (\Throwable $e) {
+            $thrown = $e;
+        }
+
+        return [$logged, $thrown];
+    }
+
+    public function test_legacy_from_with_joins_leaves_the_scope_unqualified_and_the_database_finds_it_ambiguous(): void
+    {
+        // spec §3.6 Limit: 'from' with joins names no rows, so the scope's author_id stays as written, and books has one
+        // too. The library throws nothing ahead of time: the statement is sent, and the database refuses it
+        [$logged, $thrown] = $this->statements_until_failure(fn() => GlobalScopedAuthor::find('all', [
+            'from' => 'authors',
+            'joins' => 'INNER JOIN books ON books.author_id = authors.author_id',
+        ]));
+
+        $this->assert_instance_of(DatabaseException::class, $thrown);
+        $this->assert_string_contains_string('ambiguous', strtolower($thrown->getMessage()));
+        $this->assert_matches_regular_expression('/INNER JOIN books ON books\.author_id = authors\.author_id WHERE \(\W?author_id\W? != \?\)$/', end($logged));
+    }
+
+    public function test_builder_from_raw_with_a_join_leaves_the_scope_unqualified_and_the_database_finds_it_ambiguous(): void
+    {
+        [$logged, $thrown] = $this->statements_until_failure(fn() => GlobalScopedAuthor::new_query()
+            ->from_raw('authors')
+            ->join('books', 'books.author_id', '=', 'authors.author_id')
+            ->get());
+
+        $this->assert_instance_of(DatabaseException::class, $thrown);
+        $this->assert_string_contains_string('ambiguous', strtolower($thrown->getMessage()));
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\)$/', end($logged));
     }
 
     public function test_line_comment_in_user_where_is_closed(): void

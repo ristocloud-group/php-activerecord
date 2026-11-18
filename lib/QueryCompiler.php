@@ -165,9 +165,12 @@ final class QueryCompiler
      * matches, or the parenthesis that closes a group. The newline ends the comment. SQL without them is written as
      * given. A statement terminator (;) would end the statement as surely, and a block comment left open (/*) swallow
      * what follows it on SQLite: the methods refuse both at the call (see refuse_statement_terminator()). The legacy
-     * options never come here: their SQL is sent as given.
+     * options are sent as given, but for one: the WHERE of the options of a model with global scopes, which
+     * wrap_legacy_where() puts in parentheses after the scopes' groups, comes here so that a line comment in it cannot
+     * swallow the closing parenthesis.
      *
-     * @internal Serves QueryCompiler and ConditionCompiler; not a supported API.
+     * @internal Serves QueryCompiler (the builder's raw SQL and wrap_legacy_where()) and ConditionCompiler; not a
+     *   supported API.
      */
     public static function raw_fragment(string $sql): string
     {
