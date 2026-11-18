@@ -973,8 +973,8 @@ class Booking extends Model
     }
 }
 
-Booking::all();                                        // WHERE `dummy` = ?
-Booking::where('room_id', 3)->get();                   // WHERE `room_id` = ? AND (`dummy` = ?)
+Booking::all();                                        // WHERE (`dummy` = ?)
+Booking::where('room_id', 3)->get();                   // WHERE (`dummy` = ?) AND (`room_id` = ?)
 Booking::new_query()->without_global_scope('real')->get();   // every row
 ```
 
@@ -1028,7 +1028,7 @@ option. On a `:through` relationship it concerns the target only.
 
 Scoped:
 
-- every builder read: `get`, `first`, `sole`, `find*`, `value`, `pluck`, `count`, aggregates, `exists`, `chunk`,
+- every builder read: `get`, `first`, `sole`, `find*`, `value`, `pluck`, `count`, aggregates, `exists` / `doesnt_exist`, `chunk`,
   `chunk_by_id`, `lazy*`, `cursor`, and `to_sql()` / `to_raw_sql()` / `get_bindings()`, which show the scopes;
 - the builder's `update()` and `delete()`;
 - the legacy finders: `find` (all forms), `first`, `last`, `all`, `find_by_*`, `find_all_by_*`, `count_by_*`, `count`,
@@ -1077,7 +1077,8 @@ for tenant isolation.
 
 #### Uniqueness and tenants ####
 
-`validates_uniqueness_of` runs its check on every opted-in model with **every global scope removed**: a row hidden by
+`validates_uniqueness_of` runs its check on every opted-in model (one that declares a global scope, its own, inherited
+or from a trait) with **every global scope removed**: a row hidden by
 any scope counts as a duplicate, as a plain unique index counts it. A scope that partitions rows, a tenant, is removed
 too, so a per-tenant rule must list the tenant column:
 
@@ -1091,7 +1092,7 @@ exists in another tenant. Models that are not opted in are unchanged.
 #### Overrides that are skipped ####
 
 `reload()`, the uniqueness check and `'unscoped'` loads read through the table, not through your `find`, `first` or
-`exists` overrides, on a model that declares a global scope: a condition an override adds is not applied there. These
+`exists` overrides, on an opted-in model (one that declares a global scope, its own, inherited or from a trait): a condition an override adds is not applied there. These
 calls exist to see rows that scopes hide, and an override that filters by hand would hide them again.
 
 #### Differences from Eloquent ####
