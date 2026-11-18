@@ -353,8 +353,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
     }
 
     /**
-     * The related models a load finds with the finder $options: without the option 'unscoped', by the target's
-     * find($type, $options), as always; with it, by its Table with the global scopes it names removed (every one for
+     * The related models a load finds with the finder $options: without the option 'unscoped', or with an empty list,
+     * by the target's find($type, $options), as always; with it, by its Table with the global scopes it names removed (every one for
      * true) and the options Model::find() would build, without calling the target's find()/first() (spec §4.5). A
      * name that is no global scope of the target throws there, before any SQL (error 12).
      *
@@ -368,7 +368,8 @@ abstract class AbstractRelationship implements InterfaceRelationship
         /** @var class-string<Model> $class */
         $class = $this->class_name;
 
-        if (!isset($this->options['unscoped'])) {
+        // an empty list removes nothing: the load is the one without the option
+        if ([] === ($this->options['unscoped'] ?? [])) {
             return $class::find($type, $options);
         }
 

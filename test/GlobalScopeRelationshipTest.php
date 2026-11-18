@@ -125,6 +125,24 @@ class GlobalScopeRelationshipTest extends DatabaseTest
         $this->assert_same(['find all', 'find all', 'find all', 'find all'], GlobalScopedRecordingAuthor::$calls);
     }
 
+    public function test_empty_unscoped_list_loads_as_without_the_option(): void
+    {
+        // 'unscoped' => [] removes nothing: the loads are scoped and go through the public find()/first(), as plain ones
+        $owner = GlobalScopedRecordingAuthor::without_global_scope('not_bush')->find(2);   // parent 2, children 2 and 4
+
+        $this->assert_null($owner->empty_unscoped_parent);
+        $this->assert_same([4], $this->ids($owner->empty_unscoped_children));
+        $this->assert_null($owner->empty_unscoped_second_child);
+        $this->assert_same(['first', 'find first', 'find all', 'find first'], GlobalScopedRecordingAuthor::$calls);
+
+        GlobalScopedRecordingAuthor::$calls = [];
+        $eager = GlobalScopedRecordingAuthor::find(4, ['include' => ['empty_unscoped_parent', 'empty_unscoped_children', 'empty_unscoped_second_child']]);
+        $this->assert_null($eager->empty_unscoped_parent);
+        $this->assert_same([], $eager->empty_unscoped_children);
+        $this->assert_null($eager->empty_unscoped_second_child);
+        $this->assert_same(['find pk', 'find all', 'find all', 'find all'], GlobalScopedRecordingAuthor::$calls);
+    }
+
     public function test_nested_same_class_include_inside_unscoped_load_keeps_its_scopes(): void
     {
         // any_author lifts the scope for its own load only: author 2's books load, and their (scoped) author is hidden

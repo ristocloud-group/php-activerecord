@@ -94,11 +94,11 @@ class BelongsTo extends AbstractRelationship
         $options = $this->unset_non_finder_options($this->options);
         $options['conditions'] = $conditions;
 
-        if (isset($this->options['unscoped'])) {
+        if ([] !== ($this->options['unscoped'] ?? [])) {
             return $this->find_related('first', $options);
         }
 
-        // without 'unscoped', first() as always: an override of it on the target still runs
+        // without 'unscoped', or with an empty list, first() as always: an override of it on the target still runs
         $class = $this->class_name;
         return $class::first($options);
     }
