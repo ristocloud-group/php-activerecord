@@ -45,6 +45,11 @@ class GlobalScopeRegistryTest extends DatabaseTest
             'not protected static' => [GlobalScopePublic::class, 'is marked #[GlobalScope] but is not a protected static method'],
             'both attributes' => [GlobalScopeBothAttributes::class, 'is marked both #[Scope] and #[GlobalScope]'],
             'like a local scope' => [GlobalScopeLikeLocal::class, 'is also a local scope of the model'],
+            'like a Query method' => [GlobalScopeQueryMethod::class, 'GlobalScopeQueryMethod declares the scope latest(), which is a public method of Query'],
+            'like a dynamic finder' => [GlobalScopeFinderPrefix::class, 'GlobalScopeFinderPrefix declares the scope find_by_hidden(), which starts like a dynamic finder'],
+            // Query has public update() and delete(): its rule comes first (a static delete() cannot be declared at all,
+            // Model's delete() is an instance method)
+            'update' => [GlobalScopeUpdate::class, 'GlobalScopeUpdate declares the scope update(), which is a public method of Query'],
             'required parameter' => [GlobalScopeRequiredParam::class, 'takes a required parameter besides the query'],
             'redeclared without' => [GlobalScopeRedeclaredWithout::class, 'redeclares a global scope without #[GlobalScope]'],
         ];
