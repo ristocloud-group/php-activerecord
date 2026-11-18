@@ -33,6 +33,7 @@ namespace ActiveRecord;
  * @phpstan-type Where WhereBasic|WhereColumn|WhereRaw|WhereIn|WhereNull|WhereBetween|WhereBetweenColumns|WhereLike|WhereHash|WhereGroup
  * @phpstan-type Join array{type: 'INNER'|'LEFT'|'RIGHT'|'CROSS', table: string, alias: string|null, wheres: list<Where>}
  * @phpstan-type OrderBy array{type: 'column', column: string, direction: 'ASC'|'DESC'}|array{type: 'raw', sql: string, bindings: list<mixed>}|array{type: 'random'}
+ * @phpstan-type ScopeState array{all: bool, removed: list<string>, trashed: 'default'|'without'|'with'|'only'}
  * @phpstan-type GroupBy array{type: 'column', column: string}|array{type: 'raw', sql: string, bindings: list<mixed>}
  */
 final class QueryState
@@ -171,6 +172,20 @@ final class QueryState
 
     /** Whether the models the builder finds are readonly (Query::readonly()), as the legacy 'readonly' option has them. */
     public bool $readonly = false;
+
+    /** The fields that are about the query, not a clause of it: held_fields() never reports them. */
+    public const array META_FIELDS = ['scopes'];
+
+    /** The scope state of a query that applies every global scope. */
+    public const array ACTIVE_SCOPES = ['all' => false, 'removed' => [], 'trashed' => 'default'];
+
+    /**
+     * Which global scopes the query applies: null for a query that applies none (a legacy write, a
+     * where() group), otherwise the scopes it lifted. A meta field, not a clause.
+     *
+     * @var ScopeState|null
+     */
+    public ?array $scopes = null;
 
     /**
      * A copy of a state shares no group of conditions with it: the groups of the WHERE, of the HAVING and of the

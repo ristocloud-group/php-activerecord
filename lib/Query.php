@@ -159,6 +159,7 @@ class Query
     public function __construct(private readonly string $model_class)
     {
         $this->state = new QueryState();
+        $this->state->scopes = QueryState::ACTIVE_SCOPES;
     }
 
     /**
@@ -3560,6 +3561,7 @@ class Query
     {
         $query = new self($this->model_class);
         $query->table = $this->table;
+        $query->state->scopes = null;
         $callback($query);
 
         // a where call that added no condition, and a when() or an unless() that skipped its callback, are where clauses

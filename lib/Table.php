@@ -281,7 +281,10 @@ class Table
      */
     public function options_to_sql($options)
     {
-        return Query::from_options($this, $options)->to_sql_builder();
+        $query = Query::from_options($this, $options);
+        $query->state()->scopes = null;
+
+        return $query->to_sql_builder();
     }
 
     /**
@@ -639,8 +642,10 @@ class Table
         // no alias. The check at load (check_alias_attribute()) keeps an alias from being named like a
         // column, but a shadow it did not see must not move the rows a save() writes. refuse_terminator:
         // false: the WHERE is sent as it always was (see QueryCompiler::refuse_terminated_conditions())
-        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])
-            ->execute_update($data ?: [], timestamps: false, format_dates: false, refuse_terminator: false);
+        $query = Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []]);
+        $query->state()->scopes = null;
+
+        return $query->execute_update($data ?: [], timestamps: false, format_dates: false, refuse_terminator: false);
     }
 
     /**
@@ -663,7 +668,10 @@ class Table
 
         // the engine sends the values as they are prepared here. 'mapped_names' => []: a pk hash reads no
         // alias, and refuse_terminator: false: the WHERE is sent as it always was (see update())
-        return Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []])->execute_delete(format_dates: false, refuse_terminator: false);
+        $query = Query::from_options($this, ['conditions' => $conditions, 'mapped_names' => []]);
+        $query->state()->scopes = null;
+
+        return $query->execute_delete(format_dates: false, refuse_terminator: false);
     }
 
     /**

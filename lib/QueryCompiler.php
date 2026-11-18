@@ -1363,7 +1363,7 @@ final class QueryCompiler
         $held = [];
 
         foreach (get_object_vars($state) as $field => $value) {
-            if ($value !== $new[$field] && !in_array($field, $except, true) && !('legacy' === $field && [] === $value)) {
+            if ($value !== $new[$field] && !in_array($field, QueryState::META_FIELDS, true) && !in_array($field, $except, true) && !('legacy' === $field && [] === $value)) {
                 $held[] = $field;
             }
         }
@@ -1373,7 +1373,8 @@ final class QueryCompiler
 
     /**
      * Whether every field of a state but the legacy options is as in a new state. It names each field: a field added to
-     * QueryState must be added here too, which QueryEngineTest checks for every field of the class.
+     * QueryState must be added here too, which QueryEngineTest checks for every field of the class. The meta fields
+     * (QueryState::META_FIELDS) are not clauses: they are left out, and held_fields() ignores them too.
      */
     private static function holds_no_builder_clause(QueryState $state): bool
     {

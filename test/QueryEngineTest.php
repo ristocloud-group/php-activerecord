@@ -1423,6 +1423,11 @@ class QueryEngineTest extends DatabaseTest
     {
         foreach ((new ReflectionClass(ActiveRecord\QueryState::class))->getProperties() as $property) {
             $field = $property->getName();
+
+            if (in_array($field, ActiveRecord\QueryState::META_FIELDS, true)) {
+                continue;
+            }
+
             $type = $property->getType();
             $this->assert_true($type instanceof ReflectionNamedType, $field);
             $value = match ($type->getName()) {
@@ -1447,5 +1452,21 @@ class QueryEngineTest extends DatabaseTest
         $empty = new ActiveRecord\QueryState();
         $empty->legacy = [];
         $this->assert_same([], ActiveRecord\QueryCompiler::held_fields($empty, []));
+    }
+
+    public function test_meta_fields_are_never_held(): void
+    {
+        $state = new ActiveRecord\QueryState();
+        $state->scopes = ActiveRecord\QueryState::ACTIVE_SCOPES;
+        $this->assert_same([], ActiveRecord\QueryCompiler::held_fields($state, []));
+        $state->legacy = ['conditions' => 'author_id = 1'];
+        $this->assert_same(['legacy'], ActiveRecord\QueryCompiler::held_fields($state, []));
+    }
+
+    public function test_queries_are_scoped_by_default_and_unscoped_paths_clear_it(): void
+    {
+        $this->assert_same(ActiveRecord\QueryState::ACTIVE_SCOPES, Author::new_query()->state()->scopes);
+        $this->assert_same(ActiveRecord\QueryState::ACTIVE_SCOPES, (new ActiveRecord\Query(Author::class))->state()->scopes);
+        $this->assert_same(ActiveRecord\QueryState::ACTIVE_SCOPES, ActiveRecord\Query::from_options(Author::table(), [])->state()->scopes);
     }
 }
