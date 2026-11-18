@@ -30,6 +30,7 @@ class GlobalScopeGuardTest extends DatabaseTest
         'group_by', 'group_by_raw', 'having', 'or_having', 'having_raw', 'or_having_raw', 'having_null', 'having_not_null', 'having_between',
         'limit', 'take', 'offset', 'skip', 'for_page', 'with', 'without', 'with_only', 'readonly',
         'when', 'unless', 'tap', 'clone', 'without_global_scope', 'without_global_scopes',
+        'with_trashed', 'only_trashed', 'without_trashed',
     ];
 
     /**

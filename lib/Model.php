@@ -181,6 +181,9 @@ use Closure;
  * @method static \Generator<int, static> lazy_by_id_desc(int $chunk_size = 1000, ?string $column = null, ?string $alias = null) The models of a new query on this class one at a time, read by key in pages of this many, the highest first
  * @method static Query<static> without_global_scope(string $name) A new query on this class without this global scope
  * @method static Query<static> without_global_scopes(?array<string> $names = null) A new query on this class without these global scopes, or without any with null
+ * @method static Query<static> with_trashed() A new query on this class that reads the trashed rows with the live ones (a SoftDeletable model)
+ * @method static Query<static> only_trashed() A new query on this class that reads the trashed rows only (a SoftDeletable model)
+ * @method static Query<static> without_trashed() A new query on this class that reads the live rows only (a SoftDeletable model)
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */

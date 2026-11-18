@@ -149,6 +149,9 @@ class Query
         'lazy_by_id_desc',
         'without_global_scope',
         'without_global_scopes',
+        'with_trashed',
+        'only_trashed',
+        'without_trashed',
     ];
 
     private QueryState $state;
@@ -2815,8 +2818,78 @@ class Query
     }
 
     /**
+     * Reads the trashed rows of a soft-delete model with the live ones (spec §3.3, §4.2): the soft-delete filter is
+     * left out. The last of with_trashed(), only_trashed() and without_trashed() wins, as does a removal of the
+     * soft_deletes scope.
+     *
+     * @throws ActiveRecordException on a where() group's query or a global scope's own query, which carry no scopes,
+     *   or on a model that is not SoftDeletable; the query is left as it was
+     * @throws ConfigException when the model's global scopes or its soft-delete column are declared wrongly
+     */
+    public function with_trashed(): static
+    {
+        return $this->set_trashed('with_trashed', 'with');
+    }
+
+    /**
+     * Reads the trashed rows of a soft-delete model only (spec §3.3, §4.2): the soft-delete filter is replaced by
+     * "<column> IS NOT NULL", in its place among the model's global scopes; the two are never both applied.
+     *
+     * @throws ActiveRecordException|ConfigException as with_trashed() does
+     */
+    public function only_trashed(): static
+    {
+        return $this->set_trashed('only_trashed', 'only');
+    }
+
+    /**
+     * Reads the live rows of a soft-delete model only (spec §3.3, §4.2): the soft-delete filter again, whatever an
+     * earlier call lifted, without_global_scopes() included. Unlike the default, it also narrows a force delete.
+     *
+     * @throws ActiveRecordException|ConfigException as with_trashed() does
+     */
+    public function without_trashed(): static
+    {
+        return $this->set_trashed('without_trashed', 'without');
+    }
+
+    /**
+     * Sets the trashed state of this query to $trashed for the method $method (see with_trashed()), after checking the
+     * model's soft delete: its global scopes and its soft-delete column.
+     *
+     * @param 'with'|'only'|'without' $trashed
+     * @throws ActiveRecordException|ConfigException as with_trashed() does
+     */
+    private function set_trashed(string $method, string $trashed): static
+    {
+        if (null === $this->state->scopes) {
+            throw self::carries_no_scopes($method);
+        }
+
+        if (!is_a($this->model_class, SoftDeletable::class, true)) {
+            throw new ActiveRecordException(sprintf('%s() needs a model with soft delete: %s is not SoftDeletable', $method, $this->model_class));
+        }
+
+        ScopeRegistry::global_scopes($this->model_class);
+        ScopeRegistry::soft_delete_column($this->table());
+        $this->state->scopes['trashed'] = $trashed;
+
+        return $this;
+    }
+
+    /**
+     * The error of a removal method, $method, called on a query that applies no scope (spec §6, error 13).
+     */
+    private static function carries_no_scopes(string $method): ActiveRecordException
+    {
+        return new ActiveRecordException(sprintf("%s() cannot be used on a where() group or on a global scope's query: they carry no scopes", $method));
+    }
+
+    /**
      * Removes the global scopes $names of the model from this query, or every one with null, for the removal method
-     * $method (see without_global_scopes()). Every name is checked before the query changes.
+     * $method (see without_global_scopes()). Every name is checked before the query changes. The soft_deletes scope of
+     * a SoftDeletable model is governed by the trashed state (spec §4.2): removing it, by name or with null, sets the
+     * state to with.
      *
      * @param list<string>|null $names
      * @throws ActiveRecordException as without_global_scopes() does
@@ -2824,17 +2897,20 @@ class Query
     private function remove_global_scopes(string $method, ?array $names): static
     {
         if (null === $this->state->scopes) {
-            throw new ActiveRecordException(sprintf("%s() cannot be used on a where() group or on a global scope's query: they carry no scopes", $method));
+            throw self::carries_no_scopes($method);
         }
 
         if (null === $names) {
             $this->state->scopes['all'] = true;
+            $this->state->scopes['trashed'] = 'with';
 
             return $this;
         }
 
         $scopes = ScopeRegistry::global_scopes($this->model_class);
         $removed = $this->state->scopes['removed'];
+        $trashed = $this->state->scopes['trashed'];
+        $soft_deletable = is_a($this->model_class, SoftDeletable::class, true);
 
         foreach ($names as $name) {
             if (!isset($scopes[$name])) {
@@ -2846,12 +2922,15 @@ class Query
                 ));
             }
 
-            if (!in_array($name, $removed, true)) {
+            if ($soft_deletable && SoftDeletable::SCOPE === $name) {
+                $trashed = 'with';
+            } elseif (!in_array($name, $removed, true)) {
                 $removed[] = $name;
             }
         }
 
         $this->state->scopes['removed'] = $removed;
+        $this->state->scopes['trashed'] = $trashed;
 
         return $this;
     }
