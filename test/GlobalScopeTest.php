@@ -351,4 +351,49 @@ class GlobalScopeTest extends DatabaseTest
     {
         $this->assert_same(Author::where('author_id', 1)->to_sql(), (new ActiveRecord\Query(Author::class))->where('author_id', 1)->to_sql());
     }
+
+    public function test_reload_drops_every_scope(): void
+    {
+        $scoped = GlobalScopedAuthor::without_global_scopes()->find(2);
+        $this->assert_same('George W. Bush', $scoped->reload()->name);
+    }
+
+    public function test_reload_of_a_row_that_is_gone_keeps_the_record_not_found_message(): void
+    {
+        $scoped = GlobalScopedAuthor::without_global_scopes()->find(2);
+        GlobalScopedAuthor::connection()->query('DELETE FROM authors WHERE author_id = 2');
+        $this->assert_exception_message_contains(
+            "Couldn't find GlobalScopedAuthor with ID=2",
+            fn() => $scoped->reload(),
+            RecordNotFound::class,
+        );
+    }
+
+    public function test_reload_composite_key_drops_every_scope(): void
+    {
+        $this->assert_null(GlobalScopedCompositeItem::new_query()->where('user_id', 3)->first());
+        $hidden = GlobalScopedCompositeItem::without_global_scopes()->where('user_id', 3)->first();
+        $this->assert_same(3, (int) $hidden->reload()->user_id);
+        $this->assert_same(1, (int) $hidden->story_id);
+    }
+
+    public function test_uniqueness_counts_rows_hidden_by_scopes(): void
+    {
+        $author = new GlobalScopedUniqueAuthor(['name' => 'George W. Bush']);
+        $this->assert_false($author->is_valid());
+        $this->assert_true((new GlobalScopedUniqueAuthor(['name' => 'Nobody Yet']))->is_valid());
+    }
+
+    public function test_reload_and_uniqueness_of_unscoped_models_still_use_the_public_methods(): void
+    {
+        $author = FindRecordingAuthor::find(1);
+        FindRecordingAuthor::$finds = 0;
+        FindRecordingAuthor::$exists_calls = 0;
+
+        $author->reload();
+        $this->assert_same(1, FindRecordingAuthor::$finds);
+
+        (new FindRecordingAuthor(['name' => 'Tito']))->is_valid();
+        $this->assert_same(1, FindRecordingAuthor::$exists_calls);
+    }
 }

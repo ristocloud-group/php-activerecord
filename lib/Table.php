@@ -310,6 +310,31 @@ class Table
     }
 
     /**
+     * The models the options select with global scopes removed: every scope, or those named.
+     *
+     * @internal Serves the library's own reads (reload(), uniqueness, relationship loads); not a supported API.
+     * @param array<string, mixed> $options
+     * @param list<string>|null $names The scopes to remove; null removes all
+     * @return list<Model>
+     */
+    public function find_without_global_scopes(array $options, ?array $names = null): array
+    {
+        return Query::from_options($this, $options)->without_global_scopes($names)->get();
+    }
+
+    /**
+     * Whether any row matches $options with global scopes removed: every scope, or those named.
+     *
+     * @internal Serves the library's own checks (uniqueness); not a supported API.
+     * @param array<string, mixed> $options
+     * @param list<string>|null $names The scopes to remove; null removes all
+     */
+    public function exists_without_global_scopes(array $options, ?array $names = null): bool
+    {
+        return Query::from_options($this, $options)->without_global_scopes($names)->exists();
+    }
+
+    /**
      * The model of the class of this table for a row read from it: not a new record, not dirty, readonly when asked.
      *
      * @internal Serves find_by_sql() and Cursor; not a supported API.

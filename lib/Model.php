@@ -1960,7 +1960,10 @@ class Model
         $this->__relationships = [];
         $pk = $this->get_values_for($this->get_primary_key());
 
-        if (count($pk) > 1) {
+        // a model with global scopes reloads its own row whatever the scopes hide
+        $unscoped = ScopeRegistry::has_global_scopes(static::class);
+
+        if (count($pk) > 1 || $unscoped) {
             // a find by pk looks a list of values up in the first pk column only: a
             // composite key names its row by every column
             $conditions = [];
@@ -1971,7 +1974,13 @@ class Model
                 $conditions[$name] = QueryCompiler::pk_value_for_column($table, $name, $value, $connection);
             }
 
-            $found = static::find('first', ['conditions' => $conditions]);
+            if ($unscoped) {
+                $found = $table->find_without_global_scopes(
+                    ['conditions' => $conditions, 'limit' => 1, 'offset' => 0, 'mapped_names' => []],
+                )[0] ?? null;
+            } else {
+                $found = static::find('first', ['conditions' => $conditions]);
+            }
 
             if (null === $found) {
                 $values = array_map(fn($value) => match (true) {
