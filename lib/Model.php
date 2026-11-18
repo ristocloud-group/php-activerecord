@@ -179,6 +179,8 @@ use Closure;
  * @method static bool chunk_by_id_desc(int $count, callable $callback, ?string $column = null, ?string $alias = null) Passes the rows of a new query on this class to the callback in pages of this many models read by key, the highest first, until it returns false
  * @method static \Generator<int, static> lazy_by_id(int $chunk_size = 1000, ?string $column = null, ?string $alias = null, bool $include_new_rows = false) The models of a new query on this class one at a time, read by key in pages of this many
  * @method static \Generator<int, static> lazy_by_id_desc(int $chunk_size = 1000, ?string $column = null, ?string $alias = null) The models of a new query on this class one at a time, read by key in pages of this many, the highest first
+ * @method static Query<static> without_global_scope(string $name) A new query on this class without this global scope
+ * @method static Query<static> without_global_scopes(?array<string> $names = null) A new query on this class without these global scopes, or without any with null
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */

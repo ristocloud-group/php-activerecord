@@ -13,6 +13,7 @@ namespace ActiveRecord;
  * @internal Serves Table, Model and Query; not a supported API.
  * @phpstan-import-type Where from QueryState
  * @phpstan-import-type WhereGroup from QueryState
+ * @phpstan-import-type ScopeState from QueryState
  */
 final class ScopeRegistry
 {
@@ -29,6 +30,18 @@ final class ScopeRegistry
 
     /** @var array<string, string> public scope name => name of the method that implements it */
     private array $scopes = [];
+
+    /**
+     * The global scopes whose bodies are running, "<class>::<scope>" => true, by the fiber that runs them (the main
+     * flow under self::$main): a scope applied again inside its own body is refused (see global_wheres()). Built on
+     * first use.
+     *
+     * @var \WeakMap<object, array<string, true>>|null
+     */
+    private static ?\WeakMap $running = null;
+
+    /** The key of self::$running outside any fiber. */
+    private static ?object $main = null;
 
     /**
      * Reflects the scopes of $model_class and validates them. The names are compared as PHP compares method names,
@@ -152,6 +165,97 @@ final class ScopeRegistry
     public static function has_global_scopes(string $model_class): bool
     {
         return [] !== self::global_scopes($model_class);
+    }
+
+    /**
+     * The conditions the global scopes of $model_class add to a query whose scope state is $scopes (spec §4.4 steps 1
+     * to 3): those it does not remove, by name in its removed list or all of them, in index order (see
+     * global_scopes()), each one AND group, its conditions in parentheses. A scope that adds no condition adds no
+     * group. Each runs on a new query of the model, read through $table, that applies no scope itself and holds
+     * nothing; it may add where clauses only. What a where call that added nothing or a skipped when() records stays
+     * on that query.
+     *
+     * While a scope's body runs, it is marked for the running fiber: a query of the model compiled in the body that
+     * applies the same scope again, directly or through another model's scope, is refused. One that removes it runs.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param class-string $model_class
+     * @param ScopeState $scopes
+     * @return list<WhereGroup>
+     * @throws ConfigException when a global scope is declared wrongly
+     * @throws ActiveRecordException when a scope adds a clause other than a where, returns anything but null or its
+     *   query, or is applied again inside its own body (spec §6, errors 9 to 11)
+     */
+    public static function global_wheres(string $model_class, Table $table, array $scopes): array
+    {
+        $groups = [];
+
+        foreach (self::global_scopes($model_class) as $name => $scope) {
+            if ($scopes['all'] || in_array($name, $scopes['removed'], true)) {
+                continue;
+            }
+
+            $query = Query::for_table($table);
+            $query->state()->scopes = null;
+            $result = self::run_global_scope($model_class, $name, $scope, $query);
+
+            if (null !== $result && $result !== $query) {
+                throw self::return_error($name, $model_class, $result);
+            }
+
+            $held = QueryCompiler::held_clauses($query->state(), ['wheres', 'empty_where', 'skipped_when']);
+
+            if (null !== $held) {
+                throw new ActiveRecordException(sprintf('The global scope %s() of %s can only add where clauses: it also adds %s', $name, $model_class, $held));
+            }
+
+            if ([] !== $query->state()->wheres) {
+                $groups[] = self::group($query->state()->wheres);
+            }
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Runs the global scope $name of $model_class on $query, marked for the running fiber while its body runs (see
+     * global_wheres()), and returns what it returns.
+     *
+     * @param Query<Model> $query
+     * @throws ActiveRecordException when the scope is running already in this fiber
+     */
+    private static function run_global_scope(string $model_class, string $name, \Closure $scope, Query $query): mixed
+    {
+        self::$running ??= new \WeakMap();
+        $fiber = \Fiber::getCurrent() ?? (self::$main ??= new \stdClass());
+        $key = "$model_class::$name";
+
+        if (isset(self::$running[$fiber][$key])) {
+            throw new ActiveRecordException(sprintf(
+                "The global scope %s() of %s is applied again inside its own body: a query of %s run there must remove it with without_global_scope('%s')",
+                $name,
+                $model_class,
+                $model_class,
+                $name,
+            ));
+        }
+
+        $running = self::$running[$fiber] ?? [];
+        $running[$key] = true;
+        self::$running[$fiber] = $running;
+
+        try {
+            return $scope($query);
+        } finally {
+            $running = self::$running[$fiber];
+            unset($running[$key]);
+
+            if ([] === $running) {
+                unset(self::$running[$fiber]);
+            } else {
+                self::$running[$fiber] = $running;
+            }
+        }
     }
 
     /**
@@ -345,12 +449,7 @@ final class ScopeRegistry
             $result = (new \ReflectionMethod($this->model_class, $this->scopes[$name]))->invoke(null, $query, ...$args);
 
             if (null !== $result && $result !== $query) {
-                throw new ActiveRecordException(sprintf(
-                    'The scope %s() of %s must return null or the query it was given, %s returned',
-                    $name,
-                    $this->model_class,
-                    get_debug_type($result),
-                ));
+                throw self::return_error($name, $this->model_class, $result);
             }
         } finally {
             // read again through the query: the scope changed its state
@@ -395,6 +494,19 @@ final class ScopeRegistry
         $group->wheres = $wheres;
 
         return ['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group];
+    }
+
+    /**
+     * The error of a scope, local or global, that returns anything but null or the query it was given.
+     */
+    private static function return_error(string $name, string $model_class, mixed $result): ActiveRecordException
+    {
+        return new ActiveRecordException(sprintf(
+            'The scope %s() of %s must return null or the query it was given, %s returned',
+            $name,
+            $model_class,
+            get_debug_type($result),
+        ));
     }
 
     private static function starts_a_dynamic_finder(string $name): bool
