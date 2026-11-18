@@ -1954,6 +1954,7 @@ class Model
      * (inserted again); with the row gone it throws RecordNotFound.
      *
      * @return Model
+     * @throws ActiveRecordException when the model has a global scope and its table no primary key
      */
     public function reload()
     {
@@ -1962,6 +1963,11 @@ class Model
 
         // a model with global scopes reloads its own row whatever the scopes hide
         $unscoped = ScopeRegistry::has_global_scopes(static::class);
+
+        // with no primary key there is no row to name: the unscoped read would load any row of the table
+        if ($unscoped && [] === $pk) {
+            throw new ActiveRecordException('Cannot reload, no primary key defined for: ' . static::class);
+        }
 
         if (count($pk) > 1 || $unscoped) {
             // a find by pk looks a list of values up in the first pk column only: a

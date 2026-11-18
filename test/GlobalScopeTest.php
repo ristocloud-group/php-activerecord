@@ -440,6 +440,20 @@ class GlobalScopeTest extends DatabaseTest
         $this->assert_same(1, (int) $hidden->story_id);
     }
 
+    public function test_reload_without_a_primary_key_throws_and_leaves_the_object_as_it_was(): void
+    {
+        // pkless_items has no primary key: there is no row to name, rather than the first row of the table
+        GlobalScopedPklessItem::create(['code' => 2, 'name' => 'second']);
+        $item = GlobalScopedPklessItem::new_query()->where('code', 2)->first();
+
+        $this->assert_exception_message_contains(
+            'Cannot reload, no primary key defined for: GlobalScopedPklessItem',
+            fn() => $item->reload(),
+            ActiveRecordException::class,
+        );
+        $this->assert_same(['code' => 2, 'name' => 'second'], $item->attributes());
+    }
+
     public function test_uniqueness_counts_rows_hidden_by_scopes(): void
     {
         $author = new GlobalScopedUniqueAuthor(['name' => 'George W. Bush']);
