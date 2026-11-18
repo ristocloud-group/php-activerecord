@@ -161,6 +161,46 @@ class GlobalScopeTest extends DatabaseTest
         $this->assert_same(3, $fiber->getReturn());
     }
 
+    public function test_a_scope_applied_again_inside_its_body_in_a_fiber_throws_there(): void
+    {
+        // error 11 from the fiber branch of the guard: thrown inside the fiber, out of start()
+        $fiber = new Fiber(fn() => GlobalScopeReentrant::new_query()->get());
+        $this->assert_exception_message_contains(
+            "The global scope again() of GlobalScopeReentrant is applied again inside its own body",
+            fn() => $fiber->start(),
+            ActiveRecordException::class,
+        );
+        $this->assert_true($fiber->isTerminated());
+
+        // the main flow carries no mark of it
+        $this->assert_same(4, GlobalScopeReentrant::without_global_scope('again')->count());
+        $this->assert_exception_message_contains('is applied again inside its own body', fn() => GlobalScopeReentrant::new_query()->count(), ActiveRecordException::class);
+    }
+
+    public function test_a_scope_that_throws_in_a_fiber_is_no_longer_marked_there(): void
+    {
+        $fiber = new Fiber(function (): int {
+            GlobalScopeThrowsOnDemand::$fail = true;
+
+            try {
+                GlobalScopeThrowsOnDemand::new_query()->get();
+                $this->fail('the scope did not throw');
+            } catch (RuntimeException $e) {
+                $this->assert_same('the scope failed', $e->getMessage());
+            } finally {
+                GlobalScopeThrowsOnDemand::$fail = false;
+            }
+
+            // in the same fiber, the scope runs again: a mark left by the throw would be taken for a re-entry
+            return GlobalScopeThrowsOnDemand::new_query()->count();
+        });
+
+        $fiber->start();
+        $this->assert_true($fiber->isTerminated());
+        $this->assert_same(3, $fiber->getReturn());
+        $this->assert_same(3, GlobalScopeThrowsOnDemand::new_query()->count());
+    }
+
     public function test_inner_query_that_removes_the_scope_is_allowed(): void
     {
         $this->assert_same(4, GlobalScopeInnerRemoval::new_query()->count());
