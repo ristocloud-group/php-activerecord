@@ -1636,6 +1636,8 @@ final class QueryCompiler
         // the model's rows are named by its table (see rows_name()). It is never compiled
         $context = new QueryState();
 
+        // an empty 'joins' ('' or []) counts too, as compile_legacy() counts it for the hash keys and the select: the
+        // columns are then qualified with the model's table, which names them as well without a join
         if (array_key_exists('joins', $options) && !array_key_exists('from', $options)) {
             $context->joins = ["the legacy 'joins' option"];
         }

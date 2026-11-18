@@ -4,8 +4,9 @@ use ActiveRecord\Query;
 
 /**
  * Guards for spec §9.3 items 2 and 7: every scoped entry carries the global scope of an opted-in model, and every
- * documented unscoped path (spec §3.6, §4.3) does not. The scoped terminal methods of Query are derived by reflection
- * from Query::FORWARDABLE, so a method added without a sample call here fails the test.
+ * documented unscoped path (spec §3.6, §4.3) does not. Every public method of Query, found by reflection, is
+ * classified exactly once (builder-only, SQL text, unscoped or terminal), and every terminal one has a sample call
+ * here: a method added to Query without either fails the test.
  *
  * Fixtures: authors 1 Tito, 2 George W. Bush, 3 Bill Clinton, 4 Uncle Bob. GlobalScopedAuthor hides author 2.
  */
@@ -85,7 +86,7 @@ class GlobalScopeGuardTest extends DatabaseTest
     }
 
     /**
-     * One sample call per terminal Query method of Query::FORWARDABLE (plus find, first, exists, count and the writes).
+     * One sample call per scoped terminal method of Query, the writes included.
      *
      * @return array<string, callable(): mixed>
      */

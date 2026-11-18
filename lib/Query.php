@@ -2806,7 +2806,8 @@ class Query
      * @param list<string>|null $names
      * @throws ActiveRecordException on a where() group's query or a global scope's own query, which carry no scopes,
      *   or for a name that is no global scope of the model; the query is left as it was
-     * @throws ConfigException when a global scope of the model is declared wrongly
+     * @throws ConfigException when $names is a list and a global scope of the model is declared wrongly: with null the
+     *   scopes are not read, and a wrong declaration surfaces when the query is compiled
      */
     public function without_global_scopes(?array $names = null): static
     {
