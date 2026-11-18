@@ -196,7 +196,7 @@ final class QueryCompiler
             throw new ActiveRecordException(sprintf('A query on %s holds both legacy options and builder clauses: it compiles the one or the other', $this->table->class->name));
         }
 
-        return $this->compile_legacy($state->legacy);
+        return $this->compile_legacy($state->legacy, $state);
     }
 
     /**
@@ -1091,9 +1091,12 @@ final class QueryCompiler
      * other key, a joined table's, stays as written. A hash's names are read through the
      * model's aliases (#144), unless the options give the names to map as 'mapped_names'.
      *
+     * The WHERE is that of the options, after the groups of the model's global scopes when $state applies them (see
+     * wrap_legacy_where()).
+     *
      * @param array<string, mixed> $options
      */
-    private function compile_legacy(array $options): SQLBuilder
+    private function compile_legacy(array $options, QueryState $state): SQLBuilder
     {
         $table = array_key_exists('from', $options) ? $options['from'] : $this->table->get_fully_qualified_table_name();
         $sql = new SQLBuilder($this->connection(), $table);
@@ -1119,6 +1122,7 @@ final class QueryCompiler
         }
 
         $this->apply_conditions($sql, $options);
+        $this->wrap_legacy_where($sql, $options, $state);
 
         if (array_key_exists('order', $options)) {
             $sql->order($options['order']);
@@ -1552,6 +1556,55 @@ final class QueryCompiler
     }
 
     /**
+     * Puts the groups of the model's global scopes before the WHERE that the legacy $options gave $sql (see
+     * apply_conditions()), when $state applies them (spec §4.4 step 6): "(scope1) AND (scope2) AND (<user WHERE>)", with
+     * the values in that order. The user's WHERE is taken back from $sql as SQLBuilder rendered it, its values already
+     * expanded, and is written again as it is, followed by a newline when it holds -- or # (see raw_fragment()), so that
+     * a line comment in it cannot swallow the parenthesis that closes it. A user's WHERE SQLBuilder writes no WHERE for
+     * (empty, or falsy as '0') leaves the scopes alone. Nothing changes when $state applies no scope (a legacy write of
+     * Table, options_to_sql()) or no scope adds a condition.
+     *
+     * The columns of the scopes are named as column() names the builder's (spec §3.6): with a 'joins' option and no
+     * 'from', qualified with the model's table; otherwise, a 'from' replacing the table by one whose columns are not
+     * known here, as written.
+     *
+     * @param array<string, mixed> $options
+     * @throws ActiveRecordException|ConfigException as ScopeRegistry::global_wheres() does
+     */
+    private function wrap_legacy_where(SQLBuilder $sql, array $options, QueryState $state): void
+    {
+        if (null === $state->scopes) {
+            return;
+        }
+
+        $groups = ScopeRegistry::global_wheres($this->table->class->name, $this->table, $state->scopes);
+
+        if ([] === $groups) {
+            return;
+        }
+
+        // the context only tells column_reference() whether the statement has joins: with none from() or from_raw(),
+        // the model's rows are named by its table (see rows_name()). It is never compiled
+        $context = new QueryState();
+
+        if (array_key_exists('joins', $options) && !array_key_exists('from', $options)) {
+            $context->joins = ["the legacy 'joins' option"];
+        }
+
+        $scopes = $this->conditions($context)->compile($groups);
+        $own = $sql->get_where();
+
+        // as SQLBuilder, which renders no WHERE for a falsy one ('0' included)
+        if (!$own) {
+            $sql->where_condition($scopes['sql'], $scopes['values']);
+
+            return;
+        }
+
+        $sql->where_condition($scopes['sql'] . ' AND (' . self::raw_fragment($own) . ')', [...$scopes['values'], ...$sql->get_where_values()]);
+    }
+
+    /**
      * The clauses of an UPDATE or a DELETE, of the write $method: of a legacy write, its conditions, read as a SELECT
      * reads them (see apply_conditions()), its limit and its order, the only options a write reads; of the builder,
      * its WHERE, its ORDER BY (and their values) and its LIMIT, rendered as those of a SELECT are, by the same rules
@@ -1575,6 +1628,7 @@ final class QueryCompiler
 
             $options = $state->legacy;
             $this->apply_conditions($sql, $options);
+            $this->wrap_legacy_where($sql, $options, $state);
 
             if (isset($options['limit'])) {
                 $sql->limit($options['limit']);

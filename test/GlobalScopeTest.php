@@ -1,6 +1,7 @@
 <?php
 
 use ActiveRecord\ActiveRecordException;
+use ActiveRecord\RecordNotFound;
 
 /**
  * Global scopes applied on the builder path (spec §3.1, §3.3, §3.6, §4.2, §4.4, §6 errors 9-13): reads and bulk
@@ -190,6 +191,99 @@ class GlobalScopeTest extends DatabaseTest
         // the probe of the highest key is scoped too
         $this->assert_matches_regular_expression('/SELECT MAX\(\W?author_id\W?\) FROM \W?authors\W? WHERE \(\W?author_id\W? != \?\) AND \(\W?author_id\W? < \?\)/', $sql);
         $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\) AND \(\W?author_id\W? < \? AND \W?author_id\W? <= \? AND \W?author_id\W? > \?\) ORDER BY/', $sql);
+    }
+
+    public function test_legacy_finders_are_scoped(): void
+    {
+        $this->assert_null(GlobalScopedAuthor::find('first', ['conditions' => ['author_id = ?', 2]]));
+        $this->assert_same(3, GlobalScopedAuthor::count());
+        $this->assert_false(GlobalScopedAuthor::exists(2));
+        $this->assert_null(GlobalScopedAuthor::find_by_name('George W. Bush'));
+        $this->assert_same(3, count(GlobalScopedAuthor::all()));
+        $this->assert_same(4, GlobalScopedAuthor::last()->author_id);
+        $this->assert_same(1, count(GlobalScopedAuthor::all(['conditions' => 'author_id = 1 OR author_id = 2'])));
+    }
+
+    public function test_find_many_with_a_hidden_id_throws(): void
+    {
+        $this->expect_exception(RecordNotFound::class);
+        GlobalScopedAuthor::find([1, 2]);
+    }
+
+    public function test_legacy_bulk_writes_are_scoped(): void
+    {
+        $this->assert_same(3, GlobalScopedAuthor::update_all(['set' => ['name' => 'x']]));
+        $this->assert_same(3, GlobalScopedAuthor::delete_all());
+        $this->assert_same(1, Author::count());
+    }
+
+    public function test_legacy_joins_qualify_the_scope_and_from_does_not(): void
+    {
+        // authors joined with books: author_id is a column of both tables (book 1 is Tito's, book 2 George W. Bush's)
+        $found = null;
+        $sql = $this->sql_of(function () use (&$found) {
+            $found = GlobalScopedAuthor::find('all', ['joins' => 'INNER JOIN books ON books.author_id = authors.author_id']);
+        });
+        $this->assert_sql_has('WHERE (authors.author_id != ?)', $sql);
+        $this->assert_equals([1], $this->ids($found));
+
+        // 'from' without joins: unqualified, and working
+        $sql = $this->sql_of(function () use (&$found) {
+            $found = GlobalScopedAuthor::find('all', ['from' => 'authors']);
+        });
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\)$/', $sql);
+        $this->assert_same(3, count($found));
+    }
+
+    public function test_line_comment_in_user_where_is_closed(): void
+    {
+        $this->assert_same(1, count(GlobalScopedAuthor::all(['conditions' => "author_id = 1 -- note"])));
+    }
+
+    public function test_scope_on_an_alias_attribute(): void
+    {
+        $this->assert_same(3, GlobalScopedAliasAuthor::count());
+        $this->assert_same(3, GlobalScopedAliasAuthor::new_query()->count());
+    }
+
+    public function test_legacy_scope_groups_come_first_and_the_user_where_is_parenthesized(): void
+    {
+        $sql = $this->sql_of(fn() => GlobalScopedAuthorChild::all(['conditions' => ['author_id IN(?) OR name = ?', [1, 2, 3], 'x']]));
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\) AND \(\W?name\W? IS NOT NULL\) AND \(author_id IN\(\?,\?,\?\) OR name = \?\)$/', $sql);
+        $this->assert_equals([1, 3], $this->ids(GlobalScopedAuthor::all(['conditions' => ['author_id IN(?)', [1, 2, 3]], 'order' => 'author_id'])));
+        $this->assert_equals([1], $this->ids(GlobalScopedAuthor::all(['conditions' => ['name' => ['Tito', 'George W. Bush']]])));
+    }
+
+    public function test_legacy_falsy_user_where_leaves_the_scopes_only(): void
+    {
+        $sql = $this->sql_of(fn() => GlobalScopedAuthor::all(['conditions' => '0']));
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\)$/', $sql);
+        $this->assert_same(3, count(GlobalScopedAuthor::all(['conditions' => '0'])));
+    }
+
+    public function test_legacy_find_by_pk_folds_the_key_into_the_user_where(): void
+    {
+        $this->assert_same('Tito', GlobalScopedAuthor::find(1, ['conditions' => ['name' => 'Tito']])->name);
+        $this->assert_exception_message_contains("Couldn't find GlobalScopedAuthor with ID=2", fn() => GlobalScopedAuthor::find(2), RecordNotFound::class);
+
+        $sql = $this->sql_of(fn() => GlobalScopedAuthor::find(1, ['conditions' => ['name' => 'Tito']]));
+        $this->assert_matches_regular_expression('/WHERE \(\W?author_id\W? != \?\) AND \(\W?author_id\W? ?= ?\? AND \(\W?name\W? ?= ?\?\)\)/', $sql);
+    }
+
+    public function test_table_find_and_exists_are_scoped_and_options_to_sql_is_not(): void
+    {
+        $table = GlobalScopedAuthor::table();
+        $this->assert_same(3, count($table->find(['order' => 'author_id'])));
+        $this->assert_false($table->exists(['conditions' => ['author_id' => 2]]));
+        $this->assert_false(str_contains($table->options_to_sql(['conditions' => ['author_id' => 2]])->to_s(), '!='));
+    }
+
+    public function test_legacy_writes_with_conditions_limit_and_order(): void
+    {
+        $this->assert_same(1, GlobalScopedAuthor::update_all(['set' => ['name' => 'x'], 'conditions' => ['author_id <= ?', 2]]));
+        $this->assert_same('George W. Bush', Author::find(2)->name);
+        $this->assert_same(1, GlobalScopedAuthor::delete_all(['conditions' => 'author_id > 1', 'order' => 'author_id', 'limit' => 1]));
+        $this->assert_equals([1, 2, 4], $this->ids(Author::all(['order' => 'author_id'])));
     }
 
     public function test_model_without_scopes_sql_unchanged(): void

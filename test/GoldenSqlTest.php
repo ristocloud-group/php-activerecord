@@ -29,6 +29,7 @@ class GoldenSqlTest extends DatabaseTest
     private const array MODELS = [
         Author::class, Book::class, Venue::class, Host::class, Event::class, OddColumn::class, DatedCount::class, BigId::class,
         QualifiedConditionBook::class, ThroughFkAuthor::class, ThroughFkBook::class, AwesomePerson::class, MusicVenue::class,
+        GlobalScopedAuthor::class,
     ];
 
     public function set_up($connection_name = null)
@@ -319,6 +320,19 @@ class GoldenSqlTest extends DatabaseTest
                 BigId::create(['id' => '18446744073709551615', 'note' => 'max']);
                 BigId::find('18446744073709551615');
             }, $mysql_family],
+
+            // global scopes (GlobalScopedAuthor hides author 2): the builder's find puts the key first and bare, then the
+            // scope group, then the user's WHERE; the legacy path puts the scope groups before the user's WHERE, in
+            // which find() has folded the key; legacy joins qualify the scope's columns; a keyset page keeps its bound
+            // with the user's wheres
+            'scoped_find_pk' => [fn() => GlobalScopedAuthor::find(1), null],
+            'scoped_legacy_or' => [fn() => GlobalScopedAuthor::all(['conditions' => 'author_id = 1 OR author_id = 2']), null],
+            'scoped_builder_find_with_where' => [fn() => GlobalScopedAuthor::where('name', 'Tito')->find(1), null],
+            'scoped_joins' => [fn() => GlobalScopedAuthor::find('all', ['joins' => 'INNER JOIN books ON books.author_id = authors.author_id']), null],
+            'scoped_update_all' => [fn() => GlobalScopedAuthor::update_all(['set' => ['name' => 'x'], 'conditions' => ['author_id > ?', 1]]), null],
+            'scoped_delete_all' => [fn() => GlobalScopedAuthor::delete_all(['conditions' => ['author_id > ?', 1]]), null],
+            'scoped_builder_update' => [fn() => GlobalScopedAuthor::where('author_id', '>', 1)->update(['name' => 'x']), null],
+            'scoped_keyset_page' => [fn() => GlobalScopedAuthor::where('author_id', '>', 0)->or_where('name', 'x')->chunk_by_id(2, fn() => false), null],
         ];
     }
 }

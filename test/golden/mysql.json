@@ -597,6 +597,91 @@
             ]
         }
     ],
+    "scoped_builder_find_with_where": [
+        {
+            "sql": "SELECT * FROM `authors` WHERE `author_id` = ? AND (`author_id` != ?) AND (`name` = ?) LIMIT 1",
+            "values": [
+                1,
+                2,
+                "Tito"
+            ]
+        }
+    ],
+    "scoped_builder_update": [
+        {
+            "sql": "UPDATE `authors` SET `name`=?, `updated_at`=? WHERE (`author_id` != ?) AND (`author_id` > ?)",
+            "values": [
+                "x",
+                "<now>",
+                2,
+                1
+            ]
+        }
+    ],
+    "scoped_delete_all": [
+        {
+            "sql": "DELETE FROM `authors` WHERE (`author_id` != ?) AND (author_id > ?)",
+            "values": [
+                2,
+                1
+            ]
+        }
+    ],
+    "scoped_find_pk": [
+        {
+            "sql": "SELECT * FROM `authors` WHERE (`author_id` != ?) AND (`author_id`=?)",
+            "values": [
+                2,
+                1
+            ]
+        }
+    ],
+    "scoped_joins": [
+        {
+            "sql": "SELECT `authors`.* FROM `authors` INNER JOIN books ON books.author_id = authors.author_id WHERE (`authors`.`author_id` != ?)",
+            "values": [
+                2
+            ]
+        }
+    ],
+    "scoped_keyset_page": [
+        {
+            "sql": "SELECT MAX(`author_id`) FROM `authors` WHERE (`author_id` != ?) AND (`author_id` > ? OR `name` = ?)",
+            "values": [
+                2,
+                0,
+                "x"
+            ]
+        },
+        {
+            "sql": "SELECT * FROM `authors` WHERE (`author_id` != ?) AND ((`author_id` > ? OR `name` = ?) AND `author_id` <= ?) ORDER BY `author_id` ASC LIMIT 2",
+            "values": [
+                2,
+                0,
+                "x",
+                4
+            ]
+        }
+    ],
+    "scoped_legacy_or": [
+        {
+            "sql": "SELECT * FROM `authors` WHERE (`author_id` != ?) AND (author_id = 1 OR author_id = 2)",
+            "values": [
+                2
+            ]
+        }
+    ],
+    "scoped_update_all": [
+        {
+            "sql": "UPDATE `authors` SET `name`=?, `updated_at`=? WHERE (`author_id` != ?) AND (author_id > ?)",
+            "values": [
+                "x",
+                "<now>",
+                2,
+                1
+            ]
+        }
+    ],
     "table_delete_direct": [
         {
             "sql": "DELETE FROM `authors` WHERE `author_id`=?",
