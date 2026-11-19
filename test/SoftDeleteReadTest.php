@@ -99,6 +99,25 @@ class SoftDeleteReadTest extends DatabaseTest
         $this->assert_false(TrashDated::find(1)->trashed());
     }
 
+    // spec §3.2: the trait and the interface are looked up through the parents and through traits, and an override of
+    // soft_delete_column() may call static::table()
+    public function test_the_trait_and_the_interface_are_found_through_the_hierarchy(): void
+    {
+        foreach ([TrashDatedChild::class, TrashDatedInterfaceChild::class, TrashDatedViaTrait::class, TrashDatedTableColumn::class] as $class) {
+            $this->assert_same(1, $class::count(), $class);
+            $this->assert_sql_has('removed_on IS NULL', $class::to_sql());
+            $this->assert_equals([2], $this->ids($class::only_trashed()->get()));
+            $this->assert_equals([1, 2], $this->ids($class::with_trashed()->order_by('id')->get()));
+
+            $live = $class::find(1);
+            $this->assert_true($live->delete());
+            $this->assert_true($live->trashed());
+            $this->assert_same(0, $class::count());
+            $this->assert_true($live->restore());
+            $this->assert_same(1, $class::count());
+        }
+    }
+
     public function test_errors_6_7_8_14(): void
     {
         // 6: the trait without the interface, the interface without the trait
