@@ -1,7 +1,7 @@
 <?php
 
-// Soft delete on the read side: a SoftDeletable model hides its trashed rows from every query, and
-// with_trashed() / only_trashed() choose which rows a query reads.
+// Soft delete: a SoftDeletable model hides its trashed rows from every query, with_trashed() / only_trashed() choose
+// which rows a query reads, and delete(), restore() and force_delete() write.
 
 require_once __DIR__ . '/../../vendor/autoload.php';
 require_once __DIR__ . '/models/ShopOrder.php';
@@ -52,3 +52,25 @@ $trashed = ShopOrder::with_trashed()->where('number', 'ORD-002')->first();
 $live = ShopOrder::where('number', 'ORD-001')->first();
 show('ORD-002 trashed()', var_export($trashed?->trashed(), true));
 show('ORD-001 trashed()', var_export($live?->trashed(), true));
+
+// 6. delete() on an instance trashes the row: it stays in the table, hidden, and the object is not destroyed.
+$order = ShopOrder::where('number', 'ORD-001')->first();
+$order?->delete();
+show('after delete(): live orders', numbers(ShopOrder::order_by('id')->get()));
+show('after delete(): only_trashed()', numbers(ShopOrder::only_trashed()->order_by('id')->get()));
+show('ORD-001 trashed()', var_export($order?->trashed(), true));
+
+// 7. restore() brings it back: a direct UPDATE of the column to NULL, with no save() and no validations.
+$order?->restore();
+show('after restore(): live orders', numbers(ShopOrder::order_by('id')->get()));
+show('ORD-001 trashed()', var_export($order?->trashed(), true));
+
+// 8. force_delete() really deletes the row, trashed or not.
+$trashed?->force_delete();
+show('after force_delete(): rows', numbers(ShopOrder::with_trashed()->order_by('id')->get()));
+
+// 9. Bulk: delete() on a query is an UPDATE of the column; force_delete() on a query is a DELETE.
+show('bulk delete() count', (string) ShopOrder::where('number', 'ORD-003')->delete());
+show('after bulk delete(): live orders', numbers(ShopOrder::order_by('id')->get()));
+show('bulk force_delete() count', (string) ShopOrder::only_trashed()->force_delete());
+show('after bulk force_delete(): rows', numbers(ShopOrder::with_trashed()->order_by('id')->get()));
