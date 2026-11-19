@@ -20,12 +20,14 @@ class SoftDeleteInstanceTest extends DatabaseTest
     {
         parent::set_up($connection_name);
         TrashPostWithCallbacks::reset();
+        TrashPostDeleteOverride::$seen = [];
     }
 
     public function tear_down(): void
     {
         Timestamps::freeze(null);
         TrashPostWithCallbacks::reset();
+        TrashPostDeleteOverride::$seen = [];
         parent::tear_down();
     }
 
@@ -180,6 +182,22 @@ class SoftDeleteInstanceTest extends DatabaseTest
         $this->assert_same(1, TrashPost::without_global_scopes()->where('id', 3)->count());
     }
 
+    public function test_a_delete_override_that_calls_parent(): void
+    {
+        // §5.3: the override stays soft
+        $post = TrashPostDeleteOverride::find(1);
+        $this->assert_null($post->delete());
+        $this->assert_true($post->trashed());
+        $this->assert_true(TrashPost::with_trashed()->find(1)->trashed());
+
+        // force_delete() runs the override, with is_force_deleting() true inside it, and returns what it returns
+        $post = TrashPostDeleteOverride::find(4);
+        $this->assert_null($post->force_delete());
+        $this->assert_same([false, true], TrashPostDeleteOverride::$seen);
+        $this->assert_false($post->is_force_deleting());
+        $this->assert_same(0, TrashPost::without_global_scopes()->where('id', 4)->count());
+    }
+
     public function test_static_force_delete_with_the_trait_is_php_error(): void
     {
         $this->assert_exception_message_contains('Non-static method TrashPost::force_delete() cannot be called statically', fn() => TrashPost::force_delete(), Error::class);
@@ -216,7 +234,17 @@ class SoftDeleteInstanceTest extends DatabaseTest
         $no_column = new TrashDatedNoColumn(['id' => 1, 'name' => 'live', 'removed_on' => null], false, true, false);
         $this->assert_exception_message_contains('TrashDatedNoColumn::soft_delete_column() names nope', fn() => $no_column->restore(), ConfigException::class);
         $this->assert_exception_message_contains('TrashDatedNoColumn::soft_delete_column() names nope', fn() => $no_column->delete(), ConfigException::class);
+        $this->assert_exception_message_contains('TrashDatedNoColumn::soft_delete_column() names nope', fn() => $no_column->force_delete(), ConfigException::class);
+        $this->assert_false($no_column->is_force_deleting());
         $this->assert_same(2, TrashDated::without_global_scopes()->count());
+
+        // 8: a column of another type, for every instance verb, force_delete() included
+        $wrong = new TrashWrong(['id' => 1, 'name' => 'live', 'deleted_at' => null], false, true, false);
+
+        foreach (['delete', 'force_delete', 'restore'] as $verb) {
+            $this->assert_exception_message_contains('TrashWrong::soft_delete_column() names deleted_at, a', fn() => $wrong->$verb(), ConfigException::class);
+        }
+        $this->assert_same(2, (int) TrashWrong::connection()->query_and_fetch_one('SELECT COUNT(*) FROM trash_wrongs'));
     }
 
     public function test_non_public_before_restore_breaks_table_load(): void

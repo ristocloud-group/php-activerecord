@@ -90,9 +90,10 @@ trait SoftDeletes
 
     /**
      * DELETEs this record for real, trashed or live: delete() on its hard path, with the destroy callbacks, during
-     * which is_force_deleting() is true. delete() trashes it instead.
+     * which is_force_deleting() is true. delete() trashes it instead. An override of delete() runs, and what it returns
+     * is returned.
      *
-     * @return bool true, or false when a before_destroy callback returned false
+     * @return mixed what delete() returns: true, or false when a before_destroy callback returned false
      * @throws ActiveRecordException|ConfigException as delete() does
      */
     public function force_delete()

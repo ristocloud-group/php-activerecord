@@ -1516,14 +1516,15 @@ class Model
 
         $this->verify_pk_for_write('delete');
 
-        // the soft delete, unless force_delete() runs: its column is checked before any callback
-        $soft_delete_column = $this instanceof SoftDeletable && !$this->__force_deleting ? $this->soft_delete_column_name() : null;
+        // a SoftDeletable model's column is checked before any callback, also for force_delete(),
+        // which then takes the hard path
+        $soft_delete_column = $this instanceof SoftDeletable ? $this->soft_delete_column_name() : null;
 
         if (!$this->invoke_callback('before_destroy', false)) {
             return false;
         }
 
-        if (null !== $soft_delete_column) {
+        if (null !== $soft_delete_column && !$this->__force_deleting) {
             $this->write_soft_delete_column($soft_delete_column, true, $pk);
             $this->invoke_callback('after_destroy', false);
 
@@ -1592,22 +1593,27 @@ class Model
 
     /**
      * The body of SoftDeletes::force_delete() (spec §5.5): delete() on its hard path, its callbacks
-     * included, with force_deleting_flag() true while it runs. The flag is cleared however delete()
-     * ends, so that a callback or a statement that throws never leaves a later delete() hard. The
-     * model's global scopes are read first (spec §6, errors 1 to 6). On a model without soft delete,
-     * delete().
+     * included, with force_deleting_flag() true while it runs. The flag gets its previous value back
+     * however delete() ends, so that a callback or a statement that throws never leaves a later
+     * delete() hard. The model's global scopes are read first (spec §6, errors 1 to 6). On a model
+     * without soft delete, delete().
      *
+     * It returns what delete() returns, untyped like delete() (spec §3.4), so that an override of
+     * delete() that returns nothing keeps working.
+     *
+     * @return mixed what delete() returns
      * @throws ActiveRecordException|ConfigException as delete() does
      */
-    final protected function perform_force_delete_on_model(): bool
+    final protected function perform_force_delete_on_model(): mixed
     {
         ScopeRegistry::global_scopes(static::class);
+        $previous = $this->__force_deleting;
         $this->__force_deleting = true;
 
         try {
             return $this->delete();
         } finally {
-            $this->__force_deleting = false;
+            $this->__force_deleting = $previous;
         }
     }
 
