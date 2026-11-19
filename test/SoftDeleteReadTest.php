@@ -67,11 +67,15 @@ class SoftDeleteReadTest extends DatabaseTest
     {
         $sql = TrashPost::only_trashed()->where('code', 'B')->to_sql();
 
+        // present first: strpos() gives false for a missing fragment, and false is less than any position
+        $this->assert_sql_has('draft', $sql);
         $this->assert_sql_has('IS NOT NULL', $sql);
+        $this->assert_sql_has('code', $sql);
         $this->assert_true(strpos($sql, 'draft') < strpos($sql, 'IS NOT NULL'));
         $this->assert_true(strpos($sql, 'IS NOT NULL') < strpos($sql, 'code'));
 
         $sql = TrashPost::where('code', 'A')->to_sql();
+        $this->assert_sql_has('draft', $sql);
         $this->assert_sql_has('deleted_at IS NULL', $sql);
         $this->assert_true(strpos($sql, 'draft') < strpos($sql, 'IS NULL'));
         $this->assert_sql_doesnt_has('NOT NULL', $sql);
