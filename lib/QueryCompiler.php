@@ -91,6 +91,14 @@ final class QueryCompiler
     private ?array $aggregated = null;
 
     /**
+     * The names that may qualify the soft-delete column in a condition the warning reads: the model's table, and the
+     * from() table and alias the builder statement reads its rows under (see warn_soft_delete_conditions()).
+     *
+     * @var list<string>
+     */
+    private array $warning_qualifiers = [];
+
+    /**
      * The statements are rendered for $connection when one is given, else for $table's: a bulk write
      * of Model gives the connection it always built its statement on (see Query::execute_update()).
      * With $refuse_terminator false, the legacy conditions are not read for a statement terminator (see
@@ -924,6 +932,9 @@ final class QueryCompiler
 
         try {
             $column = ScopeRegistry::soft_delete_column($this->table);
+            $this->warning_qualifiers = null === $state->legacy
+                ? array_values(array_filter([$this->table->table, $state->from_alias, $state->from], is_string(...)))
+                : [$this->table->table];
             $named = null === $state->legacy ? $this->wheres_naming($state->wheres, $column) : $this->legacy_naming($state->legacy, $column);
             $what = null === $named ? null : sprintf('the condition %s', $named);
 
@@ -981,6 +992,7 @@ final class QueryCompiler
             $named = match ($where['type']) {
                 'raw' => $this->sql_naming($where['sql'], $column),
                 'column' => $this->names_column($where['first'], $column) ? $where['first'] : ($this->names_column($where['second'], $column) ? $where['second'] : null),
+                'between_columns' => $this->names_column($where['column'], $column) ? $where['column'] : ($this->names_column($where['columns'][0], $column) ? $where['columns'][0] : ($this->names_column($where['columns'][1], $column) ? $where['columns'][1] : null)),
                 'group' => $this->wheres_naming($where['group']->wheres, $column),
                 default => $this->names_column($where['column'], $column) ? $where['column'] : null,
             };
@@ -1048,7 +1060,13 @@ final class QueryCompiler
 
         $qualifier = $connection->column_name_key(trim($parts[count($parts) - 1][0], $quote));
 
-        return $qualifier === $connection->column_name_key($this->table->table);
+        foreach ($this->warning_qualifiers as $name) {
+            if ($qualifier === $connection->column_name_key($name)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

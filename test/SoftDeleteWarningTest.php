@@ -82,6 +82,13 @@ class SoftDeleteWarningTest extends DatabaseTest
         $this->assert_same(1, count($this->warnings(fn() => TrashPost::where('code', 'A')->where(fn($q) => $q->where_not_null('deleted_at'))->get())));
     }
 
+    public function test_from_alias_qualifier_and_between_columns(): void
+    {
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::new_query()->from('trash_posts', 'p')->where('p.deleted_at', '!=', null)->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::new_query()->from('trash_posts', 'p')->where_null('p.deleted_at')->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::where_between_columns('id', ['deleted_at', 'draft'])->to_sql())));
+    }
+
     public function test_writes(): void
     {
         $records = $this->warnings(fn() => TrashPost::update_all(['set' => ['deleted_at' => null], 'conditions' => ['code' => 'B']]));
@@ -100,6 +107,15 @@ class SoftDeleteWarningTest extends DatabaseTest
             TrashPost::with_trashed()->get();
             TrashPost::find(1)->delete();
             TrashPost::where('code', 'D')->delete();
+        }));
+    }
+
+    public function test_instance_soft_delete_and_restore_do_not_warn(): void
+    {
+        $this->assert_same([], $this->warnings(function () {
+            $post = TrashPost::find(1);
+            $post->delete();
+            $post->restore();
         }));
     }
 
