@@ -110,6 +110,49 @@ class SoftDeleteWarningTest extends DatabaseTest
         }));
     }
 
+    public function test_a_chosen_trashed_state_does_not_warn(): void
+    {
+        // with_trashed() and only_trashed() lift or replace the filter: a condition on the column is what they are for
+        $this->assert_same([], $this->warnings(function () {
+            TrashPost::only_trashed()->where('deleted_at', '<', '2026-06-01')->to_sql();
+            TrashPost::only_trashed()->where('deleted_at', '<', '2026-06-01')->force_delete();
+            TrashPost::with_trashed()->where('deleted_at', '<', '2026-06-01')->get();
+            TrashPost::with_trashed()->where('code', 'B')->update(['deleted_at' => null]);
+            TrashPost::without_global_scopes()->where_not_null('deleted_at')->to_sql();
+            TrashPost::new_query()->without_global_scope('soft_deletes')->where_not_null('deleted_at')->to_sql();
+            TrashPost::where('deleted_at', '<', '2026-06-01')->force_delete();
+            TrashPost::force_delete_all(['conditions' => ['deleted_at < ?', '2026-06-01']]);
+        }));
+
+        // without_trashed() applies the filter, as the default does
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::without_trashed()->where_not_null('deleted_at')->to_sql())));
+    }
+
+    public function test_the_through_middle_predicate_does_not_warn(): void
+    {
+        // the library's own `<middle>.deleted_at IS NULL`, eager and lazy, where middle and target share the column name
+        $this->assert_same([], $this->warnings(function () {
+            TrashPost::find('all', ['include' => ['trash_tags', 'trash_votes']]);
+            $post = TrashPost::find(1);
+            $post->trash_tags;
+            $post->trash_votes;
+        }));
+    }
+
+    public function test_a_column_of_another_table_does_not_warn_and_the_model_own_does(): void
+    {
+        $this->assert_same([], $this->warnings(function () {
+            TrashPost::where_raw('trash_taggings.deleted_at IS NULL')->to_sql();
+            TrashPost::where_raw('"other" . deleted_at IS NULL OR `x`.`deleted_at` = 1')->to_sql();
+        }));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::where_raw('trash_posts.deleted_at IS NOT NULL')->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::where_raw('`trash_posts`.`deleted_at` IS NOT NULL')->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::where_raw('"TRASH_POSTS" . "deleted_at" IS NOT NULL')->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::new_query()->from('trash_posts', 'p')->where_raw('p.deleted_at IS NOT NULL')->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::where_raw('other.id = 1 OR deleted_at IS NOT NULL')->to_sql())));
+        $this->assert_same(1, count($this->warnings(fn() => TrashPost::all(['conditions' => 'trash_posts.deleted_at IS NOT NULL']))));
+    }
+
     public function test_instance_soft_delete_and_restore_do_not_warn(): void
     {
         $this->assert_same([], $this->warnings(function () {

@@ -209,7 +209,7 @@ final class QueryCompiler
      */
     public function compile_select(QueryState $state, array $conditions = []): SQLBuilder
     {
-        $this->warn_soft_delete_conditions($state, null, 'query');
+        $this->warn_soft_delete_conditions($state, null);
 
         if (null === $state->legacy) {
             return $this->compile_clauses($state, $conditions);
@@ -915,12 +915,19 @@ final class QueryCompiler
      * does, is logged as a warning through the configured logger, once per statement. It never throws and never changes
      * the statement. Off, it costs one boolean check.
      *
+     * Only a statement the soft-delete filter applies to is reported (trashed state default or without, spec §4.2): with
+     * with_trashed() or only_trashed() chosen, or the filter lifted (without_global_scope(s), a force delete), a
+     * condition on the column is what the caller asked for.
+     *
      * @param array<string, mixed>|string|null $set the SET of an UPDATE the caller wrote, null for any other statement
-     * @param 'query'|'update'|'delete' $verb
      */
-    private function warn_soft_delete_conditions(QueryState $state, array|string|null $set, string $verb): void
+    private function warn_soft_delete_conditions(QueryState $state, array|string|null $set): void
     {
         if (null === $state->scopes || !Config::instance()->get_warn_soft_delete_conditions() || !is_a($this->table->class->name, SoftDeletable::class, true)) {
+            return;
+        }
+
+        if ('with' === $state->scopes['trashed'] || 'only' === $state->scopes['trashed']) {
             return;
         }
 
@@ -1026,12 +1033,37 @@ final class QueryCompiler
     }
 
     /**
-     * $sql when it holds $column as a whole word (quoted or qualified or not), else null. Without case: unquoted names
-     * are folded by every database (to lower case on Postgres), and a false report only costs a log line.
+     * $sql when it holds $column as a whole word, quoted or not, bare or qualified by a name of the table the statement
+     * reads the model's rows under (see names_column()), else null: the column of another table (the middle table of a
+     * :through load, a joined table) is not the model's. Without case: unquoted names are folded by every database (to
+     * lower case on Postgres), and a false report only costs a log line.
      */
     private function sql_naming(string $sql, string $column): ?string
     {
-        return 1 === preg_match('/(?<![\w$])' . preg_quote($column, '/') . '(?![\w$])/i', $sql) ? $sql : null;
+        // an optional qualifier, bare or quoted, a dot, then the column, bare or quoted
+        $pattern = '/(?:([\w$]+|`[^`]*`|"[^"]*"|\[[^\]]*\])\s*\.\s*)?[`"\[]?(?<![\w$])' . preg_quote($column, '/') . '(?![\w$])/i';
+
+        if (false === preg_match_all($pattern, $sql, $matches)) {
+            return null;
+        }
+
+        foreach ($matches[1] as $qualifier) {
+            if ('' === $qualifier) {
+                return $sql;
+            }
+
+            if (str_contains('`"[', $qualifier[0])) {
+                $qualifier = substr($qualifier, 1, -1);
+            }
+
+            foreach ($this->warning_qualifiers as $name) {
+                if (0 === strcasecmp($qualifier, $name)) {
+                    return $sql;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1194,7 +1226,7 @@ final class QueryCompiler
         $this->refuse_empty_where($state, $method);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
-        $this->warn_soft_delete_conditions($state, 'delete' === $method ? null : $set, 'update');
+        $this->warn_soft_delete_conditions($state, 'delete' === $method ? null : $set);
         $this->apply_write_clauses($sql, $state, $method);
 
         return $sql;
@@ -1213,7 +1245,7 @@ final class QueryCompiler
         $this->refuse_empty_where($state, $method);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
-        $this->warn_soft_delete_conditions($state, null, 'delete');
+        $this->warn_soft_delete_conditions($state, null);
         $this->apply_write_clauses($sql, $state, $method);
 
         return $sql;
