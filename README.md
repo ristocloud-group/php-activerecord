@@ -1139,7 +1139,7 @@ Order::without_global_scope(SoftDeletable::SCOPE)->get();   // as with_trashed()
 ```
 
 - **Opt-in, per model.** `implements SoftDeletable` **and** `use SoftDeletes` are both required: either alone throws a
-  `ConfigException` at the model's first query. A parent's interface or trait counts, so a hierarchy can opt in one
+  `ConfigException` at the model's first query or `delete()`, before any SQL. A parent's interface or trait counts, so a hierarchy can opt in one
   subclass at a time. `soft_delete_column(): string` returns `'deleted_at'` unless you override it. The column must be a
   `DATE` or `DATETIME` column of the table (a `TIMESTAMP` column counts as `DATETIME`); `NULL` is a live row.
 - **Reading.** The default filter is `<column> IS NULL`, on every read the global scopes cover (see
@@ -1160,16 +1160,21 @@ $order->force_delete();              // a real DELETE
 Order::where('status', 'void')->delete();             // one UPDATE of the column
 Order::delete_all(['conditions' => ['status' => 'void']]);   // the same
 Order::only_trashed()->where('removed_at', '<', $cutoff)->force_delete();   // one real DELETE
-Order::force_delete_all(['conditions' => ['status' => 'void']]);             // the same, legacy options
+Order::force_delete_all(['conditions' => ['status' => 'void']]);             // a real DELETE, legacy options
 ```
 
 - **Bulk.** On a soft-delete model the builder's `delete()` and the static `delete_all()` become
   `UPDATE ... SET <column> = ?, updated_at = ?` with the WHERE, order and limit the delete would have had; one "now"
   stamps both columns, and `updated_at` is written only when the table has it. They return the number of rows the
-  statement reports, and with `with_trashed()` they re-stamp trashed rows too. `force_delete()` on the **builder**
-  (it has no static form: `Order::force_delete()` is refused) and the static `force_delete_all()` run a real `DELETE`.
-  They lift only the soft-delete default filter and keep every other global scope, unless you removed it; an explicit
-  `only_trashed()` or `without_trashed()` still narrows them.
+  statement reports, and with `with_trashed()` they re-stamp trashed rows too. `force_delete()` on the **builder** and
+  the static `force_delete_all()` run a real `DELETE`: the first matches trashed and live rows alike unless you narrow
+  it, the second always does. They lift only the soft-delete default filter and keep every other global scope, unless
+  you removed it; an explicit `only_trashed()` or `without_trashed()` still narrows the builder's.
+- **No static `force_delete()`.** A whole-table delete is never one call away: on a soft-delete model
+  `Order::force_delete()` is PHP's own `Error` ("Non-static method Order::force_delete() cannot be called statically"),
+  because the trait's instance method exists; on any other model the library refuses it as it refuses `Order::delete()`.
+  Inside an instance method of a soft-delete model, `static::force_delete()` is an ordinary call on `$this` (PHP's rule):
+  the hard delete of that record.
 - **Instance `delete()`.** It keeps its checks (readonly, already destroyed, no primary key) and runs
   `before_destroy` / `after_destroy`, with the UPDATE in between. The object is **not** marked destroyed: it can still be
   written, and `trashed()` tells it is soft-deleted. On a record that is already trashed it stamps the column again; it
@@ -1178,7 +1183,7 @@ Order::force_delete_all(['conditions' => ['status' => 'void']]);             // 
 - **`restore()`** is a direct `UPDATE` of the column to `NULL` and `updated_at`, **not** `save()`: no validations run and
   the object's other dirty attributes are not written (a deviation from Eloquent, see below). It runs on a record that is
   not trashed too. `before_restore` / `after_restore` are callbacks like the others; `before_restore` returning `false`
-  cancels the restore, which then returns `false`. It throws on a model without soft delete.
+  cancels the restore, which then returns `false`.
 - **`force_delete()`** on an instance is the hard delete, with the same callbacks. `is_force_deleting()` is `true` while
   it runs. **`after_destroy` callbacks run on a soft delete too**, so an irreversible side effect there (removing a file,
   calling an API) must check it:
@@ -1194,6 +1199,9 @@ public function clean_up(): void
 }
 ```
 
+- **`updated_at`.** The instance `delete()` and `restore()` set `updated_at` themselves, to the same time as the column,
+  when the table has it and `without_timestamps()` is not running for the class, as the bulk writes do: they do **not**
+  call `set_timestamps()`, so an override of it does not run for them.
 - **`trashed()`** is `true` when the column holds a value. On a record read without the column it throws.
 - **`:through` relationships** always filter the middle model's soft delete, whatever `'unscoped'` says: `'unscoped'`
   concerns the target only. To see trashed middle rows, declare the middle `has_many` with
@@ -1243,7 +1251,10 @@ A query or bulk write on a soft-delete model whose conditions name the column lo
 condition and the ways out (`only_trashed()`, `with_trashed()`, `restore()`). It reports legacy string, positional and
 hash conditions and the builder's `where*` methods and `where_raw`, and a write of the column (an `update_all` `set`, a
 builder `update()`). A redundant `deleted_at IS NULL` is reported too: it is harmless, but left over from the hand-written
-filter. The warning never throws and never changes the query.
+filter. Only a statement the default filter applies to is reported: after `with_trashed()`, `only_trashed()` or
+`without_global_scope(s)`, and in `force_delete()` / `force_delete_all()`, a condition on the column is what you asked
+for. A column qualified by another table (a joined table, the middle table of a `:through` load) is not the model's and
+is not reported. The warning never throws and never changes the query.
 
 #### Differences from Eloquent ####
 
