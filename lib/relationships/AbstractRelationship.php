@@ -273,11 +273,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
         // the :through middle model's soft delete, one more AND term after the key condition (spec §4.6)
         if (null !== $middle_condition) {
-            if ([] === $options['conditions']) {
-                $options['conditions'] = [$middle_condition];
-            } else {
-                $options['conditions'][0] .= ' AND ' . $middle_condition;
-            }
+            $options['conditions'][0] .= ' AND ' . $middle_condition;
         }
 
         $options = $this->unset_non_finder_options($options);
