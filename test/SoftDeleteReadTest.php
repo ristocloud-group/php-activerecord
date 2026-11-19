@@ -105,6 +105,10 @@ class SoftDeleteReadTest extends DatabaseTest
         $this->assert_exception_message_contains('TrashTraitOnly uses SoftDeletes but does not implement SoftDeletable', fn() => TrashTraitOnly::count(), ConfigException::class);
         $this->assert_exception_message_contains('TrashInterfaceOnly implements SoftDeletable but does not use SoftDeletes', fn() => TrashInterfaceOnly::count(), ConfigException::class);
         $this->assert_exception_message_contains('TrashInterfaceOnly implements SoftDeletable but does not use SoftDeletes', fn() => TrashInterfaceOnly::with_trashed(), ConfigException::class);
+        // the *_trashed() methods report error 6 on a model with the trait only, not error 14
+        foreach (['with_trashed', 'only_trashed', 'without_trashed'] as $method) {
+            $this->assert_exception_message_contains('TrashTraitOnly uses SoftDeletes but does not implement SoftDeletable', fn() => TrashTraitOnly::new_query()->$method(), ConfigException::class);
+        }
 
         // 7: no column of the table, at compile time and at the *_trashed() call
         $this->assert_exception_message_contains('TrashDatedNoColumn::soft_delete_column() names nope, which is not a column of trash_dated', fn() => TrashDatedNoColumn::count(), ConfigException::class);

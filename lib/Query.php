@@ -2918,11 +2918,13 @@ class Query
             throw self::carries_no_scopes($method);
         }
 
+        // the global scopes first: a model with the trait only reports error 6, not error 14
+        ScopeRegistry::global_scopes($this->model_class);
+
         if (!is_a($this->model_class, SoftDeletable::class, true)) {
             throw new ActiveRecordException(sprintf('%s() needs a model with soft delete: %s is not SoftDeletable', $method, $this->model_class));
         }
 
-        ScopeRegistry::global_scopes($this->model_class);
         ScopeRegistry::soft_delete_column($this->table());
         $this->state->scopes['trashed'] = $trashed;
 

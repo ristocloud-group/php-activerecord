@@ -1500,8 +1500,9 @@ class Model
      * as for the hard delete; no validation and no save callback.
      *
      * @return boolean
-     * @throws ConfigException on a SoftDeletable model whose soft delete is declared wrongly (spec §6,
-     *   errors 1 to 8)
+     * @throws ConfigException on a model whose global scopes are declared wrongly, one with only one of
+     *   SoftDeletes and SoftDeletable included, or a SoftDeletable model whose soft-delete column is
+     *   wrong (spec §6, errors 1 to 8), before any callback or SQL
      */
     public function delete()
     {
@@ -1516,9 +1517,12 @@ class Model
 
         $this->verify_pk_for_write('delete');
 
-        // a SoftDeletable model's column is checked before any callback, also for force_delete(),
-        // which then takes the hard path
-        $soft_delete_column = $this instanceof SoftDeletable ? $this->soft_delete_column_name() : null;
+        // the model's global scopes first, a cached lookup: a model with only one of SoftDeletes and
+        // SoftDeletable is refused (spec §6, error 6) instead of being hard-deleted. Then a SoftDeletable
+        // model's column is checked before any callback, also for force_delete(), which then takes the
+        // hard path
+        ScopeRegistry::global_scopes(static::class);
+        $soft_delete_column = $this instanceof SoftDeletable ? ScopeRegistry::soft_delete_column(static::table()) : null;
 
         if (!$this->invoke_callback('before_destroy', false)) {
             return false;

@@ -247,6 +247,24 @@ class SoftDeleteInstanceTest extends DatabaseTest
         $this->assert_same(2, (int) TrashWrong::connection()->query_and_fetch_one('SELECT COUNT(*) FROM trash_wrongs'));
     }
 
+    public function test_delete_with_only_the_trait_or_only_the_interface_is_error_6_before_any_sql(): void
+    {
+        // the trait without the interface: refused, not a hard DELETE
+        $trait_only = TrashTraitOnly::create(['name' => 'probe']);
+        $insert = TrashTraitOnly::table()->last_sql;
+        $this->assert_exception_message_contains('TrashTraitOnly uses SoftDeletes but does not implement SoftDeletable', fn() => $trait_only->delete(), ConfigException::class);
+        $this->assert_same($insert, TrashTraitOnly::table()->last_sql);
+        $this->assert_true(TrashDated::with_trashed()->where('id', $trait_only->id)->exists());
+
+        // the interface without the trait
+        $interface_only = new TrashInterfaceOnly(['id' => 1, 'name' => 'live'], false, true, false);
+        $before = TrashInterfaceOnly::table()->last_sql;
+        $this->assert_exception_message_contains('TrashInterfaceOnly implements SoftDeletable but does not use SoftDeletes', fn() => $interface_only->delete(), ConfigException::class);
+        $this->assert_same($before, TrashInterfaceOnly::table()->last_sql);
+        $this->assert_same(3, TrashDated::with_trashed()->count());
+        $this->assert_true(TrashDated::where('id', 1)->exists());
+    }
+
     public function test_non_public_before_restore_breaks_table_load(): void
     {
         $this->assert_exception_message_contains('Callback methods need to be public', fn() => TrashPostPrivateCallback::find(1), ActiveRecordException::class);
