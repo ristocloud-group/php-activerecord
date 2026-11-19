@@ -221,6 +221,15 @@ class HasMany extends AbstractRelationship
             return null;
         }
 
+        // the :through middle model's soft delete: one more AND term per load, never in the frozen join (spec §4.6)
+        if ($this->through && null !== ($through_relationship = $model::table()->get_relationship($this->through))) {
+            $middle_condition = $this->middle_soft_delete_condition($through_relationship);
+
+            if (null !== $middle_condition) {
+                $conditions[0] .= ' AND ' . $middle_condition;
+            }
+        }
+
         $options = $this->unset_non_finder_options($this->options);
         $options['conditions'] = $conditions;
         return $this->find_related($this->poly_relationship ? 'all' : 'first', $options);
