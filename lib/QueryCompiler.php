@@ -201,6 +201,8 @@ final class QueryCompiler
      */
     public function compile_select(QueryState $state, array $conditions = []): SQLBuilder
     {
+        $this->warn_soft_delete_conditions($state, null, 'query');
+
         if (null === $state->legacy) {
             return $this->compile_clauses($state, $conditions);
         }
@@ -899,6 +901,157 @@ final class QueryCompiler
     }
 
     /**
+     * The optional migration warning (spec §3.7), for a statement of a SoftDeletable model that applies its scopes: when
+     * Config::set_warn_soft_delete_conditions() is on, the first of the user's conditions (the legacy options', or the
+     * builder's wheres, through their groups; never the scopes' own) that names the soft-delete column, else a $set that
+     * does, is logged as a warning through the configured logger, once per statement. It never throws and never changes
+     * the statement. Off, it costs one boolean check.
+     *
+     * @param array<string, mixed>|string|null $set the SET of an UPDATE the caller wrote, null for any other statement
+     * @param 'query'|'update'|'delete' $verb
+     */
+    private function warn_soft_delete_conditions(QueryState $state, array|string|null $set, string $verb): void
+    {
+        if (null === $state->scopes || !Config::instance()->get_warn_soft_delete_conditions() || !is_a($this->table->class->name, SoftDeletable::class, true)) {
+            return;
+        }
+
+        $logger = Config::instance()->get_logger();
+
+        if (null === $logger) {
+            return;
+        }
+
+        try {
+            $column = ScopeRegistry::soft_delete_column($this->table);
+            $named = null === $state->legacy ? $this->wheres_naming($state->wheres, $column) : $this->legacy_naming($state->legacy, $column);
+            $what = null === $named ? null : sprintf('the condition %s', $named);
+
+            if (null === $what && null !== $set) {
+                $named = $this->set_naming($set, $column);
+                $what = null === $named ? null : sprintf('the update of %s', $named);
+            }
+        } catch (\Throwable) {
+            return;
+        }
+
+        if (null !== $what) {
+            $logger->warning(sprintf('%s: %s names the soft-delete column %s, which the soft_deletes scope already filters: use only_trashed(), with_trashed() or restore()', $this->table->class->name, $what, $column));
+        }
+    }
+
+    /**
+     * What of the legacy $options' conditions names $column (a string or positional SQL, or the keys of a hash), or null.
+     *
+     * @param array<string, mixed> $options
+     */
+    private function legacy_naming(array $options, string $column): ?string
+    {
+        $conditions = $options['conditions'] ?? null;
+
+        if (is_string($conditions)) {
+            return $this->sql_naming($conditions, $column);
+        }
+
+        if (!is_array($conditions)) {
+            return null;
+        }
+
+        if (!is_hash($conditions)) {
+            return is_string($conditions[0] ?? null) ? $this->sql_naming($conditions[0], $column) : null;
+        }
+
+        foreach (array_keys($conditions) as $key) {
+            if ($this->names_column((string) $key, $column)) {
+                return (string) $key;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * What of the builder's $wheres names $column, through the user's groups, or null.
+     *
+     * @param list<Where> $wheres
+     */
+    private function wheres_naming(array $wheres, string $column): ?string
+    {
+        foreach ($wheres as $where) {
+            $named = match ($where['type']) {
+                'raw' => $this->sql_naming($where['sql'], $column),
+                'column' => $this->names_column($where['first'], $column) ? $where['first'] : ($this->names_column($where['second'], $column) ? $where['second'] : null),
+                'group' => $this->wheres_naming($where['group']->wheres, $column),
+                default => $this->names_column($where['column'], $column) ? $where['column'] : null,
+            };
+
+            if (null !== $named) {
+                return $named;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The name of $column in the $set of an UPDATE (a hash's keys, or SQL), or null.
+     *
+     * @param array<string, mixed>|string $set
+     */
+    private function set_naming(array|string $set, string $column): ?string
+    {
+        if (is_string($set)) {
+            return $this->sql_naming($set, $column);
+        }
+
+        foreach (array_keys($set) as $key) {
+            if ($this->names_column((string) $key, $column)) {
+                return (string) $key;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * $sql when it holds $column as a whole word (quoted or qualified or not), else null. Without case: unquoted names
+     * are folded by every database (to lower case on Postgres), and a false report only costs a log line.
+     */
+    private function sql_naming(string $sql, string $column): ?string
+    {
+        return 1 === preg_match('/(?<![\w$])' . preg_quote($column, '/') . '(?![\w$])/i', $sql) ? $sql : null;
+    }
+
+    /**
+     * Whether $name, as a condition or a SET gives it, is $column: bare, or qualified by the table the statement reads the
+     * model's rows under, quoted or not.
+     */
+    private function names_column(string $name, string $column): bool
+    {
+        $parts = $this->name_parts($name);
+
+        if (null === $parts) {
+            return false;
+        }
+
+        $connection = $this->connection();
+        $quote = $connection::$QUOTE_CHARACTER;
+        $last = array_pop($parts);
+
+        if (null === $last || $connection->column_name_key($this->table->real_column_name(trim($last[0], $quote))) !== $connection->column_name_key($column)) {
+            return false;
+        }
+
+        if ([] === $parts) {
+            return true;
+        }
+
+        $qualifier = $connection->column_name_key(trim($parts[count($parts) - 1][0], $quote));
+
+        return $qualifier === $connection->column_name_key($this->table->table);
+    }
+
+    /**
      * The conditions the model's global scopes add to the builder's statement of $state (see
      * ScopeRegistry::global_wheres()), one parenthesized group per scope ANDed, rendered by $rendering, else by the
      * compiler of the state's conditions: either names their columns as the statement reads the model's rows (spec
@@ -1023,6 +1176,7 @@ final class QueryCompiler
         $this->refuse_empty_where($state, $method);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->update($set);
+        $this->warn_soft_delete_conditions($state, 'delete' === $method ? null : $set, 'update');
         $this->apply_write_clauses($sql, $state, $method);
 
         return $sql;
@@ -1041,6 +1195,7 @@ final class QueryCompiler
         $this->refuse_empty_where($state, $method);
         $sql = new SQLBuilder($this->connection(), $this->table->get_fully_qualified_table_name());
         $sql->delete();
+        $this->warn_soft_delete_conditions($state, null, 'delete');
         $this->apply_write_clauses($sql, $state, $method);
 
         return $sql;
