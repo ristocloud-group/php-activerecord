@@ -250,6 +250,12 @@ class Model
     private bool $__destroyed = false;
 
     /**
+     * Set while force_delete() runs on this record (SoftDeletes::is_force_deleting()): delete()
+     * then takes the hard path on a SoftDeletable model.
+     */
+    private bool $__force_deleting = false;
+
+    /**
      * The records deleted inside each open Model::transaction() scope, per connection
      * (spl_object_id), innermost scope last.
      *
@@ -1485,7 +1491,17 @@ class Model
     /**
      * Deletes this model from the database and returns true if successful.
      *
+     * On a SoftDeletable model it trashes the record instead (spec §5.3), unless force_delete() runs:
+     * an UPDATE by primary key, with no global scope, sets the soft-delete column, and updated_at
+     * when the table has it and without_timestamps() does not run for the class, to one time
+     * (Timestamps::now(), read once). The values are written into the record's attributes, clean,
+     * and its other pending changes are left as they were; the record is not marked deleted, so it
+     * can still be written. A trashed record is stamped again. before_destroy and after_destroy run
+     * as for the hard delete; no validation and no save callback.
+     *
      * @return boolean
+     * @throws ConfigException on a SoftDeletable model whose soft delete is declared wrongly (spec §6,
+     *   errors 1 to 8)
      */
     public function delete()
     {
@@ -1500,8 +1516,18 @@ class Model
 
         $this->verify_pk_for_write('delete');
 
+        // the soft delete, unless force_delete() runs: its column is checked before any callback
+        $soft_delete_column = $this instanceof SoftDeletable && !$this->__force_deleting ? $this->soft_delete_column_name() : null;
+
         if (!$this->invoke_callback('before_destroy', false)) {
             return false;
+        }
+
+        if (null !== $soft_delete_column) {
+            $this->write_soft_delete_column($soft_delete_column, true, $pk);
+            $this->invoke_callback('after_destroy', false);
+
+            return true;
         }
 
         static::table()->delete($pk);
@@ -1518,10 +1544,145 @@ class Model
     }
 
     /**
+     * The body of SoftDeletes::restore() (spec §5.4): sets the soft-delete column back to NULL, and
+     * updated_at as delete() sets it, by an UPDATE by primary key with no global scope, between the
+     * before_restore (false cancels it, and false is returned) and after_restore callbacks. The values
+     * are written into the record's attributes, clean, and its other pending changes are left as they
+     * were. A record that is not trashed is restored too. No validation and no save callback run.
+     *
+     * The model's global scopes are read first, so that a broken declaration (spec §6, errors 1 to
+     * 6) is reported before error 15; then the record is checked as delete() checks it, and the
+     * soft-delete column (errors 7 and 8).
+     *
+     * @throws ActiveRecordException on a model without soft delete, on a record without a primary
+     *   key value (an UPDATE without one would restore every row), with a null or changed one, or
+     *   that delete() removed
+     * @throws ReadOnlyException on a readonly record
+     * @throws ConfigException as delete() does
+     */
+    final protected function perform_restore_on_model(): bool
+    {
+        ScopeRegistry::global_scopes(static::class);
+
+        if (!$this instanceof SoftDeletable) {
+            throw new ActiveRecordException(sprintf('Cannot restore, %s has no soft delete', static::class));
+        }
+
+        $this->verify_not_readonly('restore');
+        $this->verify_not_destroyed('restore');
+
+        $pk = $this->values_for_pk();
+
+        if (empty($pk)) {
+            throw new ActiveRecordException('Cannot restore, no primary key defined for: ' . static::class);
+        }
+
+        $this->verify_pk_for_write('restore');
+        $column = $this->soft_delete_column_name();
+
+        if (!$this->invoke_callback('before_restore', false)) {
+            return false;
+        }
+
+        $this->write_soft_delete_column($column, false, $pk);
+        $this->invoke_callback('after_restore', false);
+
+        return true;
+    }
+
+    /**
+     * The body of SoftDeletes::force_delete() (spec §5.5): delete() on its hard path, its callbacks
+     * included, with force_deleting_flag() true while it runs. The flag is cleared however delete()
+     * ends, so that a callback or a statement that throws never leaves a later delete() hard. The
+     * model's global scopes are read first (spec §6, errors 1 to 6). On a model without soft delete,
+     * delete().
+     *
+     * @throws ActiveRecordException|ConfigException as delete() does
+     */
+    final protected function perform_force_delete_on_model(): bool
+    {
+        ScopeRegistry::global_scopes(static::class);
+        $this->__force_deleting = true;
+
+        try {
+            return $this->delete();
+        } finally {
+            $this->__force_deleting = false;
+        }
+    }
+
+    /**
+     * Whether force_delete() is running on this record, its callbacks included: what
+     * SoftDeletes::is_force_deleting() returns.
+     */
+    final protected function force_deleting_flag(): bool
+    {
+        return $this->__force_deleting;
+    }
+
+    /**
+     * The soft-delete column of this SoftDeletable model, as the table names it, its global scopes
+     * read first (spec §6: errors 1 to 6 before 7 and 8).
+     *
+     * @throws ConfigException
+     */
+    private function soft_delete_column_name(): string
+    {
+        ScopeRegistry::global_scopes(static::class);
+
+        return ScopeRegistry::soft_delete_column(static::table());
+    }
+
+    /**
+     * The UPDATE of the soft delete ($trash) or of the restore: by the primary key values $pk, with no
+     * global scope (Table::update()), it sets $column to now, or to NULL, and updated_at to that same
+     * now as every engine write adds it (Timestamps::apply_to_update(): only when the table has the
+     * column and the class's timestamps are not suspended). It does not go through
+     * set_timestamps() (spec §7 row 10). The values sent are then written into the attributes, clean,
+     * as a find reads them (a DATE column gets the date).
+     *
+     * @param array<string, mixed> $pk
+     */
+    private function write_soft_delete_column(string $column, bool $trash, array $pk): void
+    {
+        $table = static::table();
+        $now = Timestamps::now();
+        $set = Timestamps::apply_to_update($table, static::class, [$column => $trash ? new DateTime($now) : null], $now);
+
+        // $set comes back formatted for the database, keyed by the columns
+        $table->update($set, $pk);
+
+        $attributes = [];
+
+        foreach ($set as $name => $value) {
+            $attributes[isset($table->columns[$name]) ? $table->columns[$name]->inflected_name : $name] = $value;
+        }
+
+        $this->write_clean($attributes);
+    }
+
+    /**
+     * Assigns each value of $attributes and leaves those attributes clean, the other pending changes
+     * of the record as they were.
+     *
+     * @param array<string, mixed> $attributes by attribute name
+     */
+    private function write_clean(array $attributes): void
+    {
+        foreach ($attributes as $name => $value) {
+            $this->assign_attribute($name, $value);
+
+            if (null !== $this->__dirty) {
+                unset($this->__dirty[$name]);
+            }
+        }
+    }
+
+    /**
      * Refuses a write on a record whose row this object deleted: an UPDATE would
      * match nothing (or a row inserted again under the same key) and report success.
      *
-     * @param 'update'|'delete' $action
+     * @param 'update'|'delete'|'restore' $action
      * @throws ActiveRecordException
      */
     private function verify_not_destroyed(string $action): void
@@ -1541,7 +1702,7 @@ class Model
      * column is only checked for null; one not loaded at all (a `select`
      * without it) is left to values_for_pk(), which reports it as before.
      *
-     * @param 'update'|'delete' $action
+     * @param 'update'|'delete'|'restore' $action
      * @throws ActiveRecordException
      */
     private function verify_pk_for_write(string $action): void
