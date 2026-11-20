@@ -89,4 +89,27 @@ if (4 !== (int) Author::count()) {
     exit(1);
 }
 
+// the global scope cases (Task 7): the paths of a model that has no scope, a model with two scopes, and the cold
+// first use of each. GlobalScopedAuthorChild is absent from a tree that predates global scopes: its lines are skipped.
+$measure('Author::where()->get(), not opted in', 20000, fn() => Author::where('author_id', 1)->get());
+
+if (class_exists('GlobalScopedAuthorChild')) {
+    $measure('GlobalScopedAuthorChild::find(1), two scopes', 20000, fn() => GlobalScopedAuthorChild::find(1));
+    $measure('GlobalScopedAuthorChild::where()->get(), two scopes', 20000, fn() => GlobalScopedAuthorChild::where('author_id', 1)->get());
+}
+
+// cold: the Table of the class is dropped before each operation, so every one loads the schema and compiles again
+$cold_classes = ['Author' => 'Author'];
+
+if (class_exists('GlobalScopedAuthorChild')) {
+    $cold_classes['GlobalScopedAuthorChild'] = 'GlobalScopedAuthorChild';
+}
+
+foreach ($cold_classes as $class) {
+    $measure("cold first compile, $class::find(1)", 500, function () use ($class): void {
+        ActiveRecord\Table::clear_cache();
+        $class::find(1);
+    });
+}
+
 $measure('Table::options_to_sql() + to_s(), no database', 200000, fn() => Author::table()->options_to_sql(['conditions' => ['name' => 'Tito'], 'order' => 'name', 'limit' => 1])->to_s());

@@ -773,6 +773,12 @@ abstract class Connection
      */
     public static function split_name_parts(string $name, string $q): ?array
     {
+        // a name with neither the quote character nor a dot is one bare part, as the grammar reads it: told without
+        // the two regular expressions, since every column a query names by itself takes this path
+        if ('' !== $name && !str_contains($name, $q) && !str_contains($name, '.')) {
+            return [[$name, false]];
+        }
+
         $quote = preg_quote($q, '/');
         $part = "{$quote}(?:[^{$quote}]|{$quote}{$quote})+{$quote}|[^{$quote}.]+";
 

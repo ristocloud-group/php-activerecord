@@ -26,12 +26,12 @@ namespace ActiveRecord;
  *     foreign_key?: string|list<string>, primary_key?: string|list<string>,
  *     conditions?: mixed, select?: string, readonly?: bool,
  *     order?: string, group?: string, having?: string, limit?: int, offset?: int,
- *     through?: string, source?: string
+ *     through?: string, source?: string, unscoped?: true|list<string>
  * }
  * @phpstan-type BelongsToRelationship array{
  *     0: string, class_name?: string, class?: string, namespace?: string,
  *     foreign_key?: string|list<string>,
- *     conditions?: mixed, select?: string, readonly?: bool
+ *     conditions?: mixed, select?: string, readonly?: bool, unscoped?: true|list<string>
  * }
  */
 abstract class AbstractRelationship implements InterfaceRelationship
@@ -101,6 +101,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
 
         $this->attribute_name = $options[0];
         $this->options = $this->merge_association_options($options);
+
+        // error 18: the names are checked against the target at the first load (error 12), see find_related()
+        if (array_key_exists('unscoped', $this->options) && !self::is_unscoped_value($this->options['unscoped'])) {
+            throw new RelationshipException(sprintf("The option 'unscoped' of relationship '%s' must be true or a list of scope names", $options[0]));
+        }
 
         $relationship = strtolower(denamespace(get_called_class()));
 
@@ -278,7 +283,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
             return;
         }
 
-        $related_models = $class::find('all', $options);
+        $related_models = $this->find_related('all', $options);
         $used_models = [];
         $model_values_key = $inflector->variablize($model_values_key);
         $query_key = $inflector->variablize($match_key ?? $query_key);
@@ -333,6 +338,54 @@ abstract class AbstractRelationship implements InterfaceRelationship
                 $model->set_relationship_from_eager_load(null, $this->attribute_name);
             }
         }
+    }
+
+    /**
+     * Whether $value is a valid 'unscoped' option: true (every global scope of the target), or a list of scope names.
+     */
+    private static function is_unscoped_value(mixed $value): bool
+    {
+        if (true === $value) {
+            return true;
+        }
+
+        return is_array($value) && array_is_list($value) && [] === array_filter($value, static fn($name) => !is_string($name));
+    }
+
+    /**
+     * The related models a load finds with the finder $options: without the option 'unscoped', or with an empty list,
+     * by the target's find($type, $options), as always; with it, by its Table with the global scopes it names removed (every one for
+     * true) and the options Model::find() would build, without calling the target's find()/first() (spec §4.5). A
+     * name that is no global scope of the target throws there, before any SQL (error 12).
+     *
+     * @param 'all'|'first' $type
+     * @param array<string, mixed> $options
+     * @return ($type is 'all' ? list<Model> : Model|null)
+     * @throws ActiveRecordException for a name in 'unscoped' that is no global scope of the target
+     */
+    protected function find_related(string $type, array $options): Model|array|null
+    {
+        /** @var class-string<Model> $class */
+        $class = $this->class_name;
+
+        // an empty list removes nothing: the load is the one without the option
+        if ([] === ($this->options['unscoped'] ?? [])) {
+            return $class::find($type, $options);
+        }
+
+        if ('first' === $type) {
+            // the window of Model::find('first'): one record at the offset, none for a limit of 0 (#38)
+            $limit = $options['limit'] ?? null;
+            $options['limit'] = (0 === $limit || '0' === $limit) ? 0 : 1;
+            $options['offset'] = max(0, intval($options['offset'] ?? 0));
+        }
+
+        $options['mapped_names'] = $class::$alias_attribute;
+        /** @var true|list<string> $unscoped */
+        $unscoped = $this->options['unscoped'];
+        $models = $class::table()->find_without_global_scopes($options, true === $unscoped ? null : $unscoped);
+
+        return 'first' === $type ? ($models[0] ?? null) : $models;
     }
 
     /**
@@ -502,7 +555,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
      */
     protected function merge_association_options($options)
     {
-        // BelongsTo does not redeclare the list (static:: is self::): keep each option once
+        // each relationship type declares its own list on top of the base one: keep each option once
         $available_options = array_unique(array_merge(self::$valid_association_options, static::$valid_association_options));
 
         foreach ($options as $key => $ignored) {

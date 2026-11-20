@@ -13,6 +13,7 @@ namespace ActiveRecord;
  * @internal Serves Table, Model and Query; not a supported API.
  * @phpstan-import-type Where from QueryState
  * @phpstan-import-type WhereGroup from QueryState
+ * @phpstan-import-type ScopeState from QueryState
  */
 final class ScopeRegistry
 {
@@ -21,11 +22,28 @@ final class ScopeRegistry
      */
     public const array DYNAMIC_FINDER_PREFIXES = ['find_by', 'find_all_by', 'count_by', 'find_or_create_by'];
 
+    /** The fields of a QueryState that hold its where clauses: all a global scope may add. */
+    private const array WHERE_FIELDS = ['wheres', 'empty_where', 'skipped_when'];
+
     /** @var array<class-string, self> the registries built so far, by model class; a failed build is not kept */
     private static array $registries = [];
 
+    /** @var array<class-string, array<string, \Closure>> the global-scope indexes built so far, by model class */
+    private static array $globals = [];
+
     /** @var array<string, string> public scope name => name of the method that implements it */
     private array $scopes = [];
+
+    /**
+     * The global scopes whose bodies are running in a fiber, "<class>::<scope>" => true, by the fiber that runs them:
+     * a scope applied again inside its own body is refused (see global_wheres()). Built on first use.
+     *
+     * @var \WeakMap<object, array<string, true>>|null
+     */
+    private static ?\WeakMap $running = null;
+
+    /** @var array<string, true> the global scopes whose bodies are running outside any fiber, as self::$running has them */
+    private static array $running_main = [];
 
     /**
      * Reflects the scopes of $model_class and validates them. The names are compared as PHP compares method names,
@@ -48,7 +66,7 @@ final class ScopeRegistry
             $has_attribute = [] !== $method->getAttributes(Scope::class);
 
             if ($has_attribute && !$method->isProtected()) {
-                throw $this->error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
+                throw self::scope_error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
             }
 
             if ($has_attribute) {
@@ -75,7 +93,7 @@ final class ScopeRegistry
             $lower = strtolower($method->getName());
 
             if (!$method->isStatic() && [] !== $method->getAttributes(Scope::class)) {
-                throw $this->error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
+                throw self::scope_error($model_class, $method->getName(), 'is marked #[Scope] but is not a protected static method');
             }
 
             if (isset($scope_methods[$lower])) {
@@ -103,7 +121,7 @@ final class ScopeRegistry
             };
 
             if (null !== $reason) {
-                throw $this->error($model_class, $name, $reason);
+                throw self::scope_error($model_class, $name, $reason);
             }
 
             $this->scopes[$name] = $methods[0];
@@ -121,6 +139,314 @@ final class ScopeRegistry
     public static function for_class(string $model_class): self
     {
         return self::$registries[$model_class] ??= new self($model_class);
+    }
+
+    /**
+     * The global scopes of $model_class, name => invoker, the root ancestor's first, then each subclass down to the
+     * class; within a class its own methods in declaration order, then those of its traits in use order. A redeclared
+     * method keeps the position of the first declaration. Built by reflection on the first call and kept; a build that
+     * throws is not kept. It does not build the registry of local scopes: those are validated on their own first use.
+     *
+     * @internal Serves Table, Model and Query; not a supported API.
+     * @param class-string $model_class
+     * @return array<string, \Closure>
+     * @throws ConfigException when a global scope is declared wrongly (spec §6, errors 1 to 5)
+     */
+    public static function global_scopes(string $model_class): array
+    {
+        return self::$globals[$model_class] ??= self::build_global_scopes($model_class);
+    }
+
+    /**
+     * Whether $model_class declares or inherits a global scope.
+     *
+     * @internal Serves Table, Model and Query; not a supported API.
+     * @param class-string $model_class
+     * @throws ConfigException when a global scope is declared wrongly
+     */
+    public static function has_global_scopes(string $model_class): bool
+    {
+        return [] !== self::global_scopes($model_class);
+    }
+
+    /**
+     * The conditions the global scopes of $model_class add to a query whose scope state is $scopes (spec §4.4 steps 1
+     * to 3): those it does not remove, by name in its removed list or all of them, in index order (see
+     * global_scopes()), each one AND group, its conditions in parentheses. A scope that adds no condition adds no
+     * group. Each runs on a new query of the model, read through $table, that applies no scope itself and holds
+     * nothing; it may add where clauses only. What a where call that added nothing or a skipped when() records stays
+     * on that query.
+     *
+     * While a scope's body runs, it is marked for the running fiber: a query of the model compiled in the body that
+     * applies the same scope again, directly or through another model's scope, is refused. One that removes it runs.
+     *
+     * @internal Serves QueryCompiler; not a supported API.
+     * @param class-string $model_class
+     * @param ScopeState $scopes
+     * @return list<WhereGroup>
+     * @throws ConfigException when a global scope is declared wrongly
+     * @throws ActiveRecordException when a scope adds a clause other than a where, returns anything but null or its
+     *   query, or is applied again inside its own body (spec §6, errors 9 to 11)
+     */
+    public static function global_wheres(string $model_class, Table $table, array $scopes): array
+    {
+        $groups = [];
+
+        // read as global_scopes() reads it, without the call: a model that is not opted in costs this lookup only
+        foreach (self::$globals[$model_class] ??= self::build_global_scopes($model_class) as $name => $scope) {
+            if ($scopes['all'] || in_array($name, $scopes['removed'], true)) {
+                continue;
+            }
+
+            $query = Query::for_table($table);
+            $state = $query->state();
+            $state->scopes = null;
+            $result = self::run_global_scope($model_class, $name, $scope, $query);
+
+            if (null !== $result && $result !== $query) {
+                throw self::return_error($name, $model_class, $result);
+            }
+
+            // told by held_fields(), the clauses named only for the error
+            if ([] !== QueryCompiler::held_fields($state, self::WHERE_FIELDS)) {
+                throw new ActiveRecordException(sprintf(
+                    'The global scope %s() of %s can only add where clauses: it also adds %s',
+                    $name,
+                    $model_class,
+                    QueryCompiler::held_clauses($state, self::WHERE_FIELDS),
+                ));
+            }
+
+            if ([] !== $state->wheres) {
+                $groups[] = self::group($state->wheres);
+            }
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Runs the global scope $name of $model_class on $query, marked for the running fiber while its body runs (see
+     * global_wheres()), and returns what it returns.
+     *
+     * @param Query<Model> $query
+     * @throws ActiveRecordException when the scope is running already in this fiber
+     */
+    private static function run_global_scope(string $model_class, string $name, \Closure $scope, Query $query): mixed
+    {
+        $key = "$model_class::$name";
+        $fiber = \Fiber::getCurrent();
+
+        // outside any fiber, the common case, the marks are a plain array
+        if (null === $fiber) {
+            if (isset(self::$running_main[$key])) {
+                throw self::reentry_error($model_class, $name);
+            }
+
+            self::$running_main[$key] = true;
+
+            try {
+                return $scope($query);
+            } finally {
+                unset(self::$running_main[$key]);
+            }
+        }
+
+        self::$running ??= new \WeakMap();
+
+        if (isset(self::$running[$fiber][$key])) {
+            throw self::reentry_error($model_class, $name);
+        }
+
+        $running = self::$running[$fiber] ?? [];
+        $running[$key] = true;
+        self::$running[$fiber] = $running;
+
+        try {
+            return $scope($query);
+        } finally {
+            $running = self::$running[$fiber];
+            unset($running[$key]);
+
+            if ([] === $running) {
+                unset(self::$running[$fiber]);
+            } else {
+                self::$running[$fiber] = $running;
+            }
+        }
+    }
+
+    /**
+     * The error of the global scope $name of $model_class applied again inside its own body (spec §6, error 11).
+     */
+    private static function reentry_error(string $model_class, string $name): ActiveRecordException
+    {
+        return new ActiveRecordException(sprintf(
+            "The global scope %s() of %s is applied again inside its own body: a query of %s run there must remove it with without_global_scope('%s')",
+            $name,
+            $model_class,
+            $model_class,
+            $name,
+        ));
+    }
+
+    /**
+     * @param class-string $model_class
+     * @return array<string, \Closure>
+     */
+    private static function build_global_scopes(string $model_class): array
+    {
+        $reflection = new \ReflectionClass($model_class);
+
+        // the classes below Model, root first
+        $chain = [];
+        for ($class = $reflection; false !== $class && Model::class !== $class->getName(); $class = $class->getParentClass()) {
+            array_unshift($chain, $class);
+        }
+
+        /** @var array<string, string> $placed lower-case name => name, in index order */
+        $placed = [];
+
+        foreach ($chain as $class) {
+            foreach (self::methods_declared_by($class) as $declared) {
+                $name = $declared->getName();
+                $lower = strtolower($name);
+                $is_global = [] !== $declared->getAttributes(GlobalScope::class);
+
+                if (!$is_global) {
+                    if (isset($placed[$lower])) {
+                        throw self::scope_error($model_class, $name, 'redeclares a global scope without #[GlobalScope]');
+                    }
+
+                    continue;
+                }
+
+                if (!$declared->isStatic() || !$declared->isProtected()) {
+                    throw self::scope_error($model_class, $name, 'is marked #[GlobalScope] but is not a protected static method');
+                }
+
+                if ([] !== $declared->getAttributes(Scope::class)) {
+                    throw self::scope_error($model_class, $name, 'is marked both #[Scope] and #[GlobalScope]');
+                }
+
+                foreach (array_slice($declared->getParameters(), 1) as $parameter) {
+                    if (!$parameter->isOptional()) {
+                        throw self::scope_error($model_class, $name, 'takes a required parameter besides the query');
+                    }
+                }
+
+                if (!isset($placed[$lower])) {
+                    $placed[$lower] = $name;
+                }
+            }
+        }
+
+        if ([] === $placed) {
+            return [];
+        }
+
+        $reasons = self::global_name_reasons($reflection, $placed);
+        // made in the scope of $model_class, the closure each invoker is calls the scope method with static bound to the
+        // queried class, as a local scope runs, and not to the class or the trait that declares it, as getClosure() would
+        $invoker = \Closure::bind(static fn(string $method): \Closure => static::$method(...), null, $model_class);
+        $index = [];
+        foreach ($placed as $name) {
+            if (null !== ($reason = $reasons[strtolower($name)] ?? null)) {
+                throw self::scope_error($model_class, $name, $reason);
+            }
+
+            $index[$name] = $invoker($name);
+        }
+
+        return $index;
+    }
+
+    /**
+     * The methods $class declares itself, in declaration order, then those its traits bring, in use order.
+     *
+     * @param \ReflectionClass<object> $class
+     * @return list<\ReflectionMethod>
+     */
+    private static function methods_declared_by(\ReflectionClass $class): array
+    {
+        $own = [];
+        $own_names = [];
+        foreach ($class->getMethods() as $method) {
+            if ($method->getDeclaringClass()->getName() === $class->getName() && self::is_written_in($method, $class)) {
+                $own[] = $method;
+                $own_names[strtolower($method->getName())] = true;
+            }
+        }
+
+        foreach ($class->getTraits() as $trait) {
+            foreach ($trait->getMethods() as $trait_method) {
+                if (!isset($own_names[strtolower($trait_method->getName())])) {
+                    $own_names[strtolower($trait_method->getName())] = true;
+                    $own[] = $class->getMethod($trait_method->getName());
+                }
+            }
+        }
+
+        return $own;
+    }
+
+    /**
+     * Whether the body of $method is in the source of $class itself and not in a trait the class uses.
+     *
+     * @param \ReflectionClass<object> $class
+     */
+    private static function is_written_in(\ReflectionMethod $method, \ReflectionClass $class): bool
+    {
+        return $method->getFileName() === $class->getFileName()
+            && $method->getStartLine() >= $class->getStartLine()
+            && $method->getEndLine() <= $class->getEndLine();
+    }
+
+    /**
+     * Why each global scope name is refused, by lower-case name: it is also a local scope of the model, or breaks the
+     * name rules of local scopes, with the reason texts of those.
+     *
+     * @param \ReflectionClass<object> $reflection
+     * @param array<string, string> $placed
+     * @return array<string, string>
+     */
+    private static function global_name_reasons(\ReflectionClass $reflection, array $placed): array
+    {
+        // the local scopes, read as the registry reads them
+        $locals = [];
+        foreach ($reflection->getMethods(\ReflectionMethod::IS_STATIC) as $method) {
+            $name = $method->getName();
+
+            if ([] !== $method->getAttributes(Scope::class)) {
+                $locals[strtolower($name)] = true;
+            } elseif ($method->isPublic() && str_starts_with($name, 'scope_') && strlen($name) > 6) {
+                $locals[strtolower(substr($name, 6))] = true;
+            }
+        }
+
+        $query_methods = [];
+        foreach ((new \ReflectionClass(Query::class))->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+            if (!str_starts_with($method->getName(), '__')) {
+                $query_methods[strtolower($method->getName())] = true;
+            }
+        }
+
+        $reasons = [];
+        foreach ($placed as $lower => $name) {
+            $reason = match (true) {
+                isset($locals[$lower]) => 'is also a local scope of the model',
+                isset($query_methods[$lower]) => 'is a public method of Query',
+                self::starts_a_dynamic_finder($lower) => 'starts like a dynamic finder',
+                'update' === $lower || 'delete' === $lower => 'is update or delete, refused by a model without conditions',
+                default => null,
+            };
+
+            if (null !== $reason) {
+                $reasons[$lower] = $reason;
+            }
+        }
+
+        return $reasons;
     }
 
     /**
@@ -155,12 +481,7 @@ final class ScopeRegistry
             $result = (new \ReflectionMethod($this->model_class, $this->scopes[$name]))->invoke(null, $query, ...$args);
 
             if (null !== $result && $result !== $query) {
-                throw new ActiveRecordException(sprintf(
-                    'The scope %s() of %s must return null or the query it was given, %s returned',
-                    $name,
-                    $this->model_class,
-                    get_debug_type($result),
-                ));
+                throw self::return_error($name, $this->model_class, $result);
             }
         } finally {
             // read again through the query: the scope changed its state
@@ -207,7 +528,20 @@ final class ScopeRegistry
         return ['type' => 'group', 'boolean' => 'AND', 'not' => false, 'group' => $group];
     }
 
-    private function starts_a_dynamic_finder(string $name): bool
+    /**
+     * The error of a scope, local or global, that returns anything but null or the query it was given.
+     */
+    private static function return_error(string $name, string $model_class, mixed $result): ActiveRecordException
+    {
+        return new ActiveRecordException(sprintf(
+            'The scope %s() of %s must return null or the query it was given, %s returned',
+            $name,
+            $model_class,
+            get_debug_type($result),
+        ));
+    }
+
+    private static function starts_a_dynamic_finder(string $name): bool
     {
         foreach (self::DYNAMIC_FINDER_PREFIXES as $prefix) {
             if (str_starts_with($name, $prefix)) {
@@ -218,7 +552,7 @@ final class ScopeRegistry
         return false;
     }
 
-    private function error(string $model_class, string $name, string $reason): ConfigException
+    private static function scope_error(string $model_class, string $name, string $reason): ConfigException
     {
         return new ConfigException(sprintf('%s declares the scope %s(), which %s', $model_class, $name, $reason));
     }

@@ -668,7 +668,12 @@ class Validations
 
             $conditions[0] = $sql;
 
-            if ($this->model->exists(['conditions' => $conditions])) {
+            // a model with global scopes counts the rows they hide too
+            $taken = ScopeRegistry::has_global_scopes($this->model::class)
+                ? $table->exists_without_global_scopes(['conditions' => $conditions, 'mapped_names' => [], 'select' => '1'])
+                : $this->model->exists(['conditions' => $conditions]);
+
+            if ($taken) {
                 $this->record->add($add_record, $options['message']);
             }
         }

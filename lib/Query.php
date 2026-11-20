@@ -147,6 +147,8 @@ class Query
         'chunk_by_id_desc',
         'lazy_by_id',
         'lazy_by_id_desc',
+        'without_global_scope',
+        'without_global_scopes',
     ];
 
     private QueryState $state;
@@ -159,6 +161,7 @@ class Query
     public function __construct(private readonly string $model_class)
     {
         $this->state = new QueryState();
+        $this->state->scopes = QueryState::ACTIVE_SCOPES;
     }
 
     /**
@@ -2782,6 +2785,77 @@ class Query
         return ScopeRegistry::for_class($this->model_class)->has($name);
     }
 
+    /**
+     * Removes the global scope $name of the model from this query (spec §3.3): its condition is left out of every
+     * statement the query compiles. The scopes are read by reflection, without loading the Table.
+     *
+     * @throws ActiveRecordException on a where() group's query or a global scope's own query, which carry no scopes,
+     *   or for a name that is no global scope of the model; the query is left as it was
+     * @throws ConfigException when a global scope of the model is declared wrongly
+     */
+    public function without_global_scope(string $name): static
+    {
+        return $this->remove_global_scopes('without_global_scope', [$name]);
+    }
+
+    /**
+     * Removes the global scopes $names of the model from this query, or every one of them with null (spec §3.3): their
+     * conditions are left out of every statement the query compiles. The scopes are read by reflection, without loading
+     * the Table.
+     *
+     * @param list<string>|null $names
+     * @throws ActiveRecordException on a where() group's query or a global scope's own query, which carry no scopes,
+     *   or for a name that is no global scope of the model; the query is left as it was
+     * @throws ConfigException when $names is a list and a global scope of the model is declared wrongly: with null the
+     *   scopes are not read, and a wrong declaration surfaces when the query is compiled
+     */
+    public function without_global_scopes(?array $names = null): static
+    {
+        return $this->remove_global_scopes('without_global_scopes', $names);
+    }
+
+    /**
+     * Removes the global scopes $names of the model from this query, or every one with null, for the removal method
+     * $method (see without_global_scopes()). Every name is checked before the query changes.
+     *
+     * @param list<string>|null $names
+     * @throws ActiveRecordException as without_global_scopes() does
+     */
+    private function remove_global_scopes(string $method, ?array $names): static
+    {
+        if (null === $this->state->scopes) {
+            throw new ActiveRecordException(sprintf("%s() cannot be used on a where() group or on a global scope's query: they carry no scopes", $method));
+        }
+
+        if (null === $names) {
+            $this->state->scopes['all'] = true;
+
+            return $this;
+        }
+
+        $scopes = ScopeRegistry::global_scopes($this->model_class);
+        $removed = $this->state->scopes['removed'];
+
+        foreach ($names as $name) {
+            if (!isset($scopes[$name])) {
+                throw new ActiveRecordException(sprintf(
+                    '%s has no global scope named %s: %s',
+                    $this->model_class,
+                    $name,
+                    [] === $scopes ? 'it has none' : 'its global scopes are ' . implode(', ', array_keys($scopes)),
+                ));
+            }
+
+            if (!in_array($name, $removed, true)) {
+                $removed[] = $name;
+            }
+        }
+
+        $this->state->scopes['removed'] = $removed;
+
+        return $this;
+    }
+
     private function table(): Table
     {
         return $this->table ??= Table::load($this->model_class);
@@ -3560,6 +3634,7 @@ class Query
     {
         $query = new self($this->model_class);
         $query->table = $this->table;
+        $query->state->scopes = null;
         $callback($query);
 
         // a where call that added no condition, and a when() or an unless() that skipped its callback, are where clauses

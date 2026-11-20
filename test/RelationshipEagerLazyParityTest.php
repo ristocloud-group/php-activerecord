@@ -382,4 +382,26 @@ class RelationshipEagerLazyParityTest extends DatabaseTest
 
         $this->assert_parity([1 => [1, 2, 3, 5, 6], 2 => [], 6 => [], 7 => [], 8 => [], 9 => []], 'ParityVenue', 'typed_events');
     }
+
+    // ---- (h) a global scope on the target (GlobalScopedAuthor hides author 2), and 'unscoped' ----
+
+    public function test_eager_belongs_to_keeps_the_target_scope_like_the_lazy_load()
+    {
+        $this->assert_parity([1 => 1, 2 => null], 'GlobalScopedBook', 'author', 'book_id asc', 'book_id', 'author_id');
+        $this->assert_parity([1 => 1, 2 => 2], 'GlobalScopedBook', 'any_author', 'book_id asc', 'book_id', 'author_id');
+    }
+
+    public function test_eager_has_many_and_has_one_keep_the_target_scope_like_the_lazy_load()
+    {
+        // owners 1, 3, 4 (2 is hidden); children by parent: 1 -> [3], 3 -> [1], 4 -> []; author 4's parent is 2
+        $this->assert_parity([1 => [3], 3 => [1], 4 => []], 'GlobalScopedRecordingAuthor', 'children', 'author_id asc', 'author_id', 'author_id');
+        $this->assert_parity([1 => 3, 3 => 1, 4 => null], 'GlobalScopedRecordingAuthor', 'parent', 'author_id asc', 'author_id', 'author_id');
+        $this->assert_parity([1 => 3, 3 => 1, 4 => 2], 'GlobalScopedRecordingAuthor', 'any_parent', 'author_id asc', 'author_id', 'author_id');
+    }
+
+    public function test_eager_declared_or_conditions_with_a_target_scope_like_the_lazy_load()
+    {
+        $sql = $this->assert_parity([1 => [1], 2 => []], 'GlobalScopedBookAuthorOr', 'listed_authors', 'book_id asc', 'book_id', 'author_id');
+        $this->assert_sql_has("AND ((name = 'Tito' OR name = 'George W. Bush') AND", $sql);
+    }
 }

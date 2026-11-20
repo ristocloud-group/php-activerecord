@@ -59,11 +59,12 @@ class HasMany extends AbstractRelationship
      * <li><b>group:</b> GROUP BY clause</li>
      * <li><b>order:</b> ORDER BY clause</li>
      * <li><b>through:</b> name of a model</li>
+     * <li><b>unscoped:</b> true, or a list of names: the global scopes of the target left out of its loads</li>
      * </ul>
      *
      * @var list<string>
      */
-    protected static $valid_association_options = ['primary_key', 'order', 'group', 'having', 'limit', 'offset', 'through', 'source'];
+    protected static $valid_association_options = ['primary_key', 'order', 'group', 'having', 'limit', 'offset', 'through', 'source', 'unscoped'];
 
     /** @var list<string>|null */
     protected $primary_key;
@@ -141,7 +142,6 @@ class HasMany extends AbstractRelationship
      */
     public function load(Model $model)
     {
-        $class_name = $this->class_name;
         $this->set_keys(get_class($model));
 
         // since through relationships depend on other relationships we can't do
@@ -223,7 +223,7 @@ class HasMany extends AbstractRelationship
 
         $options = $this->unset_non_finder_options($this->options);
         $options['conditions'] = $conditions;
-        return $class_name::find($this->poly_relationship ? 'all' : 'first', $options);
+        return $this->find_related($this->poly_relationship ? 'all' : 'first', $options);
     }
 
     /**
