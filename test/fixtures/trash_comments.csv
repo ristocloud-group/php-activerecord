@@ -1,0 +1,4 @@
+id,trash_post_id,body,deleted_at
+1,1,first,NULL
+2,1,second,2026-01-01 00:00:00
+3,2,third,NULL

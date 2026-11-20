@@ -74,6 +74,11 @@ class Config extends Singleton
     private bool $tinyint_as_boolean = true;
 
     /**
+     * Whether a condition on, or a write of, the soft-delete column of a SoftDeletable model is logged.
+     */
+    private bool $warn_soft_delete_conditions = false;
+
+    /**
      * Allows config initialization using a closure.
      *
      * This method is just syntatic sugar.
@@ -274,6 +279,28 @@ class Config extends Singleton
     public function get_tinyint_as_boolean(): bool
     {
         return $this->tinyint_as_boolean;
+    }
+
+    /**
+     * Turns the soft-delete migration warning on or off (off by default).
+     *
+     * When on, a query or a bulk write on a SoftDeletable model whose conditions name the soft-delete column,
+     * and a write that sets it, is logged as a warning through the configured PSR logger ({@link set_logger()}),
+     * once per statement: the soft_deletes scope already filters that column, so a hand-written condition on it
+     * is ANDed with the filter. Use only_trashed(), with_trashed() or restore() instead. Nothing is reported
+     * without a logger. It never throws and never changes the SQL.
+     */
+    public function set_warn_soft_delete_conditions(bool $enabled = true): void
+    {
+        $this->warn_soft_delete_conditions = $enabled;
+    }
+
+    /**
+     * Returns whether the soft-delete migration warning is on.
+     */
+    public function get_warn_soft_delete_conditions(): bool
+    {
+        return $this->warn_soft_delete_conditions;
     }
 
     /**

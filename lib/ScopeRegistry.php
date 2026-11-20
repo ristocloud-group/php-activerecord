@@ -46,6 +46,14 @@ final class ScopeRegistry
     private static array $running_main = [];
 
     /**
+     * The soft-delete column of each SoftDeletable model checked so far, by its Table: a Table loaded again is checked
+     * again. Built on first use.
+     *
+     * @var \WeakMap<Table, string>|null
+     */
+    private static ?\WeakMap $soft_delete_columns = null;
+
+    /**
      * Reflects the scopes of $model_class and validates them. The names are compared as PHP compares method names,
      * without regard to case: a scope named like a method in another case would never be reached.
      *
@@ -150,7 +158,8 @@ final class ScopeRegistry
      * @internal Serves Table, Model and Query; not a supported API.
      * @param class-string $model_class
      * @return array<string, \Closure>
-     * @throws ConfigException when a global scope is declared wrongly (spec §6, errors 1 to 5)
+     * @throws ConfigException when a global scope is declared wrongly, or the model has only one of SoftDeletable and
+     *   SoftDeletes (spec §6, errors 1 to 6)
      */
     public static function global_scopes(string $model_class): array
     {
@@ -170,12 +179,63 @@ final class ScopeRegistry
     }
 
     /**
+     * The soft-delete column of the SoftDeletable model of $table, the name its soft_delete_column() gives, as the
+     * table names it: a column matched as the database matches column names. Checked on the first call for $table and
+     * kept; a check that throws is not kept.
+     *
+     * @internal Serves QueryCompiler, Query and Model; not a supported API.
+     * @throws ConfigException when the name is no column of the table, or one of a type other than DATE and DATETIME
+     *   (spec §6, errors 7 and 8)
+     */
+    public static function soft_delete_column(Table $table): string
+    {
+        self::$soft_delete_columns ??= new \WeakMap();
+
+        return self::$soft_delete_columns[$table] ??= self::check_soft_delete_column($table);
+    }
+
+    /**
+     * @throws ConfigException as soft_delete_column() does
+     */
+    private static function check_soft_delete_column(Table $table): string
+    {
+        /** @var class-string<SoftDeletable> $model_class */
+        $model_class = $table->class->name;
+        $name = $model_class::soft_delete_column();
+        $connection = $table->connection();
+        $key = $connection->column_name_key($name);
+
+        foreach ($table->columns as $column) {
+            if ($connection->column_name_key($column->name) !== $key) {
+                continue;
+            }
+
+            if (Column::DATE !== $column->type && Column::DATETIME !== $column->type) {
+                throw new ConfigException(sprintf(
+                    '%s::soft_delete_column() names %s, a %s column: soft delete needs a DATE or DATETIME column',
+                    $model_class,
+                    $name,
+                    $column->raw_type,
+                ));
+            }
+
+            return $column->name;
+        }
+
+        throw new ConfigException(sprintf('%s::soft_delete_column() names %s, which is not a column of %s', $model_class, $name, $table->table));
+    }
+
+    /**
      * The conditions the global scopes of $model_class add to a query whose scope state is $scopes (spec §4.4 steps 1
-     * to 3): those it does not remove, by name in its removed list or all of them, in index order (see
+     * to 4): those it does not remove, by name in its removed list or all of them, in index order (see
      * global_scopes()), each one AND group, its conditions in parentheses. A scope that adds no condition adds no
      * group. Each runs on a new query of the model, read through $table, that applies no scope itself and holds
      * nothing; it may add where clauses only. What a where call that added nothing or a skipped when() records stays
      * on that query.
+     *
+     * The soft_deletes scope of a SoftDeletable model is governed by the trashed state only (spec §4.2): it runs for
+     * default and without, whatever the removed list and the all flag say, is left out for with, and is replaced in its
+     * own position by "<column> IS NOT NULL" for only. Its column is checked first, whatever the state.
      *
      * While a scope's body runs, it is marked for the running fiber: a query of the model compiled in the body that
      * applies the same scope again, directly or through another model's scope, is refused. One that removes it runs.
@@ -184,7 +244,7 @@ final class ScopeRegistry
      * @param class-string $model_class
      * @param ScopeState $scopes
      * @return list<WhereGroup>
-     * @throws ConfigException when a global scope is declared wrongly
+     * @throws ConfigException when a global scope is declared wrongly, or the soft-delete column is wrong
      * @throws ActiveRecordException when a scope adds a clause other than a where, returns anything but null or its
      *   query, or is applied again inside its own body (spec §6, errors 9 to 11)
      */
@@ -194,7 +254,21 @@ final class ScopeRegistry
 
         // read as global_scopes() reads it, without the call: a model that is not opted in costs this lookup only
         foreach (self::$globals[$model_class] ??= self::build_global_scopes($model_class) as $name => $scope) {
-            if ($scopes['all'] || in_array($name, $scopes['removed'], true)) {
+            if (SoftDeletable::SCOPE === $name && is_a($model_class, SoftDeletable::class, true)) {
+                $column = self::soft_delete_column($table);
+
+                if ('with' === $scopes['trashed']) {
+                    continue;
+                }
+
+                if ('only' === $scopes['trashed']) {
+                    $query = Query::for_table($table);
+                    $query->state()->scopes = null;
+                    $groups[] = self::group($query->where_not_null($column)->state()->wheres);
+
+                    continue;
+                }
+            } elseif ($scopes['all'] || in_array($name, $scopes['removed'], true)) {
                 continue;
             }
 
@@ -297,6 +371,14 @@ final class ScopeRegistry
     private static function build_global_scopes(string $model_class): array
     {
         $reflection = new \ReflectionClass($model_class);
+        $soft_deletable = is_a($model_class, SoftDeletable::class, true);
+
+        if ($soft_deletable !== self::uses_soft_deletes($model_class)) {
+            throw new ConfigException(sprintf(
+                $soft_deletable ? '%s implements SoftDeletable but does not use SoftDeletes' : '%s uses SoftDeletes but does not implement SoftDeletable',
+                $model_class,
+            ));
+        }
 
         // the classes below Model, root first
         $chain = [];
@@ -359,6 +441,28 @@ final class ScopeRegistry
         }
 
         return $index;
+    }
+
+    /**
+     * Whether $model_class or a class it extends uses the SoftDeletes trait, directly or through another trait.
+     *
+     * @param class-string $model_class
+     */
+    private static function uses_soft_deletes(string $model_class): bool
+    {
+        for ($class = $model_class; false !== $class; $class = get_parent_class($class)) {
+            $traits = array_values(class_uses($class) ?: []);
+
+            while (null !== ($trait = array_pop($traits))) {
+                if (SoftDeletes::class === $trait) {
+                    return true;
+                }
+
+                $traits = [...$traits, ...array_values(class_uses($trait) ?: [])];
+            }
+        }
+
+        return false;
     }
 
     /**

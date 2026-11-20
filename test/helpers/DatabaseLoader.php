@@ -107,6 +107,8 @@ class DatabaseLoader
             $fields = join(',', $fields);
 
             while (($values = fgetcsv($fp, 0, ',', '"', '\\'))) {
+                // an empty field is the empty string; the literal NULL is a SQL NULL
+                $values = array_map(static fn($v) => 'NULL' === $v ? null : $v, $values);
                 $this->db->query("INSERT INTO $table($fields) VALUES($markers)", $values);
             }
         }

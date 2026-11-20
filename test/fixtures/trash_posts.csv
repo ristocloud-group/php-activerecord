@@ -1,0 +1,5 @@
+id,code,title,draft,deleted_at,updated_at
+1,A,live,0,NULL,NULL
+2,B,trashed,0,2026-01-01 00:00:00,NULL
+3,C,draft,1,NULL,NULL
+4,D,live too,0,NULL,NULL

@@ -213,3 +213,57 @@ CREATE TABLE measurements (
   single REAL,
   label VARCHAR(20)
 );
+
+-- soft delete (sub-project 3a), trash_* tables: trash_pkless has no primary key, trash_dated keeps its flag in a DATE, trash_wrongs in a VARCHAR
+CREATE TABLE trash_posts (
+  id INTEGER NOT NULL PRIMARY KEY,
+  code VARCHAR(10) NOT NULL UNIQUE,
+  title VARCHAR(50),
+  draft INT NOT NULL DEFAULT 0,
+  deleted_at DATETIME NULL,
+  updated_at DATETIME NULL
+);
+
+CREATE TABLE trash_comments (
+  id INTEGER NOT NULL PRIMARY KEY,
+  trash_post_id INT,
+  body VARCHAR(50),
+  deleted_at DATETIME NULL
+);
+
+CREATE TABLE trash_tags (
+  id INTEGER NOT NULL PRIMARY KEY,
+  name VARCHAR(20),
+  deleted_at DATETIME NULL
+);
+
+CREATE TABLE trash_taggings (
+  id INTEGER NOT NULL PRIMARY KEY,
+  trash_post_id INT,
+  trash_tag_id INT,
+  deleted_at DATETIME NULL
+);
+
+CREATE TABLE trash_votes (
+  id INTEGER NOT NULL PRIMARY KEY,
+  trash_comment_id INT,
+  value INT,
+  deleted_at DATETIME NULL
+);
+
+CREATE TABLE trash_dated (
+  id INTEGER NOT NULL PRIMARY KEY,
+  name VARCHAR(20),
+  removed_on DATE NULL
+);
+
+CREATE TABLE trash_wrongs (
+  id INTEGER NOT NULL PRIMARY KEY,
+  name VARCHAR(20),
+  deleted_at VARCHAR(20) NULL
+);
+
+CREATE TABLE trash_pkless (
+  code INT NOT NULL,
+  deleted_at DATETIME NULL
+);

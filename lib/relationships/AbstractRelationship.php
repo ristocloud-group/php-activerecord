@@ -187,6 +187,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
         $qualified_keys = [];
         $match_key = null;
+        $middle_condition = null;
 
         if (!empty($includes)) {
             $options['include'] = $includes;
@@ -199,6 +200,7 @@ abstract class AbstractRelationship implements InterfaceRelationship
             }
             $through_table = $through_relationship->get_table();
             $source = $this->resolve_source_relationship($through_relationship);
+            $middle_condition = $this->middle_soft_delete_condition($through_relationship);
 
             if ($source instanceof HasMany) {
                 // Reverse-FK chain (issue #22): join the middle table and expose
@@ -267,6 +269,11 @@ abstract class AbstractRelationship implements InterfaceRelationship
             }
         } else {
             $options['conditions'] = $conditions;
+        }
+
+        // the :through middle model's soft delete, one more AND term after the key condition (spec §4.6)
+        if (null !== $middle_condition) {
+            $options['conditions'][0] .= ' AND ' . $middle_condition;
         }
 
         $options = $this->unset_non_finder_options($options);
@@ -891,6 +898,30 @@ abstract class AbstractRelationship implements InterfaceRelationship
         }
 
         return null;
+    }
+
+    /**
+     * The condition a `:through` load adds for the middle model's soft delete (spec §1.2 Q6, §4.6):
+     * `<middle table>.<column> IS NULL`, qualified with the middle table as the join names it, when the model of
+     * $through (the owner's relationship named in `through`) is SoftDeletable, else null. It is always applied: neither
+     * 'unscoped' on $through nor on the target lifts it, and the middle model's other global scopes do not apply.
+     *
+     * @param AbstractRelationship $through the owner's `through` relationship
+     * @throws ConfigException when the middle model declares its scopes wrongly or its soft-delete column is wrong
+     */
+    protected function middle_soft_delete_condition(AbstractRelationship $through): ?string
+    {
+        $middle_table = $through->get_table();
+        $middle_class = $middle_table->class->getName();
+
+        if (!is_a($middle_class, SoftDeletable::class, true)) {
+            return null;
+        }
+
+        // the scopes are read first, so a broken declaration (errors 1 to 6) is reported before the column (7 and 8)
+        ScopeRegistry::global_scopes($middle_class);
+
+        return $this->qualified_column($middle_table, ScopeRegistry::soft_delete_column($middle_table)) . ' IS NULL';
     }
 
     /**

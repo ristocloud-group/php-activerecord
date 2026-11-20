@@ -31,6 +31,8 @@ use Closure;
  * <li><b>after_validation_on_update:</b> ...</li>
  * <li><b>before_destroy:</b> called after a model has been deleted</li>
  * <li><b>after_destroy:</b> called after a model has been deleted</li>
+ * <li><b>before_restore:</b> called before a model of a SoftDeletable class is restored (false cancels it)</li>
+ * <li><b>after_restore:</b> called after a model of a SoftDeletable class has been restored</li>
  * </ul>
  *
  * This class isn't meant to be used directly. Callbacks are defined on your model like the example below:
@@ -82,6 +84,8 @@ class CallBack
         'after_validation_on_update',
         'before_destroy',
         'after_destroy',
+        'before_restore',
+        'after_restore',
     ];
 
     /**

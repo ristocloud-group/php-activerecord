@@ -132,6 +132,11 @@ class QueryForwardingTest extends DatabaseTest
             [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => 'Author::delete() would write every row: use Author::where(...)->delete(...) or Author::new_query()->delete(...)']],
             GoldenStatements::capture(fn() => Author::__callStatic('delete', []))
         );
+        // a model without SoftDeletes has no instance force_delete(): PHP hands the static call to the hook
+        $this->assert_same(
+            [['exception' => ActiveRecord\ActiveRecordException::class, 'message' => 'Author::force_delete() would write every row: use Author::where(...)->force_delete(...) or Author::new_query()->force_delete(...)']],
+            GoldenStatements::capture(fn() => Author::force_delete())
+        );
     }
 
     public function test_unknown_static_keeps_the_legacy_message(): void
@@ -182,7 +187,7 @@ class QueryForwardingTest extends DatabaseTest
             $this->assert_true($method->isPublic() && !$method->isStatic(), "Query::$name() is a public instance method");
             $this->assert_false(str_contains((string) $method->getDocComment(), '@internal'), "Query::$name() is not internal");
             $this->assert_false(method_exists(Model::class, $name), "Model::$name() is a method of its own, which PHP calls before __callStatic()");
-            $this->assert_false(in_array($name, ['update', 'delete'], true), "$name() is refused when called statically");
+            $this->assert_false(in_array($name, ['update', 'delete', 'force_delete'], true), "$name() is refused when called statically");
         }
     }
 }

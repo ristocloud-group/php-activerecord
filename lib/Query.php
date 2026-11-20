@@ -149,6 +149,9 @@ class Query
         'lazy_by_id_desc',
         'without_global_scope',
         'without_global_scopes',
+        'with_trashed',
+        'only_trashed',
+        'without_trashed',
     ];
 
     private QueryState $state;
@@ -2420,6 +2423,10 @@ class Query
      * as where($filters) with no filter, or whose when() or unless() skipped its callback, is refused instead. It runs
      * on the connection of the model's Table, and the statement is left in Table::$last_sql.
      *
+     * On a SoftDeletable model it trashes the rows instead (spec §5.1): an UPDATE of the same WHERE, order and limit
+     * that sets the soft-delete column, and updated_at as update() sets it, to one "now" (Timestamps::now(), read once).
+     * With with_trashed() it re-stamps the trashed rows too. force_delete() is the real DELETE.
+     *
      * Author::delete() is PHP's own Error, not this method: Model has an instance delete(), which deletes a model.
      *
      * <code>
@@ -2428,10 +2435,49 @@ class Query
      *
      * @throws ActiveRecordException before any statement, for a clause the query cannot use in a DELETE, or where calls
      *   that all added no condition
+     * @throws ConfigException on a SoftDeletable model whose soft delete is declared wrongly (spec §6, errors 6 to 8)
      */
     public function delete(): int
     {
-        return $this->execute_delete()->rowCount();
+        $column = $this->soft_delete_column();
+
+        if (null === $column) {
+            return $this->execute_delete()->rowCount();
+        }
+
+        $now = Timestamps::now();
+
+        return $this->execute_update([$column => new DateTime($now)], now: $now, method: 'delete')->rowCount();
+    }
+
+    /**
+     * DELETEs the rows the query selects, as delete() does on a model without soft delete, and returns how many the
+     * driver counts. On a SoftDeletable model it is a real DELETE (spec §3.3, §4.2): the soft-delete filter of the
+     * default is lifted, so trashed and live rows go, but an explicit only_trashed() or without_trashed() still applies,
+     * and every other global scope is kept unless the query removed it. The query itself is left as it was.
+     *
+     * Not forwarded by Model: Author::force_delete() would write every row and is refused (see Model::__callStatic()).
+     *
+     * <code>
+     * Order::only_trashed()->where('deleted_at', '<', $cutoff)->force_delete();
+     * </code>
+     *
+     * @throws ActiveRecordException|ConfigException as delete() does
+     */
+    public function force_delete(): int
+    {
+        if (null === $this->soft_delete_column()) {
+            return $this->delete();
+        }
+
+        // on a copy, so that the caller's query keeps its default filter
+        $query = clone $this;
+
+        if (null !== $query->state->scopes && 'default' === $query->state->scopes['trashed']) {
+            $query->state->scopes['trashed'] = 'with';
+        }
+
+        return $query->execute_delete(method: 'force_delete')->rowCount();
     }
 
     /**
@@ -2507,10 +2553,15 @@ class Query
      * $refuse_terminator is false: Table::update() turns it off, so that the WHERE it is given is
      * sent as it always was (see QueryCompiler::refuse_terminated_conditions()).
      *
-     * @internal Serves update(), Model::update_all() and Table::update(); not a supported API.
+     * $now is the time updated_at gets, as Timestamps::now() returns it, null to read it there: a
+     * bulk soft delete gives the one it also sets the soft-delete column to (spec §5). $method is
+     * the write the refusals name, delete for a bulk soft delete (see QueryCompiler::compile_update()).
+     *
+     * @internal Serves update(), delete(), Model::update_all(), Model::delete_all() and Table::update(); not a
+     *   supported API.
      * @param array<string, mixed>|string $set
      */
-    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
+    public function execute_update(array|string $set, bool $timestamps = true, bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true, ?string $now = null, string $method = 'update'): \PDOStatement
     {
         $table = $this->table();
 
@@ -2523,11 +2574,11 @@ class Query
             }
 
             if ($timestamps && is_hash($set)) {
-                $set = Timestamps::apply_to_update($table, $table->class->getName(), $set);
+                $set = Timestamps::apply_to_update($table, $table->class->getName(), $set, $now);
             }
         }
 
-        $sql = (new QueryCompiler($table, $connection, $refuse_terminator))->compile_update($this->state, $set);
+        $sql = (new QueryCompiler($table, $connection, $refuse_terminator))->compile_update($this->state, $set, $method);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }
@@ -2548,11 +2599,15 @@ class Query
      * $refuse_terminator false, the WHERE that Table::delete() is given is sent as it always was, as in
      * execute_update().
      *
-     * @internal Serves delete(), Model::delete_all() and Table::delete(); not a supported API.
+     * $method is the write the refusals name: force_delete or force_delete_all for the real DELETE of a soft-delete
+     * model (see QueryCompiler::compile_delete()).
+     *
+     * @internal Serves delete(), force_delete(), Model::delete_all(), Model::perform_force_delete_all() and
+     *   Table::delete(); not a supported API.
      */
-    public function execute_delete(bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true): \PDOStatement
+    public function execute_delete(bool $format_dates = true, ?Connection $connection = null, bool $refuse_terminator = true, string $method = 'delete'): \PDOStatement
     {
-        $sql = (new QueryCompiler($this->table(), $connection, $refuse_terminator))->compile_delete($this->state);
+        $sql = (new QueryCompiler($this->table(), $connection, $refuse_terminator))->compile_delete($this->state, $method);
 
         return $this->execute_write($sql, $format_dates, $connection);
     }
@@ -2815,8 +2870,80 @@ class Query
     }
 
     /**
+     * Reads the trashed rows of a soft-delete model with the live ones (spec §3.3, §4.2): the soft-delete filter is
+     * left out. The last of with_trashed(), only_trashed() and without_trashed() wins, as does a removal of the
+     * soft_deletes scope.
+     *
+     * @throws ActiveRecordException on a where() group's query or a global scope's own query, which carry no scopes,
+     *   or on a model that is not SoftDeletable; the query is left as it was
+     * @throws ConfigException when the model's global scopes or its soft-delete column are declared wrongly
+     */
+    public function with_trashed(): static
+    {
+        return $this->set_trashed('with_trashed', 'with');
+    }
+
+    /**
+     * Reads the trashed rows of a soft-delete model only (spec §3.3, §4.2): the soft-delete filter is replaced by
+     * "<column> IS NOT NULL", in its place among the model's global scopes; the two are never both applied.
+     *
+     * @throws ActiveRecordException|ConfigException as with_trashed() does
+     */
+    public function only_trashed(): static
+    {
+        return $this->set_trashed('only_trashed', 'only');
+    }
+
+    /**
+     * Reads the live rows of a soft-delete model only (spec §3.3, §4.2): the soft-delete filter again, whatever an
+     * earlier call lifted, without_global_scopes() included. Unlike the default, it also narrows a force delete.
+     *
+     * @throws ActiveRecordException|ConfigException as with_trashed() does
+     */
+    public function without_trashed(): static
+    {
+        return $this->set_trashed('without_trashed', 'without');
+    }
+
+    /**
+     * Sets the trashed state of this query to $trashed for the method $method (see with_trashed()), after checking the
+     * model's soft delete: its global scopes and its soft-delete column.
+     *
+     * @param 'with'|'only'|'without' $trashed
+     * @throws ActiveRecordException|ConfigException as with_trashed() does
+     */
+    private function set_trashed(string $method, string $trashed): static
+    {
+        if (null === $this->state->scopes) {
+            throw self::carries_no_scopes($method);
+        }
+
+        // the global scopes first: a model with the trait only reports error 6, not error 14
+        ScopeRegistry::global_scopes($this->model_class);
+
+        if (!is_a($this->model_class, SoftDeletable::class, true)) {
+            throw new ActiveRecordException(sprintf('%s() needs a model with soft delete: %s is not SoftDeletable', $method, $this->model_class));
+        }
+
+        ScopeRegistry::soft_delete_column($this->table());
+        $this->state->scopes['trashed'] = $trashed;
+
+        return $this;
+    }
+
+    /**
+     * The error of a removal method, $method, called on a query that applies no scope (spec §6, error 13).
+     */
+    private static function carries_no_scopes(string $method): ActiveRecordException
+    {
+        return new ActiveRecordException(sprintf("%s() cannot be used on a where() group or on a global scope's query: they carry no scopes", $method));
+    }
+
+    /**
      * Removes the global scopes $names of the model from this query, or every one with null, for the removal method
-     * $method (see without_global_scopes()). Every name is checked before the query changes.
+     * $method (see without_global_scopes()). Every name is checked before the query changes. The soft_deletes scope of
+     * a SoftDeletable model is governed by the trashed state (spec §4.2): removing it, by name or with null, sets the
+     * state to with.
      *
      * @param list<string>|null $names
      * @throws ActiveRecordException as without_global_scopes() does
@@ -2824,17 +2951,20 @@ class Query
     private function remove_global_scopes(string $method, ?array $names): static
     {
         if (null === $this->state->scopes) {
-            throw new ActiveRecordException(sprintf("%s() cannot be used on a where() group or on a global scope's query: they carry no scopes", $method));
+            throw self::carries_no_scopes($method);
         }
 
         if (null === $names) {
             $this->state->scopes['all'] = true;
+            $this->state->scopes['trashed'] = 'with';
 
             return $this;
         }
 
         $scopes = ScopeRegistry::global_scopes($this->model_class);
         $removed = $this->state->scopes['removed'];
+        $trashed = $this->state->scopes['trashed'];
+        $soft_deletable = is_a($this->model_class, SoftDeletable::class, true);
 
         foreach ($names as $name) {
             if (!isset($scopes[$name])) {
@@ -2846,12 +2976,15 @@ class Query
                 ));
             }
 
-            if (!in_array($name, $removed, true)) {
+            if ($soft_deletable && SoftDeletable::SCOPE === $name) {
+                $trashed = 'with';
+            } elseif (!in_array($name, $removed, true)) {
                 $removed[] = $name;
             }
         }
 
         $this->state->scopes['removed'] = $removed;
+        $this->state->scopes['trashed'] = $trashed;
 
         return $this;
     }
@@ -2859,6 +2992,24 @@ class Query
     private function table(): Table
     {
         return $this->table ??= Table::load($this->model_class);
+    }
+
+    /**
+     * The soft-delete column of the model, as the table names it, or null for a model that is not SoftDeletable. Its
+     * global scopes are read first, so that a broken declaration (spec §6, errors 1 to 6) is reported before the column
+     * is checked (errors 7 and 8).
+     *
+     * @throws ConfigException
+     */
+    private function soft_delete_column(): ?string
+    {
+        if (!is_a($this->model_class, SoftDeletable::class, true)) {
+            return null;
+        }
+
+        ScopeRegistry::global_scopes($this->model_class);
+
+        return ScopeRegistry::soft_delete_column($this->table());
     }
 
     /**

@@ -8,7 +8,7 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
     public function test_the_autoloader_declares_only_utils_up_front(): void
     {
         $declared = json_decode($this->run_in_fresh_process(
-            'echo json_encode(array_values(array_filter([...get_declared_classes(), ...get_declared_interfaces()],'
+            'echo json_encode(array_values(array_filter([...get_declared_classes(), ...get_declared_interfaces(), ...get_declared_traits()],'
             . ' fn($c) => str_starts_with($c, "ActiveRecord\\\\"))));',
         ), true, flags: JSON_THROW_ON_ERROR);
 
@@ -32,7 +32,7 @@ class LibraryLoadingTest extends SnakeCase_PHPUnit_Framework_TestCase
         $output = $this->run_in_fresh_process(
             '$wrong = [];'
             . ' foreach (' . var_export($files, true) . ' as $class => $file) {'
-            . ' if (!class_exists($class) && !interface_exists($class) && !enum_exists($class)) { $wrong[] = "$class does not autoload"; }'
+            . ' if (!class_exists($class) && !interface_exists($class) && !trait_exists($class) && !enum_exists($class)) { $wrong[] = "$class does not autoload"; }'
             . ' elseif (realpath((new ReflectionClass($class))->getFileName()) !== $file) { $wrong[] = "$class loads from " . (new ReflectionClass($class))->getFileName(); }'
             . ' }'
             . ' echo json_encode($wrong);',

@@ -181,6 +181,9 @@ use Closure;
  * @method static \Generator<int, static> lazy_by_id_desc(int $chunk_size = 1000, ?string $column = null, ?string $alias = null) The models of a new query on this class one at a time, read by key in pages of this many, the highest first
  * @method static Query<static> without_global_scope(string $name) A new query on this class without this global scope
  * @method static Query<static> without_global_scopes(?array<string> $names = null) A new query on this class without these global scopes, or without any with null
+ * @method static Query<static> with_trashed() A new query on this class that reads the trashed rows with the live ones (a SoftDeletable model)
+ * @method static Query<static> only_trashed() A new query on this class that reads the trashed rows only (a SoftDeletable model)
+ * @method static Query<static> without_trashed() A new query on this class that reads the live rows only (a SoftDeletable model)
  * @phpstan-import-type Relationship from AbstractRelationship
  * @phpstan-import-type BelongsToRelationship from AbstractRelationship
  */
@@ -245,6 +248,12 @@ class Model
      * by a reload() that finds the row again.
      */
     private bool $__destroyed = false;
+
+    /**
+     * Set while force_delete() runs on this record (SoftDeletes::is_force_deleting()): delete()
+     * then takes the hard path on a SoftDeletable model.
+     */
+    private bool $__force_deleting = false;
 
     /**
      * The records deleted inside each open Model::transaction() scope, per connection
@@ -1283,19 +1292,61 @@ class Model
      * limit it picks the records to delete; on Postgres an order without a limit is ignored</li>
      * </ul>
      *
+     * On a SoftDeletable model the records are trashed instead (spec §5.1): an UPDATE of the same
+     * conditions, order and limit sets the soft-delete column, and updated_at as update_all() sets
+     * it, to one time (Timestamps::now(), read once), and the trashed records are not touched.
+     * force_delete_all() is the real DELETE.
+     *
      * @param mixed $options
      * @return int Number of rows affected
      * @throws ActiveRecordException before any SQL for an argument that could be misread: a positional
      *   list (pass it as ['conditions' => [...]]), a hash mixing option keys with other keys
      *   ("Unknown key(s): ..."), or an int, float or bool; and for conditions whose SQL holds a statement
      *   terminator
+     * @throws ConfigException on a SoftDeletable model whose soft delete is declared wrongly (spec §6,
+     *   errors 6 to 8)
      */
     public static function delete_all($options = [])
     {
         $options = self::bulk_write_options($options, 'delete_all');
+        $query = self::bulk_write_query($options);
 
         // on the connection it always took, the hook a subclass can override
-        return self::bulk_write_query($options)->execute_delete(connection: static::connection())->rowCount();
+        if (is_a(static::class, SoftDeletable::class, true)) {
+            // the registry first, so that a broken declaration is reported before the column is checked
+            ScopeRegistry::global_scopes(static::class);
+            $column = ScopeRegistry::soft_delete_column(static::table());
+            $now = Timestamps::now();
+
+            return $query->execute_update([$column => new DateTime($now)], connection: static::connection(), now: $now, method: 'delete')->rowCount();
+        }
+
+        return $query->execute_delete(connection: static::connection())->rowCount();
+    }
+
+    /**
+     * The body of SoftDeletes::force_delete_all(): delete_all()'s options and checks, run as a real
+     * DELETE with the soft-delete scope removed (with_trashed()) and every other global scope kept
+     * (spec §3.4, §5.2). On a model that is not SoftDeletable, delete_all(). The model's global
+     * scopes are read first, so that a broken declaration (spec §6, errors 1 to 6) is reported
+     * before anything else.
+     *
+     * @param mixed $options as delete_all() takes them
+     * @return int Number of rows deleted
+     * @throws ActiveRecordException|ConfigException as delete_all() does
+     */
+    final protected static function perform_force_delete_all(mixed $options): int
+    {
+        ScopeRegistry::global_scopes(static::class);
+
+        if (!is_a(static::class, SoftDeletable::class, true)) {
+            return static::delete_all($options);
+        }
+
+        $options = self::bulk_write_options($options, 'force_delete_all');
+
+        // on the connection delete_all() takes
+        return self::bulk_write_query($options)->with_trashed()->execute_delete(connection: static::connection(), method: 'force_delete_all')->rowCount();
     }
 
     /**
@@ -1393,7 +1444,9 @@ class Model
      * nothing, null and [] still mean every row, a string (or another non-scalar) is the
      * conditions, and a hash without any option key is the conditions, as in count() and exists().
      *
-     * @param 'delete_all'|'update_all' $method the caller, named in the messages
+     * force_delete_all() takes the options of delete_all().
+     *
+     * @param 'delete_all'|'force_delete_all'|'update_all' $method the caller, named in the messages
      * @return array<string, mixed> with 'conditions' when there is a condition, and always
      *   with 'set' for update_all()
      * @throws ActiveRecordException
@@ -1438,7 +1491,18 @@ class Model
     /**
      * Deletes this model from the database and returns true if successful.
      *
+     * On a SoftDeletable model it trashes the record instead (spec §5.3), unless force_delete() runs:
+     * an UPDATE by primary key, with no global scope, sets the soft-delete column, and updated_at
+     * when the table has it and without_timestamps() does not run for the class, to one time
+     * (Timestamps::now(), read once). The values are written into the record's attributes, clean,
+     * and its other pending changes are left as they were; the record is not marked deleted, so it
+     * can still be written. A trashed record is stamped again. before_destroy and after_destroy run
+     * as for the hard delete; no validation and no save callback.
+     *
      * @return boolean
+     * @throws ConfigException on a model whose global scopes are declared wrongly, one with only one of
+     *   SoftDeletes and SoftDeletable included, or a SoftDeletable model whose soft-delete column is
+     *   wrong (spec §6, errors 1 to 8), before any callback or SQL
      */
     public function delete()
     {
@@ -1453,8 +1517,22 @@ class Model
 
         $this->verify_pk_for_write('delete');
 
+        // the model's global scopes first, a cached lookup: a model with only one of SoftDeletes and
+        // SoftDeletable is refused (spec §6, error 6) instead of being hard-deleted. Then a SoftDeletable
+        // model's column is checked before any callback, also for force_delete(), which then takes the
+        // hard path
+        ScopeRegistry::global_scopes(static::class);
+        $soft_delete_column = $this instanceof SoftDeletable ? ScopeRegistry::soft_delete_column(static::table()) : null;
+
         if (!$this->invoke_callback('before_destroy', false)) {
             return false;
+        }
+
+        if (null !== $soft_delete_column && !$this->__force_deleting) {
+            $this->write_soft_delete_column($soft_delete_column, true, $pk);
+            $this->invoke_callback('after_destroy', false);
+
+            return true;
         }
 
         static::table()->delete($pk);
@@ -1471,10 +1549,150 @@ class Model
     }
 
     /**
+     * The body of SoftDeletes::restore() (spec §5.4): sets the soft-delete column back to NULL, and
+     * updated_at as delete() sets it, by an UPDATE by primary key with no global scope, between the
+     * before_restore (false cancels it, and false is returned) and after_restore callbacks. The values
+     * are written into the record's attributes, clean, and its other pending changes are left as they
+     * were. A record that is not trashed is restored too. No validation and no save callback run.
+     *
+     * The model's global scopes are read first, so that a broken declaration (spec §6, errors 1 to
+     * 6) is reported before error 15; then the record is checked as delete() checks it, and the
+     * soft-delete column (errors 7 and 8).
+     *
+     * @throws ActiveRecordException on a model without soft delete, on a record without a primary
+     *   key value (an UPDATE without one would restore every row), with a null or changed one, or
+     *   that delete() removed
+     * @throws ReadOnlyException on a readonly record
+     * @throws ConfigException as delete() does
+     */
+    final protected function perform_restore_on_model(): bool
+    {
+        ScopeRegistry::global_scopes(static::class);
+
+        if (!$this instanceof SoftDeletable) {
+            throw new ActiveRecordException(sprintf('Cannot restore, %s has no soft delete', static::class));
+        }
+
+        $this->verify_not_readonly('restore');
+        $this->verify_not_destroyed('restore');
+
+        $pk = $this->values_for_pk();
+
+        if (empty($pk)) {
+            throw new ActiveRecordException('Cannot restore, no primary key defined for: ' . static::class);
+        }
+
+        $this->verify_pk_for_write('restore');
+        $column = $this->soft_delete_column_name();
+
+        if (!$this->invoke_callback('before_restore', false)) {
+            return false;
+        }
+
+        $this->write_soft_delete_column($column, false, $pk);
+        $this->invoke_callback('after_restore', false);
+
+        return true;
+    }
+
+    /**
+     * The body of SoftDeletes::force_delete() (spec §5.5): delete() on its hard path, its callbacks
+     * included, with force_deleting_flag() true while it runs. The flag gets its previous value back
+     * however delete() ends, so that a callback or a statement that throws never leaves a later
+     * delete() hard. The model's global scopes are read first (spec §6, errors 1 to 6). On a model
+     * without soft delete, delete().
+     *
+     * It returns what delete() returns, untyped like delete() (spec §3.4), so that an override of
+     * delete() that returns nothing keeps working.
+     *
+     * @return mixed what delete() returns
+     * @throws ActiveRecordException|ConfigException as delete() does
+     */
+    final protected function perform_force_delete_on_model(): mixed
+    {
+        ScopeRegistry::global_scopes(static::class);
+        $previous = $this->__force_deleting;
+        $this->__force_deleting = true;
+
+        try {
+            return $this->delete();
+        } finally {
+            $this->__force_deleting = $previous;
+        }
+    }
+
+    /**
+     * Whether force_delete() is running on this record, its callbacks included: what
+     * SoftDeletes::is_force_deleting() returns.
+     */
+    final protected function force_deleting_flag(): bool
+    {
+        return $this->__force_deleting;
+    }
+
+    /**
+     * The soft-delete column of this SoftDeletable model, as the table names it, its global scopes
+     * read first (spec §6: errors 1 to 6 before 7 and 8).
+     *
+     * @throws ConfigException
+     */
+    private function soft_delete_column_name(): string
+    {
+        ScopeRegistry::global_scopes(static::class);
+
+        return ScopeRegistry::soft_delete_column(static::table());
+    }
+
+    /**
+     * The UPDATE of the soft delete ($trash) or of the restore: by the primary key values $pk, with no
+     * global scope (Table::update()), it sets $column to now, or to NULL, and updated_at to that same
+     * now as every engine write adds it (Timestamps::apply_to_update(): only when the table has the
+     * column and the class's timestamps are not suspended). It does not go through
+     * set_timestamps() (spec §7 row 10). The values sent are then written into the attributes, clean,
+     * as a find reads them (a DATE column gets the date).
+     *
+     * @param array<string, mixed> $pk
+     */
+    private function write_soft_delete_column(string $column, bool $trash, array $pk): void
+    {
+        $table = static::table();
+        $now = Timestamps::now();
+        $set = Timestamps::apply_to_update($table, static::class, [$column => $trash ? new DateTime($now) : null], $now);
+
+        // $set comes back formatted for the database, keyed by the columns
+        $table->update($set, $pk);
+
+        $attributes = [];
+
+        foreach ($set as $name => $value) {
+            $attributes[isset($table->columns[$name]) ? $table->columns[$name]->inflected_name : $name] = $value;
+        }
+
+        $this->write_clean($attributes);
+    }
+
+    /**
+     * Assigns each value of $attributes and leaves those attributes clean, the other pending changes
+     * of the record as they were.
+     *
+     * @param array<string, mixed> $attributes by attribute name
+     */
+    private function write_clean(array $attributes): void
+    {
+        foreach ($attributes as $name => $value) {
+            $this->assign_attribute($name, $value);
+
+            if (null !== $this->__dirty) {
+                unset($this->__dirty[$name]);
+            }
+        }
+    }
+
+    /**
      * Refuses a write on a record whose row this object deleted: an UPDATE would
      * match nothing (or a row inserted again under the same key) and report success.
      *
-     * @param 'update'|'delete' $action
+     * @param 'update'|'delete'|'restore' $action
      * @throws ActiveRecordException
      */
     private function verify_not_destroyed(string $action): void
@@ -1494,7 +1712,7 @@ class Model
      * column is only checked for null; one not loaded at all (a `select`
      * without it) is left to values_for_pk(), which reports it as before.
      *
-     * @param 'update'|'delete' $action
+     * @param 'update'|'delete'|'restore' $action
      * @throws ActiveRecordException
      */
     private function verify_pk_for_write(string $action): void
@@ -2069,8 +2287,8 @@ class Model
      * Any other name is a call of the query builder: a method named in {@link Query::FORWARDABLE} is
      * called, with the arguments as given, on a new query of this class ({@link new_query()}), so
      * that Person::get() is Person::new_query()->get(). The `@method static` tags of the class
-     * describe them. A static update() or delete() is refused, since it would write every row: use
-     * Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
+     * describe them. A static update(), delete() or force_delete() is refused, since it would write
+     * every row: use Person::where(...)->update(...) or Person::new_query()->update(...). A method that the class
      * defines or inherits (its own statics, find(), count(), ...) is called by PHP, never by this hook.
      *
      * A name that is none of these is one of the model's local scopes, when it declares one by that name
@@ -2088,7 +2306,7 @@ class Model
      * @return mixed For a dynamic finder, a Model or null (find-by-attributes and
      *   find-or-create-by-attributes), a list of Model (find-all-by-attributes) or an int|string
      *   (count-by-attributes). For a builder method, what that method returns. For a scope, the query.
-     * @throws ActiveRecordException if invalid query, for a static update() or delete(), when a scope
+     * @throws ActiveRecordException if invalid query, for a static update(), delete() or force_delete(), when a scope
      *   returns anything but null or the query it was given, or if there is no such method
      * @throws ConfigException when the model declares a scope that collides with another name, or a
      *   #[Scope] method that is not protected static
@@ -2144,7 +2362,7 @@ class Model
             return static::count($options);
         }
 
-        if ('update' === $method || 'delete' === $method) {
+        if ('update' === $method || 'delete' === $method || 'force_delete' === $method) {
             $class = static::class;
 
             throw new ActiveRecordException("$class::$method() would write every row: use $class::where(...)->$method(...) or $class::new_query()->$method(...)");

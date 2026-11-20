@@ -30,6 +30,7 @@ class GlobalScopeGuardTest extends DatabaseTest
         'group_by', 'group_by_raw', 'having', 'or_having', 'having_raw', 'or_having_raw', 'having_null', 'having_not_null', 'having_between',
         'limit', 'take', 'offset', 'skip', 'for_page', 'with', 'without', 'with_only', 'readonly',
         'when', 'unless', 'tap', 'clone', 'without_global_scope', 'without_global_scopes',
+        'with_trashed', 'only_trashed', 'without_trashed',
     ];
 
     /**
@@ -117,6 +118,7 @@ class GlobalScopeGuardTest extends DatabaseTest
             'average' => fn() => $q()->average('author_id'),
             'update' => fn() => $q()->update(['name' => 'x']),
             'delete' => fn() => $q()->delete(),
+            'force_delete' => fn() => $q()->force_delete(),
             'chunk' => fn() => $q()->chunk(2, fn() => null),
             'lazy' => fn() => iterator_to_array($q()->lazy(2), false),
             'cursor' => function () use ($q): void {
@@ -155,7 +157,7 @@ class GlobalScopeGuardTest extends DatabaseTest
     public function test_every_terminal_query_method_is_scoped(): void
     {
         foreach ($this->samples() as $name => $run) {
-            if (in_array($name, ['update', 'delete'], true)) {
+            if (in_array($name, ['update', 'delete', 'force_delete'], true)) {
                 continue;
             }
 
@@ -169,7 +171,7 @@ class GlobalScopeGuardTest extends DatabaseTest
 
     public function test_builder_writes_are_scoped(): void
     {
-        foreach (['update', 'delete'] as $name) {
+        foreach (['update', 'delete', 'force_delete'] as $name) {
             Author::transaction(function () use ($name): bool {
                 $this->assert_all_scoped($this->data_statements($this->samples()[$name]), $name);
 
