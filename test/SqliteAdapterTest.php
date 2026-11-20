@@ -188,8 +188,27 @@ class SqliteAdapterTest extends AdapterTest
             $names[] = $row['name'];
         }
 
-        // note: sqlite_master also lists indexes/triggers/views — see GH-65
         $this->assert_true(in_array('authors', $names));
+    }
+
+    public function test_gh65_tables_lists_only_tables()
+    {
+        $this->conn->query('CREATE INDEX idx_authors_name ON authors(name)');
+        $this->conn->query('CREATE VIEW authors_view AS SELECT author_id FROM authors');
+        $this->conn->query('CREATE TRIGGER authors_trg AFTER INSERT ON authors BEGIN SELECT 1; END');
+        try {
+            $tables = $this->conn->tables();
+        } finally {
+            $this->conn->query('DROP TRIGGER authors_trg');
+            $this->conn->query('DROP VIEW authors_view');
+            $this->conn->query('DROP INDEX idx_authors_name');
+        }
+
+        $this->assert_true(in_array('authors', $tables));
+        $this->assert_equals([], array_values(array_intersect(
+            ['idx_authors_name', 'authors_view', 'authors_trg', 'sqlite_autoindex_venues_1'],
+            $tables
+        )));
     }
 
     #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]

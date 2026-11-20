@@ -136,7 +136,7 @@ class SqliteAdapter extends Connection
 
     public function query_for_tables()
     {
-        return $this->query("SELECT name FROM sqlite_master");
+        return $this->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'");
     }
 
     /**
